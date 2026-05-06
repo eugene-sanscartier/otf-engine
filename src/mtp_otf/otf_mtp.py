@@ -67,6 +67,9 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
     state["gamma_max0"] = gamma_max0_new
     return gamma_max0_new
 
+def forcesthr_excess(atoms, threshold):
+    return atoms.calc is not None and "forces" in atoms.calc.results and numpy.max(numpy.abs(numpy.array(atoms.calc.results["forces"]))) > threshold
+
 
 def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0, extreme_lock_after_ntimes=10, max_structures=-1):
 
@@ -158,21 +161,26 @@ def save_structures(set_name, cfgs):
         write_cfg(set_file, cfgs)
 
 
-def eval_structures(selected_extrapolative, training_set):
+def eval_structures(selected_extrapolative, training_set, force_threshold=None):
     with open(selected_extrapolative, mode="r") as selected_file:
         selected_structures = read_cfg(selected_file)
+
+    with open(training_set, mode="r") as training_file:
+        training_structures = read_cfg(training_file)
 
     for i, selected_structure in enumerate(selected_structures):
         print(f"Calculating structure {i+1}/{len(selected_structures)}")
 
         try:
             selected_structure = evaluator(selected_structure)
+            if force_threshold is not None and forcesthr_excess(selected_structure, threshold=force_threshold):
+                print(f"Warning: Structure {i+1} has forces exceeding threshold after evaluation, skipping addition to training set.")
+                print(f" Max force component: {numpy.max(numpy.abs(numpy.array(selected_structure.calc.results['forces']))):.2f}")
+                continue
 
-            with open(training_set, mode="r") as training_file:
-                training_structure = read_cfg(training_file)
-            training_structure += [selected_structure]
+            training_structures += [selected_structure]
             with open(training_set, mode="w") as training_file:
-                write_cfg(training_file, training_structure)
+                write_cfg(training_file, training_structures)
         except Exception as e:
             print(f"Error evaluating structure {i+1}: {e}")
             print("Warning: Error in eval_structures")
@@ -207,6 +215,7 @@ def main(args_parse, _env):
     extreme_lock_after_ntimes = args_parse.extreme_lock_after_ntimes
     max_structures = args_parse.max_structures
     iteration_limit = args_parse.iteration_limit
+    force_threshold = args_parse.force_threshold
 
     exit_returncode = 0
 
@@ -249,7 +258,7 @@ def main(args_parse, _env):
         exit_returncode = result.returncode
         # exit(result.returncode)
 
-    returncode = eval_structures(selected_extrapolative, training_set)
+    returncode = eval_structures(selected_extrapolative, training_set, force_threshold=force_threshold)
     if returncode == 0:
         print("Successfully executed eval_structures.")
     else:

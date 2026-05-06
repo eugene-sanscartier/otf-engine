@@ -19,6 +19,7 @@ def main():
 
     parser.add_argument("-m", "--max_structures", help="Max structures selection", default=-1, type=int)
     parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm", default=300, type=int)
+    parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=None, type=float)
 
     args_parse = parser.parse_args()
 
