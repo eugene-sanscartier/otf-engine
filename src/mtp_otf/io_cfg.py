@@ -32,11 +32,16 @@ def read_cfg(fileobj):
             nb_i = fields.index("nbh_grades") if "nbh_grades" in fields else None
             for _ in range(size):
                 p = lines.popleft().split()
-                if id_i is not None: id += [int(p[id_i])]
-                if type_i is not None: type += [int(p[type_i]) + 1]
-                if cx_i is not None and cy_i is not None and cz_i is not None: cartes += [[float(p[cx_i]), float(p[cy_i]), float(p[cz_i])]]
-                if fx_i is not None and fy_i is not None and fz_i is not None: f += [[float(p[fx_i]), float(p[fy_i]), float(p[fz_i])]]
-                if nb_i is not None: nbh_grades += [float(p[nb_i])]
+                if id_i is not None:
+                    id += [int(p[id_i])]
+                if type_i is not None:
+                    type += [int(p[type_i]) + 1]
+                if cx_i is not None and cy_i is not None and cz_i is not None:
+                    cartes += [[float(p[cx_i]), float(p[cy_i]), float(p[cz_i])]]
+                if fx_i is not None and fy_i is not None and fz_i is not None:
+                    f += [[float(p[fx_i]), float(p[fy_i]), float(p[fz_i])]]
+                if nb_i is not None:
+                    nbh_grades += [float(p[nb_i])]
         elif line.strip() == "Energy":
             energy = float(lines.popleft().strip())
         elif line.strip().startswith("PlusStress:"):
@@ -46,19 +51,23 @@ def read_cfg(fileobj):
             _, feature_name, feature_value = line.strip().split()
             features[feature_name] = feature_value
         elif line.strip() == "END_CFG":
-            if energy != None: calcs["energy"] = energy
-            if f != []: calcs["forces"] = f
-            if stress != []:
-                if stress_type == "PlusStress": stress = numpy.array(stress, dtype=float) / numpy.linalg.det(supercell) * -1
+            if energy is not None:
+                calcs["energy"] = energy
+            if f:
+                calcs["forces"] = f
+            if stress:
+                if stress_type == "PlusStress":
+                    stress = numpy.array(stress, dtype=float) / numpy.linalg.det(supercell) * -1
                 calcs["stress"] = stress
 
             atoms = ase.Atoms(numbers=type, positions=cartes, cell=supercell, pbc=True)
             atoms.calc = ase.calculators.singlepoint.SinglePointCalculator(atoms, **calcs)
 
-            if nbh_grades != []:
+            if nbh_grades:
                 atoms.set_array("nbh_grades", numpy.array(nbh_grades))
                 features["MV_grade"] = numpy.max(nbh_grades)
-            if features != {}: atoms.info["features"] = features
+            if features:
+                atoms.info["features"] = features
 
             images += [atoms]
 
@@ -68,10 +77,13 @@ def read_cfg(fileobj):
 def write_cfg(fileobj, images, fmt='%12.6f'):
 
     def map2ranks(arr):
-        types = []
-        _none = [types.append(type) for type in arr if type not in types]
+        seen, types = set(), []
+        for x in arr:
+            if x not in seen:
+                seen.add(x)
+                types.append(x)
         rank_map = {val: i for i, val in enumerate(types)}
-        return [rank_map[num] for num in arr]
+        return [rank_map[x] for x in arr]
 
     output = []
 
@@ -80,30 +92,42 @@ def write_cfg(fileobj, images, fmt='%12.6f'):
         output += [" Size\n"]
         output += ["%9d\n" % len(atoms)]
         output += [" Supercell\n"]
-        output += ["    {} {} {}\n".format(fmt % atoms.get_cell()[0][0], fmt % atoms.get_cell()[0][1], fmt % atoms.get_cell()[0][2])]
-        output += ["    {} {} {}\n".format(fmt % atoms.get_cell()[1][0], fmt % atoms.get_cell()[1][1], fmt % atoms.get_cell()[1][2])]
-        output += ["    {} {} {}\n".format(fmt % atoms.get_cell()[2][0], fmt % atoms.get_cell()[2][1], fmt % atoms.get_cell()[2][2])]
+        cell = atoms.get_cell()
+        for row in cell:
+            output += ["    {} {} {}\n".format(fmt % row[0], fmt % row[1], fmt % row[2])]
 
-        fields, fields_data = ["id", "type", "cartes_x", "cartes_y", "cartes_z"], {"id": [], "type": [], "cartes_x": [], "cartes_y": [], "cartes_z": []}
-        if atoms.calc != None and "forces" in atoms.calc.results:
+        has_forces = atoms.calc is not None and "forces" in atoms.calc.results
+        has_nbh = "nbh_grades" in atoms.arrays
+
+        fields = ["id", "type", "cartes_x", "cartes_y", "cartes_z"]
+        if has_forces:
             fields += ["fx", "fy", "fz"]
-            fields_data["fx"], fields_data["fy"], fields_data["fz"] = [], [], []
-        if "nbh_grades" in atoms.arrays:
+        if has_nbh:
             fields += ["nbh_grades"]
+
+        type_ranks = map2ranks(atoms.get_atomic_numbers())
+        positions = atoms.get_positions()
+        forces = atoms.calc.results["forces"] if has_forces else None
+        nbh = atoms.arrays["nbh_grades"] if has_nbh else None
+
+        fields_data = {"id": [], "type": [], "cartes_x": [], "cartes_y": [], "cartes_z": []}
+        if has_forces:
+            fields_data["fx"], fields_data["fy"], fields_data["fz"] = [], [], []
+        if has_nbh:
             fields_data["nbh_grades"] = []
 
         for i in range(len(atoms)):
             fields_data["id"] += [i + 1]
-            fields_data["type"] += [map2ranks(atoms.get_atomic_numbers())[i]]
-            fields_data["cartes_x"] += [atoms.get_positions()[i][0]]
-            fields_data["cartes_y"] += [atoms.get_positions()[i][1]]
-            fields_data["cartes_z"] += [atoms.get_positions()[i][2]]
-            if atoms.calc != None and "forces" in atoms.calc.results:
-                fields_data["fx"] += [atoms.calc.results["forces"][i][0]]
-                fields_data["fy"] += [atoms.calc.results["forces"][i][1]]
-                fields_data["fz"] += [atoms.calc.results["forces"][i][2]]
-            if "nbh_grades" in atoms.arrays:
-                fields_data["nbh_grades"] += [atoms.arrays["nbh_grades"][i]]
+            fields_data["type"] += [type_ranks[i]]
+            fields_data["cartes_x"] += [positions[i][0]]
+            fields_data["cartes_y"] += [positions[i][1]]
+            fields_data["cartes_z"] += [positions[i][2]]
+            if has_forces:
+                fields_data["fx"] += [forces[i][0]]
+                fields_data["fy"] += [forces[i][1]]
+                fields_data["fz"] += [forces[i][2]]
+            if has_nbh:
+                fields_data["nbh_grades"] += [nbh[i]]
 
         if "nbh_grades" in atoms.arrays:
             if "features" in atoms.info:
@@ -111,23 +135,26 @@ def write_cfg(fileobj, images, fmt='%12.6f'):
             else:
                 atoms.info["features"] = {"MV_grade": numpy.max(atoms.arrays["nbh_grades"])}
 
+        has_energy = atoms.calc is not None and "energy" in atoms.calc.results
+        has_stress = atoms.calc is not None and "stress" in atoms.calc.results
+
         output += [" AtomData:  " + "    ".join(fields) + "\n"]
         for i in range(len(atoms)):
             line = " {:9d} {:3d} {} {} {} ".format(fields_data["id"][i], fields_data["type"][i], fmt % fields_data["cartes_x"][i], fmt % fields_data["cartes_y"][i], fmt % fields_data["cartes_z"][i])
-            if atoms.calc != None and "forces" in atoms.calc.results:
+            if has_forces:
                 line += " {} {} {} ".format(fmt % fields_data["fx"][i], fmt % fields_data["fy"][i], fmt % fields_data["fz"][i])
-            if "nbh_grades" in atoms.arrays:
+            if has_nbh:
                 line += " {}".format(fmt % fields_data["nbh_grades"][i])
             line += "\n"
             output += [line]
 
         output += [" Energy\n"]
-        if atoms.calc != None and "energy" in atoms.calc.results:
+        if has_energy:
             output += ["    {}\n".format(fmt % atoms.calc.results["energy"])]
         else:
             output += ["    {}\n".format(fmt % 0.0)]
 
-        if atoms.calc != None and "stress" in atoms.calc.results:
+        if has_stress:
             stress_fields, stress_fields_data = ["xx", "yy", "zz", "yz", "xz", "xy"], {}
             for i, stress_field in enumerate(stress_fields):
                 stress_fields_data[stress_field] = atoms.calc.results["stress"][i] * atoms.get_volume() * -1
