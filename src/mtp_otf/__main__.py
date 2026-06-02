@@ -21,7 +21,7 @@ def main():
     parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm", default=300, type=int)
     parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=None, type=float)
 
-    args_parse = parser.parse_args()
+    args = parser.parse_args()
 
     # // Base env related to OMPI_
     SAVE_ENVNAME = [
@@ -46,7 +46,7 @@ def main():
     del_env = {k: os.environ.pop(k) for k, v in os.environ.items() if k.startswith("OMPI_") and k in DELETE_ENVNAME}
     # print("Removed OMPI_ environment variables: ", del_env)
 
-    returncode = _main(args_parse, os.environ)
+    returncode = _main(args, os.environ)
 
     os.environ = save_env
 

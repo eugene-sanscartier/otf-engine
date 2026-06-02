@@ -13,7 +13,6 @@ mlp = os.environ["OTF_MTP_COMMAND"]
 if mlp == "":
     print("Error OTF_MTP_COMMAND variable not set, set with export OTF_MTP_COMMAND=\"/path/to/mlp\" (in bash) before this script")
 
-
 OTF_STATE_FILE = "otf_state.json"
 
 
@@ -67,8 +66,11 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
     state["gamma_max0"] = gamma_max0_new
     return gamma_max0_new
 
+
 def forcesthr_excess(atoms, threshold):
-    return atoms.calc is not None and "forces" in atoms.calc.results and numpy.max(numpy.abs(numpy.array(atoms.calc.results["forces"]))) > threshold
+    if atoms.calc is None or "forces" not in atoms.calc.results:
+        return False
+    return numpy.max(numpy.abs(atoms.calc.results["forces"])) > threshold
 
 
 def _run_mlp(cmd, log_path, env):
@@ -111,7 +113,7 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme
 
     gammas = numpy.array([_checkgrade(cfg) for cfg in cfgs])
     mask = gammas > gamma_tolerance
-    cfgs = [cfgs[i] for i, m in enumerate(mask) if m]
+    cfgs = [cfg for cfg, m in zip(cfgs, mask) if m]
     gammas = gammas[mask]
 
     if not cfgs:
@@ -121,7 +123,7 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme
     filtred_cfgs = []
 
     if numpy.any(gammas < gamma_max):
-        filtred_cfgs = [cfgs[i] for i in numpy.where(gammas < gamma_max)[0]]
+        filtred_cfgs = [cfg for cfg, g in zip(cfgs, gammas) if g < gamma_max]
         _record_non_extreme(state, extreme_lock_after_ntimes)
 
     elif numpy.any(gammas < gamma_max0):
@@ -212,68 +214,48 @@ def eval_structures(selected_extrapolative, training_set, evaluator_fn, force_th
             except Exception as e:
                 print(f"Warning: Could not remove pwscf.save directory: {e}")
 
-    return 0
 
-
-def main(args_parse, _env):
+def main(args, _env):
     evaluator_fn = _load_evaluator()
 
-    potential = args_parse.potential
-    training_set = args_parse.training_set
-    extrapolative_dumps = args_parse.extrapolative_dumps
     extrapolative_candidates = "preselected.cfg"
     extrapolative_candidates_out = "preselected"
     selected_extrapolative = "selected.cfg"
     extrapolation_field = "f_extrapolation_grade"
 
-    preselection_filtering = args_parse.preselection_filtering
-    gamma_tolerance = args_parse.gamma_tolerance
-    gamma_max = args_parse.gamma_max
-    gamma_max0_cap = args_parse.gamma_max0_cap
-    extreme_lock_after_ntimes = args_parse.extreme_lock_after_ntimes
-    max_structures = args_parse.max_structures
-    iteration_limit = args_parse.iteration_limit
-    force_threshold = args_parse.force_threshold
-
     exit_returncode = 0
 
-    preselected_dump2cfg(extrapolative_dumps, extrapolative_candidates, extrapolation_field)
+    preselected_dump2cfg(args.extrapolative_dumps, extrapolative_candidates, extrapolation_field)
 
-    if preselection_filtering:
+    if args.preselection_filtering:
         # failsafe: lammps extrapolation fix-halt sometimes stops before grade calculation
         try:
-            _run_mlp(
-                f"mpirun -n 1 {mlp} calculate_grade {potential} {extrapolative_candidates} {extrapolative_candidates_out}.calculate_grade",
-                "mlip_calculate_grade.log", _env)
+            _run_mlp(f"mpirun -n 1 {mlp} calculate_grade {args.potential} {extrapolative_candidates} {extrapolative_candidates_out}.calculate_grade", "mlip_calculate_grade.log", _env)
             os.replace(f"{extrapolative_candidates_out}.calculate_grade.0", extrapolative_candidates)
         except Exception as e:
             print(f"calculate_grade failed: {e}")
             exit_returncode = getattr(e, 'returncode', 1)
 
         cfgs = load_structures(extrapolative_candidates)
-        filtred_cfgs = preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme_lock_after_ntimes=extreme_lock_after_ntimes)
+        filtred_cfgs = preselected_filter(cfgs, args.gamma_tolerance, args.gamma_max, args.gamma_max0_cap, extreme_lock_after_ntimes=args.extreme_lock_after_ntimes)
         save_structures(extrapolative_candidates, filtred_cfgs)
 
-    if max_structures > 0:
+    if args.max_structures > 0:
         cfgs = load_structures(extrapolative_candidates)
-        filtred_cfgs = max_structureselection(cfgs, max_structures=max_structures)
+        filtred_cfgs = max_structureselection(cfgs, max_structures=args.max_structures)
         save_structures(extrapolative_candidates, filtred_cfgs)
 
     try:
-        _run_mlp(
-            f"mpirun -n 1 {mlp} select_add {potential} {training_set} {extrapolative_candidates} {selected_extrapolative}",
-            "mlip_select_add.log", _env)
+        _run_mlp(f"mpirun -n 1 {mlp} select_add {args.potential} {args.training_set} {extrapolative_candidates} {selected_extrapolative}", "mlip_select_add.log", _env)
     except Exception as e:
         print(f"select_add failed: {e}")
         exit_returncode = getattr(e, 'returncode', 1)
 
-    eval_structures(selected_extrapolative, training_set, evaluator_fn, force_threshold=force_threshold)
+    eval_structures(selected_extrapolative, args.training_set, evaluator_fn, force_threshold=args.force_threshold)
 
     try:
-        _run_mlp(
-            f"mpirun {mlp} train {potential} {training_set} --save_to=tmp_{potential} --iteration_limit={iteration_limit} --al_mode=nbh",
-            "mlip_train.log", _env)
-        os.replace(f"tmp_{potential}", potential)
+        _run_mlp(f"mpirun {mlp} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} --al_mode=nbh", "mlip_train.log", _env)
+        os.replace(f"tmp_{args.potential}", args.potential)
     except Exception as e:
         print(f"train failed: {e}")
         exit_returncode = getattr(e, 'returncode', 1)
