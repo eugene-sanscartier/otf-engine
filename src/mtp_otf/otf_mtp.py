@@ -8,7 +8,6 @@ import ase
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-from evaluator import evaluator
 
 mlp = os.environ["OTF_MTP_COMMAND"]
 if mlp == "":
@@ -35,7 +34,7 @@ def preselected_dump2cfg(extrapolative_dumps, extrapolative_candidates_cfg, extr
     for i, extrapolative_dump in enumerate(extrapolative_dumps):
         with open(extrapolative_dump) as dump_file:
             dumps = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None))
-            print(f"Reading extrapolative dump : ", extrapolative_dump, " with ", len(dumps), " structures")
+            print("Reading extrapolative dump : ", extrapolative_dump, " with ", len(dumps), " structures")
 
             if len(dumps) > 100:
                 print("Warning: Large extrapolative dump with ", len(dumps), " structures, this may cause performance issues.")
@@ -71,10 +70,17 @@ def forcesthr_excess(atoms, threshold):
     return atoms.calc is not None and "forces" in atoms.calc.results and numpy.max(numpy.abs(numpy.array(atoms.calc.results["forces"]))) > threshold
 
 
-def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0, extreme_lock_after_ntimes=10, max_structures=-1):
+def _record_non_extreme(state, extreme_lock_after_ntimes):
+    state["non_extreme_count"] = state.get("non_extreme_count", 0) + 1
+    if state["non_extreme_count"] >= extreme_lock_after_ntimes:
+        state["extreme_allowed"] = False
+    _save_state(state)
+
+
+def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme_lock_after_ntimes=10):
 
     state = _load_state()
-    gamma_max0 = state.get("gamma_max0", gamma_max0)
+    gamma_max0 = state.get("gamma_max0", gamma_max0_cap)
 
     print("Preselected structures count: ", len(cfgs))
 
@@ -92,23 +98,14 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0, extreme_loc
 
     if len(cfgs) > 0 and numpy.any(gammas < gamma_max):
         filtred_cfgs = [cfgs[i] for i in numpy.where(gammas < gamma_max)[0]]
-        # if state.get("extreme_allowed", True):
-        state["non_extreme_count"] = state.get("non_extreme_count", 0) + 1
-        if state["non_extreme_count"] >= extreme_lock_after_ntimes:
-            state["extreme_allowed"] = False
-        _save_state(state)
+        _record_non_extreme(state, extreme_lock_after_ntimes)
 
     elif len(cfgs) > 0 and numpy.all(gammas > gamma_max) and numpy.any(gammas < gamma_max0):
         print(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
-
-        selected_gamma = gammas[numpy.argmin(gammas)]
-        filtred_cfgs = [cfgs[numpy.argmin(gammas)]]
-        print("Selected structure with gamma = ", selected_gamma)
-        # if state.get("extreme_allowed", True):
-        state["non_extreme_count"] = state.get("non_extreme_count", 0) + 1
-        if state["non_extreme_count"] >= extreme_lock_after_ntimes:
-            state["extreme_allowed"] = False
-        _save_state(state)
+        idx = numpy.argmin(gammas)
+        filtred_cfgs = [cfgs[idx]]
+        print("Selected structure with gamma = ", gammas[idx])
+        _record_non_extreme(state, extreme_lock_after_ntimes)
 
     elif len(cfgs) > 0 and numpy.all(gammas > gamma_max0):
         extreme_allowed = state.get("extreme_allowed", True)
@@ -127,10 +124,9 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0, extreme_loc
         _save_state(state)
 
     else:
-        print(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
-        print("Something went wrong.")
+        print(f"No structures above gamma_tolerance={gamma_tolerance:.4f} — nothing to select.")
 
-    if len(cfgs) > 0 and numpy.all(gammas > gamma_max) and numpy.any(gammas < 10000):
+    if len(cfgs) > 0 and numpy.all(gammas > gamma_max) and numpy.any(gammas < gamma_max0_cap):
         gamma_max0_new = _update_gamma_max0(state, numpy.min(gammas), gamma_max)
         print(f"Updated gamma_max0: {gamma_max0:.4f} -> {gamma_max0_new:.4f}")
         _save_state(state)
@@ -161,7 +157,7 @@ def save_structures(set_name, cfgs):
         write_cfg(set_file, cfgs)
 
 
-def eval_structures(selected_extrapolative, training_set, force_threshold=None):
+def eval_structures(selected_extrapolative, training_set, evaluator_fn, force_threshold=None):
     with open(selected_extrapolative, mode="r") as selected_file:
         selected_structures = read_cfg(selected_file)
 
@@ -172,7 +168,7 @@ def eval_structures(selected_extrapolative, training_set, force_threshold=None):
         print(f"Calculating structure {i+1}/{len(selected_structures)}")
 
         try:
-            selected_structure = evaluator(selected_structure)
+            selected_structure = evaluator_fn(selected_structure)
             if force_threshold is not None and forcesthr_excess(selected_structure, threshold=force_threshold):
                 print(f"Warning: Structure {i+1} has forces exceeding threshold after evaluation, skipping addition to training set.")
                 print(f" Max force component: {numpy.max(numpy.abs(numpy.array(selected_structure.calc.results['forces']))):.2f}")
@@ -199,6 +195,13 @@ def eval_structures(selected_extrapolative, training_set, force_threshold=None):
 
 
 def main(args_parse, _env):
+    import importlib.util
+    _evaluator_path = os.path.join(os.getcwd(), "evaluator.py")
+    _spec = importlib.util.spec_from_file_location("evaluator", _evaluator_path)
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    evaluator_fn = _mod.evaluator
+
     potential = args_parse.potential
     training_set = args_parse.training_set
 
@@ -211,7 +214,7 @@ def main(args_parse, _env):
     preselection_filtering = args_parse.preselection_filtering
     gamma_tolerance = args_parse.gamma_tolerance
     gamma_max = args_parse.gamma_max
-    gamma_max0 = args_parse.gamma_max0
+    gamma_max0_cap = args_parse.gamma_max0_cap
     extreme_lock_after_ntimes = args_parse.extreme_lock_after_ntimes
     max_structures = args_parse.max_structures
     iteration_limit = args_parse.iteration_limit
@@ -226,7 +229,7 @@ def main(args_parse, _env):
         args = f"mpirun -n 1 {mlp} calculate_grade {potential} {extrapolative_candidates} {extrapolative_candidates_out + '.calculate_grade'}".split()
         print("running calculate_grade with args: ", " ".join(args))
         with open("mlip_calculate_grade.log", "a") as log_file:
-            result = subprocess.run([*args], text=True, check=True, env=_env, stdout=log_file, stderr=subprocess.STDOUT)
+            result = subprocess.run([*args], text=True, env=_env, stdout=log_file, stderr=subprocess.STDOUT)
         if result.returncode == 0:
             try:
                 os.replace(extrapolative_candidates_out + '.calculate_grade.0', extrapolative_candidates)
@@ -239,7 +242,7 @@ def main(args_parse, _env):
             # exit(result.returncode)
 
         cfgs = load_structures(extrapolative_candidates)
-        filtred_cfgs = preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0=gamma_max0, extreme_lock_after_ntimes=extreme_lock_after_ntimes, max_structures=max_structures)
+        filtred_cfgs = preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme_lock_after_ntimes=extreme_lock_after_ntimes)
         save_structures(extrapolative_candidates, filtred_cfgs)
 
     if max_structures > 0:
@@ -250,7 +253,7 @@ def main(args_parse, _env):
     args = f"mpirun -n 1 {mlp} select_add {potential} {training_set} {extrapolative_candidates} {selected_extrapolative}".split()
     print("running select_add with args: ", " ".join(args))
     with open("mlip_select_add.log", "a") as log_file:
-        result = subprocess.run([*args], text=True, check=True, env=_env, stdout=log_file, stderr=subprocess.STDOUT)
+        result = subprocess.run([*args], text=True, env=_env, stdout=log_file, stderr=subprocess.STDOUT)
     if result.returncode == 0:
         print("Successfully executed select_add.")
     else:
@@ -258,7 +261,7 @@ def main(args_parse, _env):
         exit_returncode = result.returncode
         # exit(result.returncode)
 
-    returncode = eval_structures(selected_extrapolative, training_set, force_threshold=force_threshold)
+    returncode = eval_structures(selected_extrapolative, training_set, evaluator_fn, force_threshold=force_threshold)
     if returncode == 0:
         print("Successfully executed eval_structures.")
     else:
@@ -273,7 +276,7 @@ def main(args_parse, _env):
     args = f"mpirun {mlp} train {potential} {training_set} --save_to=tmp_{potential} --iteration_limit={iteration_limit} --al_mode=nbh".split()
     print("running training with args: ", " ".join(args))
     with open("mlip_train.log", "a") as log_file:
-        result = subprocess.run([*args], text=True, check=True, env=_env, stdout=log_file, stderr=subprocess.STDOUT)
+        result = subprocess.run([*args], text=True, env=_env, stdout=log_file, stderr=subprocess.STDOUT)
     if result.returncode == 0:
         # replace potential by tmp potential
         try:

@@ -14,7 +14,7 @@ def main():
 
     parser.add_argument("-g", "--gamma_tolerance", help="Gamma tolerance", default=1.010, type=float)
     parser.add_argument("-G", "--gamma_max", help="Gamma max", default=0, type=float)
-    parser.add_argument("-D", "--gamma_max0", help="Gamma max_0", default=10000, type=float)
+    parser.add_argument("-D", "--gamma_max0_cap", help="Gamma max_0 cap (initial value; rolling update never fires above this)", default=10000, type=float)
     parser.add_argument("-X", "--extreme_lock_after_ntimes", help="After n cycle without extreme extrapolation configuration only, no more extreme extrapolation configuration are selected.", default=5, type=int)
 
     parser.add_argument("-m", "--max_structures", help="Max structures selection", default=-1, type=int)
