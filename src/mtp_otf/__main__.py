@@ -1,10 +1,12 @@
 import os
+import sys
 import argparse
 from .otf_mtp import main as _main
+from .launchers import MpirunLauncher, ForkLauncher, SlurmLauncher
 
 
 def main():
-    parser = argparse.ArgumentParser(prog=None, description="Utility to select structures for training se based on D-optimality criterion")
+    parser = argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
 
     parser.add_argument("extrapolative_dumps", nargs='+', help=" extrapolative_structures.dump", type=str)
     parser.add_argument("-p", "--potential", help="input potential file name, will override input file 'potential' section", type=str, default="potential.almtp")
@@ -21,40 +23,87 @@ def main():
     parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm", default=300, type=int)
     parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=None, type=float)
 
+    parser.add_argument(
+        "--launcher",
+        choices=["mpirun", "fork", "slurm"],
+        default="mpirun",
+        help="Execution backend. 'mpirun' (default): wrap calls with mpirun. "
+             "'fork': run binary directly in a fresh MPI universe (no mpirun). "
+             "'slurm': submit each call as a batch job via sbatch --wait.",
+    )
+    parser.add_argument(
+        "--train-n-procs",
+        default=None,
+        type=int,
+        metavar="N",
+        help="Number of MPI processes for the train step. "
+             "Default: None (use all available, i.e. omit -n from mpirun). "
+             "Only used by mpirun and slurm launchers.",
+    )
+    parser.add_argument(
+        "--launcher-extra",
+        nargs="*",
+        default=None,
+        metavar="ARG",
+        help="Extra arguments for the launcher. "
+             "For mpirun: passed verbatim between -n and the mlp binary "
+             "(e.g. --launcher-extra --oversubscribe). "
+             "For slurm: passed as sbatch options "
+             "(e.g. --launcher-extra --partition=gpu --time=01:00:00).",
+    )
+    parser.add_argument(
+        "--eval-n-procs",
+        default=None,
+        type=int,
+        metavar="N",
+        help="Number of processes per structure evaluation (fork launcher only). "
+             "Default: None (use all available CPUs). "
+             "The evaluator profile command must be set to just the binary path "
+             "(e.g. 'pw.x'), not 'mpiexec -n N pw.x'.",
+    )
+    parser.add_argument(
+        "--no-parallel-eval",
+        dest="parallel_eval",
+        action="store_false",
+        help="Evaluate structures sequentially instead of in parallel. "
+             "Default is parallel (applies to slurm and fork launchers).",
+    )
+    parser.set_defaults(parallel_eval=True)
+
     args = parser.parse_args()
 
-    # // Base env related to OMPI_
-    SAVE_ENVNAME = [
-        "OMPI_MCA_btl",
-        "OMPI_MCA_pml",
-        "OMPI_MCA_mtl",
-        "OMPI_MCA_coll",
-        "OMPI_MCA_mpi_oversubscribe",
-        "OMPI_MCA_pmix",
-    ]
+    mlp_command = os.environ.get("OTF_MTP_COMMAND")
+    if not mlp_command:
+        print("Error: OTF_MTP_COMMAND environment variable is not set. "
+              "Set with: export OTF_MTP_COMMAND=/path/to/mlp", file=sys.stderr)
+        sys.exit(1)
 
-    DELETE_ENVNAME = [
-        "OMPI_MCA_ess",
-        "OMPI_MCA_ess_base_jobid",
-        "OMPI_UNIVERSE_SIZE",
-    ]
+    extra_args = list(args.launcher_extra) if args.launcher_extra else []
+    if args.launcher == "mpirun":
+        launcher = MpirunLauncher(extra_args=" ".join(extra_args))
+    elif args.launcher == "fork":
+        launcher = ForkLauncher(eval_n_procs=args.eval_n_procs,
+                                parallel_eval=args.parallel_eval)
+    elif args.launcher == "slurm":
+        launcher = SlurmLauncher(sbatch_args=extra_args,
+                                 parallel_eval=args.parallel_eval)
+    else:
+        print(f"Error: unknown launcher {args.launcher!r}", file=sys.stderr)
+        sys.exit(1)
 
-    # Remove all OMPI_ environment variables to avoid issues with MPI
-    save_env = os.environ.copy()
-
-    # del_env = {k: os.environ.pop(k) for k, v in os.environ.items() if k.startswith("OMPI_") and k not in SAVE_ENVNAME}
-    del_env = {k: os.environ.pop(k) for k, v in os.environ.items() if k.startswith("OMPI_") and k in DELETE_ENVNAME}
-    # print("Removed OMPI_ environment variables: ", del_env)
-
-    returncode = _main(args, os.environ)
-
-    os.environ = save_env
+    returncode = _main(
+        args,
+        os.environ,
+        launcher=launcher,
+        mlp_command=mlp_command,
+        train_n_procs=args.train_n_procs,
+    )
 
     if returncode != 0:
         print(f"One program exited with return code: {returncode}")
         print("Exiting with return code 0.")
 
-    exit(0)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
+import concurrent.futures
 import json
 import os
-import subprocess
 
 import numpy
 
@@ -8,10 +8,7 @@ import ase
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-
-mlp = os.environ["OTF_MTP_COMMAND"]
-if mlp == "":
-    print("Error OTF_MTP_COMMAND variable not set, set with export OTF_MTP_COMMAND=\"/path/to/mlp\" (in bash) before this script")
+from .launchers import MpirunLauncher
 
 OTF_STATE_FILE = "otf_state.json"
 
@@ -71,13 +68,6 @@ def forcesthr_excess(atoms, threshold):
     if atoms.calc is None or "forces" not in atoms.calc.results:
         return False
     return numpy.max(numpy.abs(atoms.calc.results["forces"])) > threshold
-
-
-def _run_mlp(cmd, log_path, env):
-    """Run a shell command string, append output to log_path. Raises on failure."""
-    print(f"running: {cmd}")
-    with open(log_path, "a") as f:
-        subprocess.run(cmd, shell=True, text=True, env=env, stdout=f, stderr=subprocess.STDOUT, check=True)
 
 
 def _load_evaluator():
@@ -180,43 +170,79 @@ def save_structures(set_name, cfgs):
         write_cfg(set_file, cfgs)
 
 
-def eval_structures(selected_extrapolative, training_set, evaluator_fn, force_threshold=None):
+def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
+    """Evaluate one structure; return evaluated Atoms or None on failure/threshold."""
+    eval_dir = f"eval_{i:03d}"
+    print(f"Calculating structure {i + 1}")
+    try:
+        result = launcher.call_evaluator(evaluator_fn, structure, eval_dir, env)
+        if force_threshold is not None and forcesthr_excess(result, threshold=force_threshold):
+            print(f"Warning: Structure {i + 1} has forces exceeding threshold, skipping.")
+            print(f" Max force component: {numpy.max(numpy.abs(numpy.array(result.calc.results['forces']))):.2f}")
+            return None
+        return result
+    except Exception as e:
+        print(f"Error evaluating structure {i + 1}: {e}")
+        print("Warning: Error in eval_structures")
+        try:
+            espresso_err = os.path.join(eval_dir, "espresso.err")
+            print("Output of espresso.err")
+            with open(espresso_err) as err_file:
+                print(err_file.read())
+            import shutil
+            shutil.rmtree(os.path.join(eval_dir, "pwscf.save"))
+        except Exception as e2:
+            print(f"Warning: Could not clean up Espresso artifacts: {e2}")
+        return None
+
+
+def eval_structures(selected_extrapolative, training_set, evaluator_fn, launcher, env, force_threshold=None):
     with open(selected_extrapolative, mode="r") as selected_file:
         selected_structures = read_cfg(selected_file)
 
     with open(training_set, mode="r") as training_file:
         training_structures = read_cfg(training_file)
 
-    for i, selected_structure in enumerate(selected_structures):
-        print(f"Calculating structure {i+1}/{len(selected_structures)}")
+    if launcher.parallel_eval and len(selected_structures) > 1:
+        print(f"Evaluating {len(selected_structures)} structures in parallel.")
+        results = [None] * len(selected_structures)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = {executor.submit(_eval_one, i, struct, evaluator_fn, launcher, env, force_threshold): i for i, struct in enumerate(selected_structures)}
+            for future in concurrent.futures.as_completed(futures):
+                i = futures[future]
+                try:
+                    results[i] = future.result()
+                except Exception as e:
+                    print(f"Error in parallel eval of structure {i + 1}: {e}")
 
-        try:
-            selected_structure = evaluator_fn(selected_structure)
-            if force_threshold is not None and forcesthr_excess(selected_structure, threshold=force_threshold):
-                print(f"Warning: Structure {i+1} has forces exceeding threshold after evaluation, skipping addition to training set.")
-                print(f" Max force component: {numpy.max(numpy.abs(numpy.array(selected_structure.calc.results['forces']))):.2f}")
-                continue
-
-            training_structures += [selected_structure]
+        successful = [r for r in results if r is not None]
+        if successful:
+            training_structures += successful
             with open(training_set, mode="w") as training_file:
                 write_cfg(training_file, training_structures)
-        except Exception as e:
-            print(f"Error evaluating structure {i+1}: {e}")
-            print("Warning: Error in eval_structures")
-            try:
-                print("Output of espresso.err")
-                with open("espresso.err", mode="r") as err_file:
-                    print(err_file.read())
-
-                print("Trying to remove pwscf.save directory")
-                import shutil
-                shutil.rmtree("pwscf.save")
-            except Exception as e:
-                print(f"Warning: Could not remove pwscf.save directory: {e}")
+    else:
+        for i, selected_structure in enumerate(selected_structures):
+            print(f"Calculating structure {i + 1}/{len(selected_structures)}")
+            result = _eval_one(i, selected_structure, evaluator_fn, launcher, env, force_threshold)
+            if result is not None:
+                training_structures.append(result)
+                with open(training_set, mode="w") as training_file:
+                    write_cfg(training_file, training_structures)
 
 
-def main(args, _env):
-    evaluator_fn = _load_evaluator()
+def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evaluator_fn=None):
+    # Resolve mlp_command: explicit param > env var > error
+    if mlp_command is None:
+        mlp_command = os.environ.get("OTF_MTP_COMMAND")
+    if not mlp_command:
+        raise RuntimeError("mlp_command not provided and OTF_MTP_COMMAND environment variable is not set. "
+                           "Pass mlp_command= or set: export OTF_MTP_COMMAND=/path/to/mlp")
+
+    if launcher is None:
+        launcher = MpirunLauncher()
+
+    if evaluator_fn is None:
+        evaluator_fn = _load_evaluator()
 
     extrapolative_candidates = "preselected.cfg"
     extrapolative_candidates_out = "preselected"
@@ -230,7 +256,7 @@ def main(args, _env):
     if args.preselection_filtering:
         # failsafe: lammps extrapolation fix-halt sometimes stops before grade calculation
         try:
-            _run_mlp(f"mpirun -n 1 {mlp} calculate_grade {args.potential} {extrapolative_candidates} {extrapolative_candidates_out}.calculate_grade", "mlip_calculate_grade.log", _env)
+            launcher.run(f"{mlp_command} calculate_grade {args.potential} {extrapolative_candidates} {extrapolative_candidates_out}.calculate_grade", "mlip_calculate_grade.log", _env, n_procs=1)
             os.replace(f"{extrapolative_candidates_out}.calculate_grade.0", extrapolative_candidates)
         except Exception as e:
             print(f"calculate_grade failed: {e}")
@@ -246,15 +272,20 @@ def main(args, _env):
         save_structures(extrapolative_candidates, filtred_cfgs)
 
     try:
-        _run_mlp(f"mpirun -n 1 {mlp} select_add {args.potential} {args.training_set} {extrapolative_candidates} {selected_extrapolative}", "mlip_select_add.log", _env)
+        launcher.run(f"{mlp_command} select_add {args.potential} {args.training_set} {extrapolative_candidates} {selected_extrapolative}", "mlip_select_add.log", _env, n_procs=1)
     except Exception as e:
         print(f"select_add failed: {e}")
         exit_returncode = getattr(e, 'returncode', 1)
 
-    eval_structures(selected_extrapolative, args.training_set, evaluator_fn, force_threshold=args.force_threshold)
+    eval_structures(selected_extrapolative, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
 
     try:
-        _run_mlp(f"mpirun {mlp} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} --al_mode=nbh", "mlip_train.log", _env)
+        launcher.run(
+            f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} --al_mode=nbh"
+            "mlip_train.log",
+            _env,
+            n_procs=train_n_procs,
+        )
         os.replace(f"tmp_{args.potential}", args.potential)
     except Exception as e:
         print(f"train failed: {e}")
