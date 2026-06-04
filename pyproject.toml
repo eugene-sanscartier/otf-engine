@@ -1,3 +1,7 @@
+[build-system]
+requires = ["scikit-build-core>=0.3", "pybind11>=2.11"]
+build-backend = "scikit_build_core.build"
+
 [project]
 name = "mtp_otf"
 version = "0.0.1"
@@ -17,7 +21,11 @@ requires-python = ">=3.9"
 dependencies = [
   "ase",
   "numpy",
+  "scipy",
 ]
+
+[project.optional-dependencies]
+mpi = ["mpi4py"]
 
 [project.scripts]
 create-otf-state = "mtp_otf.create_otf_state:main"
