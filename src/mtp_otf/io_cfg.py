@@ -3,7 +3,19 @@ import ase
 import collections
 
 
-def read_cfg(fileobj):
+def read_cfg(fileobj, type_map=None):
+    """Read one or more CFG structures.
+
+    Parameters
+    ----------
+    fileobj : file-like
+    type_map : dict[int, str] or None
+        Maps 0-indexed MTP type integers to element symbols
+        (e.g. ``{0: "Al", 1: "Cu"}``).  When provided, chemical symbols are
+        set from this mapping.  When absent, atomic numbers are set to
+        ``type_index + 1`` as a placeholder and the ``type_index`` array on
+        each Atoms carries the authoritative 0-indexed type.
+    """
     lines = collections.deque(fileobj.readlines())
     images = []
     while lines:
@@ -35,7 +47,7 @@ def read_cfg(fileobj):
                 if id_i is not None:
                     id += [int(p[id_i])]
                 if type_i is not None:
-                    type += [int(p[type_i]) + 1]
+                    type += [int(p[type_i])]
                 if cx_i is not None and cy_i is not None and cz_i is not None:
                     cartes += [[float(p[cx_i]), float(p[cy_i]), float(p[cz_i])]]
                 if fx_i is not None and fy_i is not None and fz_i is not None:
@@ -60,9 +72,14 @@ def read_cfg(fileobj):
                     stress = numpy.array(stress, dtype=float) / numpy.linalg.det(supercell) * -1
                 calcs["stress"] = stress
 
-            atoms = ase.Atoms(numbers=type, positions=cartes, cell=supercell, pbc=True)
+            if type and type_map is not None:
+                atoms = ase.Atoms(symbols=[type_map[t] for t in type], positions=cartes, cell=supercell, pbc=True)
+            else:
+                atoms = ase.Atoms(numbers=[t + 1 for t in type], positions=cartes, cell=supercell, pbc=True)
             atoms.calc = ase.calculators.singlepoint.SinglePointCalculator(atoms, **calcs)
 
+            if type:
+                atoms.arrays["type_index"] = numpy.array(type, dtype=numpy.int32)
             if nbh_grades:
                 atoms.set_array("nbh_grades", numpy.array(nbh_grades))
                 features["MV_grade"] = numpy.max(nbh_grades)
@@ -105,7 +122,10 @@ def write_cfg(fileobj, images, fmt='%12.6f'):
         if has_nbh:
             fields += ["nbh_grades"]
 
-        type_ranks = map2ranks(atoms.get_atomic_numbers())
+        if "type_index" in atoms.arrays:
+            type_ranks = atoms.arrays["type_index"].tolist()
+        else:
+            type_ranks = map2ranks(atoms.get_chemical_symbols())
         positions = atoms.get_positions()
         forces = atoms.calc.results["forces"] if has_forces else None
         nbh = atoms.arrays["nbh_grades"] if has_nbh else None
