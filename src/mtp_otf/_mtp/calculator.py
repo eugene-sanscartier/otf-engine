@@ -13,7 +13,8 @@ print(atoms.get_potential_energy())
 print(atoms.get_forces())
 """
 
-import numpy as np
+import numpy
+from numpy import int32, float64, ndarray
 from ase.calculators.calculator import Calculator, all_changes
 from ase.neighborlist import neighbor_list
 
@@ -36,19 +37,19 @@ class MTPCalculator(Calculator):
         self.potential = MTPPotential(filename)
         self.cutoff = self.potential.get_max_cutoff()
 
-    def _atoms_to_types(self, atoms) -> np.ndarray:
+    def _atoms_to_types(self, atoms) -> ndarray:
         """Return 0-indexed MTP type array for *atoms*.
 
         Uses ``atoms.arrays["type_index"]`` directly when present; otherwise
         assigns indices by order of first appearance of chemical symbols.
         """
         if "type_index" in atoms.arrays:
-            return np.asarray(atoms.arrays["type_index"], dtype=np.int32)
+            return numpy.asarray(atoms.arrays["type_index"], dtype=int32)
         seen: dict[str, int] = {}
         for sym in atoms.get_chemical_symbols():
             if sym not in seen:
                 seen[sym] = len(seen)
-        return np.array([seen[s] for s in atoms.get_chemical_symbols()], dtype=np.int32)
+        return numpy.array([seen[s] for s in atoms.get_chemical_symbols()], dtype=int32)
 
     def _build_neighbor_list(self, atoms):
         """Return (ilist, numneigh, firstneigh_flat, displacements) as numpy arrays.
@@ -60,13 +61,13 @@ class MTPCalculator(Calculator):
         i_arr, j_arr, D_arr = neighbor_list("ijD", atoms, self.cutoff)
 
         n_atoms = len(atoms)
-        ilist = np.arange(n_atoms, dtype=np.int32)
-        numneigh = np.bincount(i_arr, minlength=n_atoms).astype(np.int32)
+        ilist = numpy.arange(n_atoms, dtype=int32)
+        numneigh = numpy.bincount(i_arr, minlength=n_atoms).astype(int32)
 
         # Sort so neighbor blocks are contiguous for each central atom
-        order = np.argsort(i_arr, kind="stable")
-        firstneigh = j_arr[order].astype(np.int32)
-        displacements = np.ascontiguousarray(D_arr[order], dtype=np.float64)
+        order = numpy.argsort(i_arr, kind="stable")
+        firstneigh = j_arr[order].astype(int32)
+        displacements = numpy.ascontiguousarray(D_arr[order], dtype=float64)
 
         return ilist, numneigh, firstneigh, displacements
 
@@ -86,16 +87,16 @@ class MTPCalculator(Calculator):
         result = self.potential.compute(types, ilist, numneigh, firstneigh, displacements, compute_virials=compute_virials, compute_eatom=False)
 
         self.results["energy"] = float(result["energy"])
-        self.results["forces"] = np.array(result["forces"], dtype=np.float64)
+        self.results["forces"] = numpy.array(result["forces"], dtype=float64)
 
         if compute_virials:
             vol = atoms.get_volume()
             # ASE stress convention: Voigt order (xx,yy,zz,yz,xz,xy), positive = tensile
             # Our virials are (xx,yy,zz,xy,xz,yz), sign: virial = -stress * vol
             v = result["virials"]
-            self.results["stress"] = np.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]], dtype=np.float64) / vol
+            self.results["stress"] = numpy.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]], dtype=float64) / vol
 
-    def get_basis_values(self, atoms) -> np.ndarray:
+    def get_basis_values(self, atoms) -> ndarray:
         """Evaluate MTP basis functions for each atom.
 
         Returns an array of shape ``(n_atoms, alpha_scalar_count)`` where row
@@ -109,13 +110,13 @@ class MTPCalculator(Calculator):
 
         Returns
         -------
-        np.ndarray, shape (n_atoms, alpha_scalar_count)
+        ndarray, shape (n_atoms, alpha_scalar_count)
         """
         types = self._atoms_to_types(atoms)
         ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
-        return np.array(self.potential.eval_basis(types, ilist, numneigh, firstneigh, displacements), dtype=np.float64)
+        return numpy.array(self.potential.eval_basis(types, ilist, numneigh, firstneigh, displacements), dtype=float64)
 
-    def eval_grad(self, atoms) -> np.ndarray:
+    def eval_grad(self, atoms) -> ndarray:
         """Per-atom information vector for extrapolation grade computation.
 
         Returns an array of shape ``(n_atoms, coeff_count)`` where each row is
@@ -129,9 +130,9 @@ class MTPCalculator(Calculator):
 
         Returns
         -------
-        np.ndarray, shape (n_atoms, coeff_count)
+        ndarray, shape (n_atoms, coeff_count)
             coeff_count = radial_coeff_count + species_count + alpha_scalar_count
         """
         types = self._atoms_to_types(atoms)
         ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
-        return np.array(self.potential.eval_grad(types, ilist, numneigh, firstneigh, displacements), dtype=np.float64)
+        return numpy.array(self.potential.eval_grad(types, ilist, numneigh, firstneigh, displacements), dtype=float64)

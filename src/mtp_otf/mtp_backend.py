@@ -8,7 +8,8 @@ All functions accept and return ASE Atoms objects — no intermediate files.
 
 from __future__ import annotations
 
-import numpy as np
+import numpy
+from numpy import intp, float64
 
 from ._mtp import MTPPotential, MTPCalculator, write_mtp
 from .almtp_io import MVSState, read_mvs_state, write_mvs_state
@@ -33,12 +34,12 @@ def _atoms_to_entry(atoms, calc: MTPCalculator) -> dict:
         "energy": float(atoms.get_potential_energy()),
     }
     try:
-        entry["forces"] = atoms.get_forces().astype(np.float64)
+        entry["forces"] = atoms.get_forces().astype(float64)
     except Exception:
         pass
     try:
         stress = atoms.get_stress()  # ASE Voigt (xx,yy,zz,yz,xz,xy)
-        entry["stress"] = stress.astype(np.float64)
+        entry["stress"] = stress.astype(float64)
         entry["volume"] = float(atoms.get_volume())
     except Exception:
         pass
@@ -122,27 +123,27 @@ def _info_rows(pot: MTPPotential, atoms, calc: MTPCalculator, weights: dict) -> 
         nonlocal eg_all, fg_all, vg_all
         if eg_all is None:
             eg_all, fg_all, vg_all = pot.eval_grad_all(*nl_args, need_vg)
-            eg_all = np.asarray(eg_all)
-            fg_all = np.asarray(fg_all)
+            eg_all = numpy.asarray(eg_all)
+            fg_all = numpy.asarray(fg_all)
             if need_vg:
-                vg_all = np.asarray(vg_all)
+                vg_all = numpy.asarray(vg_all)
 
     # ---- total-energy-only mode --------------------------------------------
     if energy_w and not need_force and not need_vg:
         _ensure_grad_all()
-        rows.append(eg_all.sum(axis=0, keepdims=True) * (energy_w / scale))
-        eqn_indices.append(np.array([0], dtype=np.intp))
+        rows += [eg_all.sum(axis=0, keepdims=True) * (energy_w / scale)]
+        eqn_indices += [numpy.array([0], dtype=intp)]
     elif energy_w or need_force or need_vg:
         _ensure_grad_all()
         if energy_w:
-            rows.append(eg_all.sum(axis=0, keepdims=True))
-            eqn_indices.append(np.array([0], dtype=np.intp))
+            rows += [eg_all.sum(axis=0, keepdims=True)]
+            eqn_indices += [numpy.array([0], dtype=intp)]
         if need_force:
-            rows.append(fg_all.reshape(n * 3, cc) * force_w)
-            eqn_indices.append(np.arange(1, 1 + 3 * n, dtype=np.intp))
+            rows += [fg_all.reshape(n * 3, cc) * force_w]
+            eqn_indices += [numpy.arange(1, 1 + 3 * n, dtype=intp)]
         if need_vg:
             # mlip-3 stores the full 3x3 stress block (9 rows), not Voigt-6.
-            vg_full = np.stack([
+            vg_full = numpy.stack([
                 vg_all[0],
                 vg_all[3],
                 vg_all[4],
@@ -153,16 +154,16 @@ def _info_rows(pot: MTPPotential, atoms, calc: MTPCalculator, weights: dict) -> 
                 vg_all[5],
                 vg_all[2],
             ])
-            rows.append(vg_full * (stress_w / scale))
-            eqn_indices.append(np.arange(1 + 3 * n, 1 + 3 * n + 9, dtype=np.intp))
+            rows += [vg_full * (stress_w / scale)]
+            eqn_indices += [numpy.arange(1 + 3 * n, 1 + 3 * n + 9, dtype=intp)]
 
     # ---- site-energy rows --------------------------------------------------
     if site_en_w:
         _ensure_grad_all()
-        rows.append(eg_all)
-        eqn_indices.append(np.arange(1 + 3 * n + 9, 1 + 3 * n + 9 + n, dtype=np.intp))
+        rows += [eg_all]
+        eqn_indices += [numpy.arange(1 + 3 * n + 9, 1 + 3 * n + 9 + n, dtype=intp)]
 
-    return Rows(rows=np.vstack(rows) if rows else np.empty((0, cc)), eqn_indices=np.concatenate(eqn_indices) if eqn_indices else np.empty(0, dtype=np.intp))
+    return Rows(rows=numpy.vstack(rows) if rows else numpy.empty((0, cc)), eqn_indices=numpy.concatenate(eqn_indices) if eqn_indices else numpy.empty(0, dtype=intp))
 
 
 def _build_saved_mvs_state(weights: dict, mv: MaxVol, structs: list, pool_id: int) -> MVSState:
@@ -180,11 +181,11 @@ def _build_saved_mvs_state(weights: dict, mv: MaxVol, structs: list, pool_id: in
                               ) if int(active_pool_id) == pool_id and int(struct_index) == label and int(eqn_index) >= 0})
         if eqn_indices:
             atoms.info.setdefault("features", {})["selected_eqn_inds"] = ",".join(str(eqn_index) for eqn_index in eqn_indices)
-        selected_cfgs.append(atoms)
+        selected_cfgs += [atoms]
 
     cfg_index_of_label = {label: i for i, label in enumerate(selected_labels)}
-    active_cfg_indices = np.array([cfg_index_of_label.get(int(struct_index), -1) if int(active_pool_id) == pool_id else -1 for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True)], dtype=np.intp)
-    return MVSState(weights=weights, A=mv.A, invA=mv.invA, active_cfg_indices=active_cfg_indices, active_eqn_indices=np.asarray(mv.active_eqn_indices, dtype=np.intp), selected_cfgs=selected_cfgs)
+    active_cfg_indices = numpy.array([cfg_index_of_label.get(int(struct_index), -1) if int(active_pool_id) == pool_id else -1 for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True)], dtype=intp)
+    return MVSState(weights=weights, A=mv.A, invA=mv.invA, active_cfg_indices=active_cfg_indices, active_eqn_indices=numpy.asarray(mv.active_eqn_indices, dtype=intp), selected_cfgs=selected_cfgs)
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +231,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     for atoms in structures:
         rows = _info_rows(pot, atoms, calc, weights).rows
 
-        scores = np.abs(rows @ mv.invA.T)  # (n_rows, n)
+        scores = numpy.abs(rows @ mv.invA.T)  # (n_rows, n)
         cfg_grade = float(scores.max())
 
         # Per-atom grades come from neighborhood rows, which mlip-3 appends last.
@@ -241,9 +242,9 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
             cfg_grade = float(per_atom.max())
         else:
             # No site-energy rows: assign cfg_grade uniformly
-            per_atom = np.full(n_atoms, cfg_grade)
+            per_atom = numpy.full(n_atoms, cfg_grade)
 
-        atoms.arrays["nbh_grades"] = per_atom.astype(np.float64)
+        atoms.arrays["nbh_grades"] = per_atom.astype(float64)
         atoms.info.setdefault("features", {})["MV_grade"] = cfg_grade
 
     return structures
@@ -361,17 +362,17 @@ def train(potential, training_structs: list, save_to: str, iteration_limit: int 
     dataset = [_atoms_to_entry(atoms, calc) for atoms in training_structs]
 
     # --- Update min_dist — mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(distances) ---
-    min_dist = np.inf
+    min_dist = numpy.inf
     for entry in dataset:
         disps = entry["displacements"]
         if len(disps):
-            min_dist = min(min_dist, float(np.sqrt((disps**2).sum(axis=1)).min()))
-    if np.isfinite(min_dist):
+            min_dist = min(min_dist, float(numpy.sqrt((disps**2).sum(axis=1)).min()))
+    if numpy.isfinite(min_dist):
         pot.set_min_cutoff(0.99 * min_dist)
 
     # Auto-detect whether to run pre-training (mirrors mlip-3's `inited` flag).
     if pre_train is None:
-        pre_train = not np.any(pot.get_radial_basis_coeffs())
+        pre_train = not numpy.any(pot.get_radial_basis_coeffs())
 
     lf_kwargs = dict(weight_energy=energy_weight, weight_forces=force_weight, weight_stress=stress_weight, weight_scaling=weight_scaling)
 

@@ -27,7 +27,8 @@ Loss normalisation (matching mlip-3):
   sees them, so absolute loss values are comparable across dataset sizes.
 """
 
-import numpy as np
+import numpy
+from numpy import float64
 
 # Steps at which LinearFitter is called inside the outer loop — mirrors
 # mlip-3's mtpr_trainer.cpp NonLinOptimize() explicit LinOptimize calls.
@@ -62,7 +63,7 @@ def _weighted_rmse(pot, dataset, w_E=1.0, w_F=1.0, w_S=0.1):
         if "forces" in entry and w_F > 0:
             result = pot.compute(entry["types"], entry["ilist"], entry["numneigh"], entry["firstneigh"], entry["displacements"], compute_virials=False, compute_eatom=False)
             f_err = (result["forces"] - entry["forces"]).ravel()
-            sq_sum += w_F * np.dot(f_err, f_err) / (n_atoms * 3)
+            sq_sum += w_F * numpy.dot(f_err, f_err) / (n_atoms * 3)
             n_total += 1
 
         # Stress
@@ -70,12 +71,12 @@ def _weighted_rmse(pot, dataset, w_E=1.0, w_F=1.0, w_S=0.1):
             result = pot.compute(entry["types"], entry["ilist"], entry["numneigh"], entry["firstneigh"], entry["displacements"], compute_virials=True, compute_eatom=False)
             v = result["virials"]
             vol = entry["volume"]
-            s_pred = np.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]]) / vol
-            s_err = s_pred - np.asarray(entry["stress"])
-            sq_sum += w_S * np.dot(s_err, s_err) / 6
+            s_pred = numpy.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]]) / vol
+            s_err = s_pred - numpy.asarray(entry["stress"])
+            sq_sum += w_S * numpy.dot(s_err, s_err) / 6
             n_total += 1
 
-    return float(np.sqrt(sq_sum / max(n_total, 1)))
+    return float(numpy.sqrt(sq_sum / max(n_total, 1)))
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +93,7 @@ def _compute_efs_grad(pot, local_data, n_radial, w_E, w_F, w_S, comm):
     Returns (total_loss, grad) both divided by K = len(full dataset) upstream.
     """
     total_loss = 0.0
-    grad = np.zeros(n_radial, dtype=np.float64)
+    grad = numpy.zeros(n_radial, dtype=float64)
 
     for entry in local_data:
         n = len(entry["types"])
@@ -115,23 +116,23 @@ def _compute_efs_grad(pot, local_data, n_radial, w_E, w_F, w_S, comm):
 
         if w_F > 0 and "forces" in entry:
             # w_F * Σ_ia f_err² — matches mlip-3: wgt_forces = w_F (wgt_scale_power_forces=0)
-            f_err = (np.asarray(forces) - entry["forces"]).ravel()
-            total_loss += w_F * np.dot(f_err, f_err)
+            f_err = (numpy.asarray(forces) - entry["forces"]).ravel()
+            total_loss += w_F * numpy.dot(f_err, f_err)
             grad += w_F * 2.0 * f_err @ fg[:, :, :n_radial].reshape(n * 3, n_radial)
 
         if has_stress:
             vol = entry["volume"]
             # w_S/N * Σ_ab virial_err² — matches mlip-3: wgt_stress = w_S / N.
             # entry["stress"] is ASE Voigt (eV/Å³); multiply by vol → virial (eV).
-            v_pred = np.array([-virials[0], -virials[1], -virials[2], -virials[5], -virials[4], -virials[3]])
-            v_ref = np.asarray(entry["stress"]) * vol
+            v_pred = numpy.array([-virials[0], -virials[1], -virials[2], -virials[5], -virials[4], -virials[3]])
+            v_ref = numpy.asarray(entry["stress"]) * vol
             v_err = v_pred - v_ref
-            total_loss += w_S / n * np.dot(v_err, v_err)
-            vg_v = np.stack([-vg[0], -vg[1], -vg[2], -vg[5], -vg[4], -vg[3]])
+            total_loss += w_S / n * numpy.dot(v_err, v_err)
+            vg_v = numpy.stack([-vg[0], -vg[1], -vg[2], -vg[5], -vg[4], -vg[3]])
             grad += w_S * 2.0 / n * v_err @ vg_v[:, :n_radial]
 
     if comm is not None:
-        buf = np.array([total_loss])
+        buf = numpy.array([total_loss])
         comm.Allreduce(buf.copy(), buf)
         total_loss = float(buf[0])
         comm.Allreduce(grad.copy(), grad)
@@ -183,7 +184,7 @@ class _ScipyNonlinearFitter:
             self.pot.set_radial_basis_coeffs(x)
             LinearFitter(self.pot, **self.lf_kwargs).fit(dataset, comm=comm)
             total_loss, grad = _compute_efs_grad(self.pot, local_data, n_radial, self.w_E, self.w_F, self.w_S, comm)
-            self.loss_history_.append(total_loss)
+            self.loss_history_ += [total_loss]
             if self.callback:
                 self.callback(total_loss, self.pot)
             return total_loss, grad
@@ -235,7 +236,7 @@ class _TorchNonlinearFitter:
         n_radial = (self.pot.get_coeff_count() - self.pot.get_alpha_scalar_count() - self.pot.get_species_count())
         K = len(dataset)
 
-        x0 = np.array(self.pot.get_radial_basis_coeffs()).ravel()[:n_radial].copy()
+        x0 = numpy.array(self.pot.get_radial_basis_coeffs()).ravel()[:n_radial].copy()
         radial_t = torch.tensor(x0, dtype=torch.float64, requires_grad=True)
 
         if comm is not None:
@@ -284,7 +285,7 @@ class _TorchNonlinearFitter:
                 opt.step()
                 loss_val = total_loss
 
-            self.loss_history_.append(loss_val)
+                self.loss_history_ += [loss_val]
             if self.callback:
                 self.callback(loss_val, self.pot)
 

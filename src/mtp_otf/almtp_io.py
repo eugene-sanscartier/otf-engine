@@ -24,7 +24,8 @@ import math
 from dataclasses import dataclass
 from io import StringIO
 
-import numpy as np
+import numpy
+from numpy import intp, ndarray
 
 _MARKER = b"#MVS_v1.1"
 _END_MARKER = b"\n#\n"
@@ -35,14 +36,14 @@ class MVSState:
     """Persisted MaxVol state; active_cfg_indices index into selected_cfgs."""
 
     weights: dict
-    A: np.ndarray
-    invA: np.ndarray
-    active_cfg_indices: np.ndarray
-    active_eqn_indices: np.ndarray
+    A: ndarray
+    invA: ndarray
+    active_cfg_indices: ndarray
+    active_eqn_indices: ndarray
     selected_cfgs: list
 
 
-def _read_header_and_binary(data: bytes) -> tuple[dict, np.ndarray, np.ndarray, int]:
+def _read_header_and_binary(data: bytes) -> tuple[dict, ndarray, ndarray, int]:
     marker_pos = data.find(_MARKER)
     if marker_pos == -1:
         raise RuntimeError("No #MVS_v1.1 active-set section found.")
@@ -74,17 +75,17 @@ def _read_header_and_binary(data: bytes) -> tuple[dict, np.ndarray, np.ndarray, 
     if 2 * n * n * 8 != n_bytes:
         raise ValueError(f"Binary block size {n_bytes} bytes is not 2*n*n*8 for any integer n")
 
-    A = np.frombuffer(binary_block[:n * n * 8], dtype="<f8").reshape(n, n).copy()
-    invA = np.frombuffer(binary_block[n * n * 8:], dtype="<f8").reshape(n, n).copy()
+    A = numpy.frombuffer(binary_block[:n * n * 8], dtype="<f8").reshape(n, n).copy()
+    invA = numpy.frombuffer(binary_block[n * n * 8:], dtype="<f8").reshape(n, n).copy()
     return weights, A, invA, end_pos
 
 
-def _read_links_and_cfgs(data: bytes, n: int, end_pos: int) -> tuple[np.ndarray, np.ndarray, list]:
+def _read_links_and_cfgs(data: bytes, n: int, end_pos: int) -> tuple[ndarray, ndarray, list]:
     from .io_cfg import read_cfg
 
     pos = end_pos + len(_END_MARKER)
-    active_cfg_indices = np.full(n, -1, dtype=np.intp)
-    active_eqn_indices = np.full(n, -1, dtype=np.intp)
+    active_cfg_indices = numpy.full(n, -1, dtype=intp)
+    active_eqn_indices = numpy.full(n, -1, dtype=intp)
     for i in range(n):
         nl = data.find(b"\n", pos)
         if nl == -1:
@@ -126,8 +127,8 @@ def _encode_mvs_state(state: MVSState) -> bytes:
     if state.invA.shape != (n, n):
         raise ValueError(f"invA shape {state.invA.shape} does not match A shape {state.A.shape}")
 
-    active_cfg_indices = np.asarray(state.active_cfg_indices, dtype=np.intp)
-    active_eqn_indices = np.asarray(state.active_eqn_indices, dtype=np.intp)
+    active_cfg_indices = numpy.asarray(state.active_cfg_indices, dtype=intp)
+    active_eqn_indices = numpy.asarray(state.active_eqn_indices, dtype=intp)
     if active_cfg_indices.shape != (n, ):
         raise ValueError(f"active_cfg_indices shape {active_cfg_indices.shape} does not match ({n},)")
     if active_eqn_indices.shape != (n, ):

@@ -15,6 +15,7 @@ All forces/stresses are optional; pass weight=0 to exclude them.
 """
 
 import numpy as np
+from numpy import float64
 
 
 def _eval_basis(pot, entry):
@@ -25,7 +26,7 @@ def _eval_basis(pot, entry):
         entry["numneigh"],
         entry["firstneigh"],
         entry["displacements"],
-    ), dtype=np.float64)
+    ), dtype=float64)
 
 
 def _eval_force_and_stress_columns(pot, entry, n_basis):
@@ -142,7 +143,7 @@ def build_design_matrix(pot, dataset, weight_energy=1.0, weight_forces=0.01, wei
                 B_S = np.zeros((6, n_params))
                 B_S[:, :n_basis] = A_S / vol
                 rows_A.append(w_s * B_S)
-                rows_b.append(w_s * np.asarray(entry["stress"], dtype=np.float64))
+                rows_b.append(w_s * np.asarray(entry["stress"], dtype=float64))
         elif include_stress and "stress" in entry and "forces" not in entry:
             # Compute stress columns without forces
             _, A_S = _eval_force_and_stress_columns(pot, entry, n_basis)
@@ -153,7 +154,7 @@ def build_design_matrix(pot, dataset, weight_energy=1.0, weight_forces=0.01, wei
             B_S = np.zeros((6, n_params))
             B_S[:, :n_basis] = A_S / vol
             rows_A.append(w_s * B_S)
-            rows_b.append(w_s * np.asarray(entry["stress"], dtype=np.float64))
+            rows_b.append(w_s * np.asarray(entry["stress"], dtype=float64))
 
     A = np.vstack(rows_A)
     b = np.concatenate(rows_b)

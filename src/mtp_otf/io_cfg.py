@@ -1,4 +1,5 @@
 import numpy
+from numpy import int32
 import ase
 import collections
 
@@ -79,7 +80,7 @@ def read_cfg(fileobj, type_map=None):
             atoms.calc = ase.calculators.singlepoint.SinglePointCalculator(atoms, **calcs)
 
             if type:
-                atoms.arrays["type_index"] = numpy.array(type, dtype=numpy.int32)
+                atoms.arrays["type_index"] = numpy.array(type, dtype=int32)
             if nbh_grades:
                 atoms.set_array("nbh_grades", numpy.array(nbh_grades))
                 features["MV_grade"] = numpy.max(nbh_grades)
