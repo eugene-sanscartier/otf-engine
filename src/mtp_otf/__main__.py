@@ -1,7 +1,7 @@
 import os
 import sys
 import argparse
-from .otf_mtp import main as _main, _BUILTIN
+from .otf_mtp import main as _main
 from .launchers import NestedMPILauncher, ForkLauncher, SlurmLauncher
 
 
@@ -45,7 +45,7 @@ def main():
     args = parser.parse_args()
 
     mlp_command = os.environ.get("OTF_MTP_COMMAND")
-    if not mlp_command and not _BUILTIN:
+    if not mlp_command:
         print("Error: OTF_MTP_COMMAND environment variable is not set"
               "Set OTF_MTP_COMMAND=/path/to/mlp ", file=sys.stderr)
         sys.exit(1)
