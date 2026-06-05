@@ -251,5 +251,5 @@ def main(args, _env, launcher=None, mlp_command=None, evaluator_fn=None):
     eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
 
     # Step 7: retrain the potential on the updated training set.
-    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env, n_procs=None)
+    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env)
     os.replace(f"tmp_{args.potential}", args.potential)

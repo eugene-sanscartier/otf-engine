@@ -99,7 +99,7 @@ class Launcher(ABC):
     """
 
     @abstractmethod
-    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
+    def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
         """Execute *command* (f-string of ``mlp binary + subcommand + args``,
         without any mpirun/srun prefix).
 
@@ -109,8 +109,8 @@ class Launcher(ABC):
                   ``f"{mlp} calculate_grade {potential} ..."``
         log_path: Append combined stdout/stderr here.
         env:      Environment mapping for the subprocess.
-        n_procs:  Number of MPI tasks.  ``None`` means "use all available"
-                  (launcher-dependent — mpirun omits ``-n``).
+        parallel_eval:  When true, use all available processes.  When false,
+                        use a single process.
         """
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: str, env: dict):
@@ -151,8 +151,9 @@ class NestedMPILauncher(Launcher):
         self.mpirun_executable = mpirun_executable
         self.mpirun_args = mpirun_args
 
-    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
-        n_part = f"-n {n_procs} " if n_procs is not None else ""
+    def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
+        n_procs = _default_n_procs() if parallel_eval else 1
+        n_part = f"-n {n_procs} "
         extra = f"{self.mpirun_args} " if self.mpirun_args else ""
         cmd = f"{self.mpirun_executable} {n_part}{extra}{command}"
         _run_cmd(cmd, log_path, _env_for_mpirun(env))
@@ -179,9 +180,8 @@ class ForkLauncher(Launcher):
     def __init__(self, fork_args: str = ""):
         self.fork_args = fork_args
 
-    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
-        if n_procs is None:
-            n_procs = _default_n_procs()
+    def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
+        n_procs = _default_n_procs() if parallel_eval else 1
         child_env = _env_for_fork(n_procs, env)
         with open(log_path, "a") as log_f:
             procs = [subprocess.Popen(
@@ -241,11 +241,11 @@ class BatchSubmitLauncher(Launcher, ABC):
     """
 
     @abstractmethod
-    def _build_submit_cmd(self, cmd: str, log_path: str, n_procs: int | None) -> str:
+    def _build_submit_cmd(self, cmd: str, log_path: str, parallel_eval: bool) -> str:
         """Return the full shell command that submits *cmd* and waits."""
 
-    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
-        submit_cmd = self._build_submit_cmd(command, log_path, n_procs)
+    def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
+        submit_cmd = self._build_submit_cmd(command, log_path, parallel_eval)
         print(f"running: {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=env, check=True)
 
@@ -283,7 +283,7 @@ class SlurmLauncher(BatchSubmitLauncher):
     def parallel_eval(self) -> bool:
         return self._parallel_eval
 
-    def _build_submit_cmd(self, cmd: str, log_path: str, _n_procs: int | None) -> str:
+    def _build_submit_cmd(self, cmd: str, log_path: str, _parallel_eval: bool) -> str:
         abs_log = os.path.abspath(log_path)
         cwd = os.getcwd()
         extra = self.sbatch_args
