@@ -40,8 +40,7 @@ def evaluator(structure):
 
     profile = EspressoProfile(
         command='mpiexec -n 4 pw.x',
-        pseudo_dir='.',
-    )
+        pseudo_dir='.')
 
     def espresso_calc(): return ase.calculators.espresso.Espresso(profile=profile, pseudopotentials=pseudopotentials, kpts=None, input_data=input_data)
     # def espresso_calc(): return ase.calculators.espresso.Espresso(pseudopotentials=pseudopotentials, kpts=None, input_data=input_data) # kpts=(0, 0, 0)

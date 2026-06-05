@@ -1,7 +1,7 @@
 from .otf_mtp import main
 from .launchers import (
     Launcher,
-    MpirunLauncher,
+    NestedMPILauncher,
     ForkLauncher,
     BatchSubmitLauncher,
     SlurmLauncher,
@@ -10,8 +10,17 @@ from .launchers import (
 __all__ = [
     "main",
     "Launcher",
-    "MpirunLauncher",
+    "NestedMPILauncher",
     "ForkLauncher",
     "BatchSubmitLauncher",
     "SlurmLauncher",
 ]
+
+try:
+    from .mtp_backend import (
+        calculate_grade,
+        select_add,
+        train as train_mtp)
+    __all__ += ["calculate_grade", "select_add", "train_mtp"]
+except ImportError:
+    pass

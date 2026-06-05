@@ -141,11 +141,11 @@ class Launcher(ABC):
 
 
 # ---------------------------------------------------------------------------
-# MpirunLauncher  (current behaviour, default)
+# NestedMPILauncher  (current behaviour, default)
 # ---------------------------------------------------------------------------
 
 
-class MpirunLauncher(Launcher):
+class NestedMPILauncher(Launcher):
     """Wrap mlp calls with ``mpirun``.  Matches existing behaviour exactly."""
 
     def __init__(self, mpirun_executable: str = "mpirun", extra_args: str = ""):
@@ -281,12 +281,7 @@ class SlurmLauncher(BatchSubmitLauncher):
     parallel_eval:     Submit structure evaluations concurrently (default: True).
     """
 
-    def __init__(
-        self,
-        sbatch_executable: str = "sbatch",
-        sbatch_args: list[str] | None = None,
-        parallel_eval: bool = True,
-    ):
+    def __init__(self, sbatch_executable: str = "sbatch", sbatch_args: list[str] | None = None, parallel_eval: bool = True):
         self.sbatch_executable = sbatch_executable
         self.sbatch_args = sbatch_args or []
         self._parallel_eval = parallel_eval
@@ -317,7 +312,7 @@ class SlurmLauncher(BatchSubmitLauncher):
         Note: *evaluator_fn* is used only to check for custom imports; the
         actual code dispatched to the batch job always loads ``evaluator.py``
         from the calling working directory.  For programmatic use with a
-        non-file evaluator, use ``MpirunLauncher`` or ``ForkLauncher``.
+        non-file evaluator, use ``NestedMPILauncher`` or ``ForkLauncher``.
         """
         import ase.io
 

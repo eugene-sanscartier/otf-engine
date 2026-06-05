@@ -8,7 +8,13 @@ import ase
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-from .launchers import MpirunLauncher
+from .launchers import NestedMPILauncher
+
+try:
+    from .mtp_backend import (calculate_grade as _calc_grade_py, select_add as _select_add_py, train as _train_py)
+    _BUILTIN = True
+except ImportError:
+    _BUILTIN = False
 
 OTF_STATE_FILE = "otf_state.json"
 
@@ -230,16 +236,18 @@ def eval_structures(selected_extrapolative, training_set, evaluator_fn, launcher
                     write_cfg(training_file, training_structures)
 
 
-def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evaluator_fn=None):
+def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evaluator_fn=None, use_builtin=True):
     # Resolve mlp_command: explicit param > env var > error
-    if mlp_command is None:
-        mlp_command = os.environ.get("OTF_MTP_COMMAND")
-    if not mlp_command:
-        raise RuntimeError("mlp_command not provided and OTF_MTP_COMMAND environment variable is not set. "
-                           "Pass mlp_command= or set: export OTF_MTP_COMMAND=/path/to/mlp")
+    if _BUILTIN and use_builtin:
+        mlp_command = None  # not needed for mlp steps
+    else:
+        if mlp_command is None:
+            mlp_command = os.environ.get("OTF_MTP_COMMAND")
+        if not mlp_command:
+            raise RuntimeError("mlp_command not provided and OTF_MTP_COMMAND environment variable is not set. Pass mlp_command= or set: export OTF_MTP_COMMAND=/path/to/mlp")
 
     if launcher is None:
-        launcher = MpirunLauncher()
+        launcher = NestedMPILauncher()
 
     if evaluator_fn is None:
         evaluator_fn = _load_evaluator()
@@ -256,8 +264,13 @@ def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evalua
     if args.preselection_filtering:
         # failsafe: lammps extrapolation fix-halt sometimes stops before grade calculation
         try:
-            launcher.run(f"{mlp_command} calculate_grade {args.potential} {extrapolative_candidates} {extrapolative_candidates_out}.calculate_grade", "mlip_calculate_grade.log", _env, n_procs=1)
-            os.replace(f"{extrapolative_candidates_out}.calculate_grade.0", extrapolative_candidates)
+            if _BUILTIN and use_builtin:
+                cfgs = load_structures(extrapolative_candidates)
+                cfgs = _calc_grade_py(args.potential, cfgs)
+                save_structures(extrapolative_candidates, cfgs)
+            else:
+                launcher.run(f"{mlp_command} calculate_grade {args.potential} {extrapolative_candidates} {extrapolative_candidates_out}.calculate_grade", "mlip_calculate_grade.log", _env, n_procs=1)
+                os.replace(f"{extrapolative_candidates_out}.calculate_grade.0", extrapolative_candidates)
         except Exception as e:
             print(f"calculate_grade failed: {e}")
             exit_returncode = getattr(e, 'returncode', 1)
@@ -272,7 +285,18 @@ def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evalua
         save_structures(extrapolative_candidates, filtred_cfgs)
 
     try:
-        launcher.run(f"{mlp_command} select_add {args.potential} {args.training_set} {extrapolative_candidates} {selected_extrapolative}", "mlip_select_add.log", _env, n_procs=1)
+        if _BUILTIN and use_builtin:
+            train_cfgs = load_structures(args.training_set)
+            candidate_cfgs = load_structures(extrapolative_candidates)
+            selected, _sel_weights, _sel_A, _sel_invA = _select_add_py(args.potential, train_cfgs, candidate_cfgs)
+            save_structures(selected_extrapolative, selected)
+        else:
+            launcher.run(
+                f"{mlp_command} select_add {args.potential} {args.training_set} {extrapolative_candidates} {selected_extrapolative}",
+                "mlip_select_add.log",
+                _env,
+                n_procs=1,
+            )
     except Exception as e:
         print(f"select_add failed: {e}")
         exit_returncode = getattr(e, 'returncode', 1)
@@ -280,12 +304,11 @@ def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evalua
     eval_structures(selected_extrapolative, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
 
     try:
-        launcher.run(
-            f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} --al_mode=nbh"
-            "mlip_train.log",
-            _env,
-            n_procs=train_n_procs,
-        )
+        if _BUILTIN and use_builtin:
+            train_cfgs = load_structures(args.training_set)
+            _train_py(args.potential, train_cfgs, f"tmp_{args.potential}", args.iteration_limit)
+        else:
+            launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env, n_procs=train_n_procs)
         os.replace(f"tmp_{args.potential}", args.potential)
     except Exception as e:
         print(f"train failed: {e}")

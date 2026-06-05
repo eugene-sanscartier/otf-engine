@@ -49,20 +49,16 @@ def main():
     )
     parser.add_argument(
         "slurm_outputs", nargs="*",
-        help="Slurm output file(s) to parse (processed in order)",
-    )
+        help="Slurm output file(s) to parse (processed in order)")
     parser.add_argument(
         "-o", "--output", default=OTF_STATE_FILE,
-        help=f"Path to the state file (default: {OTF_STATE_FILE})",
-    )
+        help=f"Path to the state file (default: {OTF_STATE_FILE})")
     parser.add_argument(
         "--update", action="store_true",
-        help="Append to existing state instead of starting fresh",
-    )
+        help="Append to existing state instead of starting fresh")
     parser.add_argument(
         "--gamma_max0_floor", type=float, required=True,
-        help="Floor for gamma_max0 — should match --gamma_max used in the OTF run",
-    )
+        help="Floor for gamma_max0 — should match --gamma_max used in the OTF run")
     parser.add_argument("--gamma_max0_window", type=int, default=5,
                         help="Rolling window size (default: 5)")
     parser.add_argument("--gamma_max0_percentile", type=float, default=75,
