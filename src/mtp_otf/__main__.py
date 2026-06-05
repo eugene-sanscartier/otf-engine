@@ -5,6 +5,15 @@ from .otf_mtp import main as _main
 from .launchers import NestedMPILauncher, ForkLauncher, SlurmLauncher
 
 
+def _load_evaluator():
+    import importlib.util
+    path = os.path.join(os.getcwd(), "evaluator.py")
+    spec = importlib.util.spec_from_file_location("evaluator", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.evaluator
+
+
 def main():
     parser = argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
 
@@ -46,9 +55,7 @@ def main():
 
     mlp_command = os.environ.get("OTF_MTP_COMMAND")
     if not mlp_command:
-        print("Error: OTF_MTP_COMMAND environment variable is not set"
-              "Set OTF_MTP_COMMAND=/path/to/mlp ", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("mlp_command not provided and OTF_MTP_COMMAND environment variable is not set. Pass mlp_command= or set: export OTF_MTP_COMMAND=/path/to/mlp")
 
     extra_args = list(args.launcher_extra) if args.launcher_extra else []
     if args.launcher == "nested":
@@ -61,12 +68,17 @@ def main():
         print(f"Error: unknown launcher {args.launcher!r}", file=sys.stderr)
         sys.exit(1)
 
-    returncode = _main(args, os.environ, launcher=launcher, mlp_command=mlp_command, train_n_procs=args.train_n_procs)
+    if launcher is None:
+        launcher = NestedMPILauncher()
 
-    if returncode != 0:
-        print(f"One program exited with return code: {returncode}")
-        print("Exiting with return code 0.")
+    evaluator_fn = _load_evaluator()
 
+    try:
+        _main(args, os.environ, launcher=launcher, mlp_command=mlp_command, train_n_procs=args.train_n_procs, evaluator_fn=evaluator_fn)
+    except Exception as e:
+        print(f"Error during execution: {e}", file=sys.stderr)
+
+    print("Exiting with return code 0.")
     sys.exit(0)
 
 

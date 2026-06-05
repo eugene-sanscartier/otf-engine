@@ -8,8 +8,6 @@ import ase
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-from .launchers import NestedMPILauncher
-
 from .mtp_backend import calculate_grade, select_add
 
 OTF_STATE_FILE = "otf_state.json"
@@ -27,7 +25,7 @@ def _save_state(state):
         json.dump(state, f, indent=2)
 
 
-def preselected_dump2cfg(extrapolative_dumps, extrapolative_candidates_cfg, extrapolation_field="f_extrapolation_grade"):
+def load_extrapolative_dumps(extrapolative_dumps, extrapolation_field="f_extrapolation_grade"):
     collected_dumps = []
     for extrapolative_dump in extrapolative_dumps:
         with open(extrapolative_dump) as dump_file:
@@ -36,24 +34,20 @@ def preselected_dump2cfg(extrapolative_dumps, extrapolative_candidates_cfg, extr
 
             if len(dumps) > 100:
                 print("Warning: Large extrapolative dump with ", len(dumps), " structures, this may cause performance issues.")
-                dumps = dumps[-100:]
+                _indices = numpy.random.choice(len(dumps), size=100, replace=False)
+                dumps = [dumps[i] for i in _indices]
 
             collected_dumps += dumps
 
-        try:
-            os.remove(extrapolative_dump)
-        except Exception as e:
-            print(f"Warning: {extrapolative_dump}: {e}")
+        # try:
+        #     os.remove(extrapolative_dump)
+        # except Exception as e:
+        #     print(f"Warning: {extrapolative_dump}: {e}")
 
     for dump in collected_dumps:
         if dump.has(extrapolation_field):
             dump.set_array("nbh_grades", dump.get_array(extrapolation_field).flatten())
-
-    try:
-        with open(extrapolative_candidates_cfg, mode="w") as preselected_file:
-            write_cfg(preselected_file, collected_dumps)
-    except Exception as e:
-        print(f"Error: Exception {extrapolative_candidates_cfg}: {e}")
+    return collected_dumps
 
 
 def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
@@ -70,15 +64,6 @@ def forcesthr_excess(atoms, threshold):
     if atoms.calc is None or "forces" not in atoms.calc.results:
         return False
     return numpy.max(numpy.abs(atoms.calc.results["forces"])) > threshold
-
-
-def _load_evaluator():
-    import importlib.util
-    path = os.path.join(os.getcwd(), "evaluator.py")
-    spec = importlib.util.spec_from_file_location("evaluator", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.evaluator
 
 
 def _record_non_extreme(state, extreme_lock_after_ntimes):
@@ -198,10 +183,7 @@ def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
         return None
 
 
-def eval_structures(selected_extrapolative, training_set, evaluator_fn, launcher, env, force_threshold=None):
-    with open(selected_extrapolative, mode="r") as selected_file:
-        selected_structures = read_cfg(selected_file)
-
+def eval_structures(selected_structures, training_set, evaluator_fn, launcher, env, force_threshold=None):
     with open(training_set, mode="r") as training_file:
         training_structures = read_cfg(training_file)
 
@@ -227,66 +209,47 @@ def eval_structures(selected_extrapolative, training_set, evaluator_fn, launcher
             print(f"Calculating structure {i + 1}/{len(selected_structures)}")
             result = _eval_one(i, selected_structure, evaluator_fn, launcher, env, force_threshold)
             if result is not None:
-                training_structures.append(result)
+                training_structures += [result]
                 with open(training_set, mode="w") as training_file:
                     write_cfg(training_file, training_structures)
 
 
 def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evaluator_fn=None):
-    if mlp_command is None:
-        mlp_command = os.environ.get("OTF_MTP_COMMAND")
-    if not mlp_command:
-        raise RuntimeError("mlp_command not provided and OTF_MTP_COMMAND environment variable is not set. Pass mlp_command= or set: export OTF_MTP_COMMAND=/path/to/mlp")
+    """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model.
 
-    if launcher is None:
-        launcher = NestedMPILauncher()
+    The flow is: load and clean the candidate pool, select which structures
+    should extend the training set, evaluate those structures with the prepared
+    backend, then retrain the potential in place.
+    """
 
-    if evaluator_fn is None:
-        evaluator_fn = _load_evaluator()
+    # Step 1: load the extrapolative structures emitted by the upstream run.
+    # These dumps are the raw candidate pool from which new training structures
+    # may be chosen.
+    candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps)
 
-    extrapolative_candidates = "preselected.cfg"
-    selected_extrapolative = "selected.cfg"
-    extrapolation_field = "f_extrapolation_grade"
+    # Step 2: ensure every candidate carries an extrapolation grade, even when
+    # LAMMPS stopped early and the dump does not already contain the final or correct
+    # extrapolation metadata needed by the downstream selection logic.
+    candidate_structures = calculate_grade(args.potential, candidate_structures)
 
-    exit_returncode = 0
-
-    preselected_dump2cfg(args.extrapolative_dumps, extrapolative_candidates, extrapolation_field)
-
+    # Step 3: optionally apply the preselection policy so uninteresting
+    # or disallowed candidates are removed before selection and evaluation stages.
     if args.preselection_filtering:
-        # failsafe: lammps extrapolation fix-halt sometimes stops before grade calculation
-        try:
-            cfgs = load_structures(extrapolative_candidates)
-            cfgs = calculate_grade(args.potential, cfgs)
-            save_structures(extrapolative_candidates, cfgs)
-        except Exception as e:
-            print(f"calculate_grade failed: {e}")
-            exit_returncode = getattr(e, 'returncode', 1)
+        candidate_structures = preselected_filter(candidate_structures, args.gamma_tolerance, args.gamma_max, args.gamma_max0_cap, extreme_lock_after_ntimes=args.extreme_lock_after_ntimes)
 
-        cfgs = load_structures(extrapolative_candidates)
-        filtred_cfgs = preselected_filter(cfgs, args.gamma_tolerance, args.gamma_max, args.gamma_max0_cap, extreme_lock_after_ntimes=args.extreme_lock_after_ntimes)
-        save_structures(extrapolative_candidates, filtred_cfgs)
-
+    # Step 4: optionally cap the surviving pool size. This keeps the next stages
+    # bounded when the extrapolative search produced many eligible structures.
     if args.max_structures > 0:
-        cfgs = load_structures(extrapolative_candidates)
-        filtred_cfgs = max_structureselection(cfgs, max_structures=args.max_structures)
-        save_structures(extrapolative_candidates, filtred_cfgs)
+        candidate_structures = max_structureselection(candidate_structures, max_structures=args.max_structures)
 
-    try:
-        train_cfgs = load_structures(args.training_set)
-        candidate_cfgs = load_structures(extrapolative_candidates)
-        selected, _ = select_add(args.potential, train_cfgs, candidate_cfgs)
-        save_structures(selected_extrapolative, selected)
-    except Exception as e:
-        print(f"select_add failed: {e}")
-        exit_returncode = getattr(e, 'returncode', 1)
+    # Step 5: run the structure-selection step.
+    train_structures = load_structures(args.training_set)
+    selected_structures, _ = select_add(args.potential, train_structures, candidate_structures)
 
-    eval_structures(selected_extrapolative, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
+    # Step 6: evaluate the selected structures with the configured backend and
+    # write evaluated structure into the training set for the retraining step.
+    eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
 
-    try:
-        launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env, n_procs=train_n_procs)
-        os.replace(f"tmp_{args.potential}", args.potential)
-    except Exception as e:
-        print(f"train failed: {e}")
-        exit_returncode = getattr(e, 'returncode', 1)
-
-    return exit_returncode
+    # Step 7: retrain the potential on the updated training set.
+    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env, n_procs=train_n_procs)
+    os.replace(f"tmp_{args.potential}", args.potential)
