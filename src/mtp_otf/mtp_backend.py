@@ -21,7 +21,7 @@ from .maxvol import MaxVol
 
 def _atoms_to_entry(atoms, calc: MTPCalculator) -> dict:
     """Convert ASE Atoms to the entry dict expected by design_matrix."""
-    types = np.asarray(atoms.arrays["_mtp_types"], dtype=np.int32) if "_mtp_types" in atoms.arrays else calc._symbols_to_types(atoms)
+    types = calc._atoms_to_types(atoms)
     ilist, numneigh, firstneigh, displacements = calc._build_neighbor_list(atoms)
 
     entry = {
@@ -52,7 +52,7 @@ def _atoms_to_entry(atoms, calc: MTPCalculator) -> dict:
 
 def _atoms_to_nl_entry(atoms, calc: MTPCalculator) -> dict:
     """Build minimal entry dict for grade/selection (no DFT data required)."""
-    types = np.asarray(atoms.arrays["_mtp_types"], dtype=np.int32) if "_mtp_types" in atoms.arrays else calc._symbols_to_types(atoms)
+    types = calc._atoms_to_types(atoms)
     ilist, numneigh, firstneigh, displacements = calc._build_neighbor_list(atoms)
     return {
         "types": types,
@@ -142,15 +142,6 @@ def _build_info_rows(pot: MTPPotential, entry: dict, weights: dict) -> np.ndarra
 
 
 # ---------------------------------------------------------------------------
-# Helper: infer species list from a potential file
-# ---------------------------------------------------------------------------
-
-
-def _infer_species(pot: MTPPotential, structures: list | None = None) -> list[str]:
-    """Infer species order for symbol-based fallback paths."""
-...
-
-# ---------------------------------------------------------------------------
 # calculate_grade
 # ---------------------------------------------------------------------------
 
@@ -178,8 +169,7 @@ def calculate_grade(potential_path: str, structures: list) -> list:
         .info["features"]["MV_grade"] populated.
     """
     pot = MTPPotential(potential_path)
-    species = _infer_species(pot, structures)
-    calc = MTPCalculator(potential_path, species=species)
+    calc = MTPCalculator(potential_path)
 
     weights, A, invA = read_active_set(potential_path)
     if invA is None:
@@ -238,9 +228,7 @@ def select_add(potential_path: str, training_structs: list, candidate_structs: l
     state that the caller may persist via write_active_set if desired.
     """
     pot = MTPPotential(potential_path)
-    all_structs = list(training_structs) + list(candidate_structs)
-    species = _infer_species(pot, all_structs)
-    calc = MTPCalculator(potential_path, species=species)
+    calc = MTPCalculator(potential_path)
 
     # Load existing active set as starting point (mirrors mlip-3 select_add).
     # Starting from the stored A preserves history from previous OTF cycles.
@@ -296,8 +284,7 @@ def train(potential_path: str, training_structs: list, save_to: str, iteration_l
     from ._mtp.rescale import rescale
 
     pot = MTPPotential(potential_path)
-    species = _infer_species(pot, training_structs)
-    calc = MTPCalculator(potential_path, species=species)
+    calc = MTPCalculator(potential_path)
 
     dataset = [_atoms_to_entry(atoms, calc) for atoms in training_structs]
 
@@ -338,7 +325,7 @@ def train(potential_path: str, training_structs: list, save_to: str, iteration_l
     # then embed it in save_to — mirrors mlip-3's train which calls select.Save().
     # A new MTPCalculator is needed because pot was updated in-place but calc
     # still holds the old coefficients loaded from potential_path.
-    calc_new = MTPCalculator(save_to, species=species)
+    calc_new = MTPCalculator(save_to)
     n = pot.get_coeff_count()
     # Preserve selection weights from the input file; fall back to mlip-3 defaults.
     file_weights, _, _ = read_active_set(potential_path)

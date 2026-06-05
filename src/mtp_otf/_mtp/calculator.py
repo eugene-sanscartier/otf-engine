@@ -7,7 +7,7 @@ from ase.build import bulk
 from mtp import MTPCalculator
 
 atoms = bulk("Si", cubic=True)
-calc  = MTPCalculator("path/to/SiO.mtp", species=["Si", "O"])
+calc  = MTPCalculator("path/to/Si.mtp")
 atoms.calc = calc
 print(atoms.get_potential_energy())
 print(atoms.get_forces())
@@ -27,28 +27,28 @@ class MTPCalculator(Calculator):
     ----------
     filename : str
         Path to the .mtp potential file (version 1.1.0).
-    species : list of str
-        Element symbols ordered by MTP species index.
-        Example: ``["Si", "O"]`` means Si → 0, O → 1.
     """
 
     implemented_properties = ["energy", "forces", "stress"]
 
-    def __init__(self, filename: str, species: list[str], **kwargs):
+    def __init__(self, filename: str, **kwargs):
         super().__init__(**kwargs)
         self.potential = MTPPotential(filename)
-        self.species = list(species)
-        if len(self.species) != self.potential.get_species_count():
-            raise ValueError(f"MTP file has {self.potential.get_species_count()} species but {len(self.species)} symbols were provided.")
         self.cutoff = self.potential.get_max_cutoff()
 
-    def _symbols_to_types(self, atoms) -> np.ndarray:
-        """Map ASE chemical symbols to 0-indexed MTP species."""
-        sym_map = {sym: idx for idx, sym in enumerate(self.species)}
-        try:
-            return np.array([sym_map[s] for s in atoms.get_chemical_symbols()], dtype=np.int32)
-        except KeyError as e:
-            raise ValueError(f"Element {e} not in species list {self.species}. Check the 'species' argument to MTPCalculator.") from e
+    def _atoms_to_types(self, atoms) -> np.ndarray:
+        """Return 0-indexed MTP type array for *atoms*.
+
+        Uses ``atoms.arrays["type_index"]`` directly when present; otherwise
+        assigns indices by order of first appearance of chemical symbols.
+        """
+        if "type_index" in atoms.arrays:
+            return np.asarray(atoms.arrays["type_index"], dtype=np.int32)
+        seen: dict[str, int] = {}
+        for sym in atoms.get_chemical_symbols():
+            if sym not in seen:
+                seen[sym] = len(seen)
+        return np.array([seen[s] for s in atoms.get_chemical_symbols()], dtype=np.int32)
 
     def _build_neighbor_list(self, atoms):
         """Return (ilist, numneigh, firstneigh_flat, displacements) as numpy arrays.
@@ -79,7 +79,7 @@ class MTPCalculator(Calculator):
         if properties is None:
             properties = self.implemented_properties
 
-        types = self._symbols_to_types(atoms)
+        types = self._atoms_to_types(atoms)
         ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
 
         compute_virials = "stress" in properties
@@ -111,7 +111,7 @@ class MTPCalculator(Calculator):
         -------
         np.ndarray, shape (n_atoms, alpha_scalar_count)
         """
-        types = self._symbols_to_types(atoms)
+        types = self._atoms_to_types(atoms)
         ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
         return np.array(self.potential.eval_basis(types, ilist, numneigh, firstneigh, displacements), dtype=np.float64)
 
@@ -132,6 +132,6 @@ class MTPCalculator(Calculator):
         np.ndarray, shape (n_atoms, coeff_count)
             coeff_count = radial_coeff_count + species_count + alpha_scalar_count
         """
-        types = self._symbols_to_types(atoms)
+        types = self._atoms_to_types(atoms)
         ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
         return np.array(self.potential.eval_grad(types, ilist, numneigh, firstneigh, displacements), dtype=np.float64)
