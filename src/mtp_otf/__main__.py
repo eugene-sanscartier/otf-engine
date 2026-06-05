@@ -3,6 +3,7 @@ import sys
 import argparse
 from .otf_mtp import main as _main
 from .launchers import NestedMPILauncher, ForkLauncher, SlurmLauncher
+from .cycles import next_cycle_dir, archive_cycle
 
 
 def _load_evaluator():
@@ -41,8 +42,8 @@ def main():
                         "For fork: accepted but ignored. "
                         "For slurm: passed as raw sbatch options "
                         "(e.g. --launcher-extra='--partition=gpu --time=01:00:00').")
-    parser.add_argument("--sequential-eval", dest="parallel_eval", action="store_false", help="Evaluate structures sequentially instead of in parallel for the slurm launcher.")
-    parser.set_defaults(parallel_eval=True)
+    parser.add_argument("--sequential-eval", dest="concurrent_eval", action="store_false", help="Evaluate structures sequentially instead of concurrently for the slurm launcher.")
+    parser.set_defaults(concurrent_eval=True)
 
     args = parser.parse_args()
 
@@ -56,20 +57,21 @@ def main():
     elif args.launcher == "fork":
         launcher = ForkLauncher(fork_args=extra_args)
     elif args.launcher == "slurm":
-        launcher = SlurmLauncher(sbatch_args=extra_args, parallel_eval=args.parallel_eval)
+        launcher = SlurmLauncher(sbatch_args=extra_args, concurrent_eval=args.concurrent_eval)
     else:
         print(f"Error: unknown launcher {args.launcher!r}", file=sys.stderr)
         sys.exit(1)
 
-    if launcher is None:
-        launcher = NestedMPILauncher()
-
     evaluator_fn = _load_evaluator()
+
+    cycle_dir = next_cycle_dir()
 
     try:
         _main(args, os.environ, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
         print(f"Error during execution: {e}", file=sys.stderr)
+
+    archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
 
     print("Exiting with return code 0.")
     sys.exit(0)

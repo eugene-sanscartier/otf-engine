@@ -9,6 +9,7 @@ import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
 from .mtp_backend import calculate_grade, select_add
+from .cycles import current_cycle_dir
 
 OTF_STATE_FILE = "otf_state.json"
 
@@ -159,7 +160,9 @@ def save_structures(set_name, cfgs):
 
 def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
     """Evaluate one structure; return evaluated Atoms or None on failure/threshold."""
-    eval_dir = f"eval_{i:03d}"
+    name = f"eval_{i:03d}"
+    cycle = current_cycle_dir()
+    eval_dir = str(cycle / name) if cycle is not None else name
     print(f"Calculating structure {i + 1}")
     try:
         result = launcher.call_evaluator(evaluator_fn, structure, eval_dir, env)
@@ -187,7 +190,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, e
     with open(training_set, mode="r") as training_file:
         training_structures = read_cfg(training_file)
 
-    if launcher.parallel_eval and len(selected_structures) > 1:
+    if launcher.concurrent_eval and len(selected_structures) > 1:
         print(f"Evaluating {len(selected_structures)} structures in parallel.")
         results = [None] * len(selected_structures)
         with concurrent.futures.ThreadPoolExecutor() as executor:
