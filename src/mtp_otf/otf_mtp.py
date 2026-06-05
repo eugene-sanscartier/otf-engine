@@ -1,6 +1,8 @@
 import concurrent.futures
 import json
 import os
+import shutil
+from pathlib import Path
 
 import numpy
 
@@ -159,10 +161,8 @@ def save_structures(set_name, cfgs):
 
 
 def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
-    """Evaluate one structure; return evaluated Atoms or None on failure/threshold."""
-    name = f"eval_{i:03d}"
     cycle = current_cycle_dir()
-    eval_dir = str(cycle / name) if cycle is not None else name
+    eval_dir = (cycle / f"eval_{i:03d}") if cycle is not None else Path(f"eval_{i:03d}")
     print(f"Calculating structure {i + 1}")
     try:
         result = launcher.call_evaluator(evaluator_fn, structure, eval_dir, env)
@@ -173,14 +173,10 @@ def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
         return result
     except Exception as e:
         print(f"Error evaluating structure {i + 1}: {e}")
-        print("Warning: Error in eval_structures")
         try:
-            espresso_err = os.path.join(eval_dir, "espresso.err")
             print("Output of espresso.err")
-            with open(espresso_err) as err_file:
-                print(err_file.read())
-            import shutil
-            shutil.rmtree(os.path.join(eval_dir, "pwscf.save"))
+            print((eval_dir / "espresso.err").read_text())
+            shutil.rmtree(eval_dir / "pwscf.save")
         except Exception as e2:
             print(f"Warning: Could not clean up Espresso artifacts: {e2}")
         return None
@@ -194,14 +190,9 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, e
         print(f"Evaluating {len(selected_structures)} structures in parallel.")
         results = [None] * len(selected_structures)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = {executor.submit(_eval_one, i, struct, evaluator_fn, launcher, env, force_threshold): i for i, struct in enumerate(selected_structures)}
+            futures = {executor.submit(_eval_one, i, s, evaluator_fn, launcher, env, force_threshold): i for i, s in enumerate(selected_structures)}
             for future in concurrent.futures.as_completed(futures):
-                i = futures[future]
-                try:
-                    results[i] = future.result()
-                except Exception as e:
-                    print(f"Error in parallel eval of structure {i + 1}: {e}")
-
+                results[futures[future]] = future.result()
         successful = [r for r in results if r is not None]
         if successful:
             training_structures += successful
@@ -209,7 +200,6 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, e
                 write_cfg(training_file, training_structures)
     else:
         for i, selected_structure in enumerate(selected_structures):
-            print(f"Calculating structure {i + 1}/{len(selected_structures)}")
             result = _eval_one(i, selected_structure, evaluator_fn, launcher, env, force_threshold)
             if result is not None:
                 training_structures += [result]

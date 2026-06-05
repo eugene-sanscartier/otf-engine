@@ -3,15 +3,9 @@ from __future__ import annotations
 
 import os
 import subprocess
-import threading
 import concurrent.futures
 from abc import ABC, abstractmethod
-
-# os.chdir is process-wide; this lock serialises chdir+call+restore sequences
-# so concurrent threads don't corrupt each other's working directory.
-# SlurmLauncher overrides call_evaluator without os.chdir, so it is unaffected
-# and truly parallel.
-_CHDIR_LOCK = threading.Lock()
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Environment utilities
@@ -113,29 +107,29 @@ class Launcher(ABC):
                         use a single process.
         """
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: str, env: dict):
-        """Evaluate *structure* via *evaluator_fn* inside *eval_dir*.
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, env: dict):
+        """Evaluate *structure* inside *eval_dir* and return the result.
 
-        The default implementation changes into *eval_dir*, calls
-        ``evaluator_fn(structure)``, and returns the result.  Override for
-        env-cleaned (fork) or remote-dispatch (slurm) behaviour.
-
-        Note: uses a process-wide lock around os.chdir to be thread-safe when
-        parallel_eval=True is used.  Evaluations are serialised for this base
-        implementation; SlurmLauncher overrides without the lock.
+        Changes into *eval_dir*, calls ``evaluator_fn(structure)``, and restores
+        cwd.  Safe because local launchers set concurrent_eval=False, so only
+        one thread calls this at a time.
         """
-        os.makedirs(eval_dir, exist_ok=True)
-        with _CHDIR_LOCK:
-            prev = os.getcwd()
-            os.chdir(eval_dir)
-            try:
-                return evaluator_fn(structure)
-            finally:
-                os.chdir(prev)
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        prev = os.getcwd()
+        os.chdir(eval_dir)
+        try:
+            return evaluator_fn(structure)
+        finally:
+            os.chdir(prev)
 
     @property
     def parallel_eval(self) -> bool:
-        """Whether eval_structures should submit evaluations in parallel."""
+        """Whether run() should use all available MPI processes (True) or 1 (False)."""
+        return True
+
+    @property
+    def concurrent_eval(self) -> bool:
+        """Whether eval_structures should submit evaluations concurrently via ThreadPoolExecutor."""
         return False
 
 
@@ -145,11 +139,16 @@ class Launcher(ABC):
 
 
 class NestedMPILauncher(Launcher):
-    """Wrap mlp calls with ``mpirun``.  Matches existing behaviour exactly."""
+    """Wrap mlp calls with ``mpirun -n <nprocs>``."""
 
-    def __init__(self, mpirun_executable: str = "mpirun", mpirun_args: str = ""):
+    def __init__(self, mpirun_executable: str = "mpirun", mpirun_args: str = "", parallel_eval: bool = True):
         self.mpirun_executable = mpirun_executable
         self.mpirun_args = mpirun_args
+        self._parallel_eval = parallel_eval
+
+    @property
+    def parallel_eval(self) -> bool:
+        return self._parallel_eval
 
     def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
         n_procs = _default_n_procs() if parallel_eval else 1
@@ -177,8 +176,13 @@ class ForkLauncher(Launcher):
     when available, otherwise from ``os.cpu_count()``.
     """
 
-    def __init__(self, fork_args: str = ""):
+    def __init__(self, fork_args: str = "", parallel_eval: bool = True):
         self.fork_args = fork_args
+        self._parallel_eval = parallel_eval
+
+    @property
+    def parallel_eval(self) -> bool:
+        return self._parallel_eval
 
     def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
         n_procs = _default_n_procs() if parallel_eval else 1
@@ -197,29 +201,23 @@ class ForkLauncher(Launcher):
                 if ret != 0:
                     raise subprocess.CalledProcessError(ret, command)
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: str, env: dict):
-        """Run evaluator in *eval_dir* with MPI env rebuilt for a fresh universe.
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, env: dict):
+        """Run evaluator in *eval_dir* with a fresh MPI universe environment.
 
-        The evaluator's profile command should be set to just the binary
-        (e.g. ``'pw.x'``), not ``'mpiexec -n N pw.x'``.  The evaluator uses
-        all available processors in a fresh MPI universe.
-
-        Note: uses a process-wide lock around os.chdir, so evaluations are
-        serialised here.  Only SlurmLauncher achieves true parallelism.
+        Serialised (concurrent_eval=False), so os.chdir + os.environ mutation is safe.
         """
-        os.makedirs(eval_dir, exist_ok=True)
-        with _CHDIR_LOCK:
-            prev = os.getcwd()
-            os.chdir(eval_dir)
-            saved = dict(os.environ)
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        prev = os.getcwd()
+        os.chdir(eval_dir)
+        saved = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(_env_for_fork(_default_n_procs(), env))
+        try:
+            return evaluator_fn(structure)
+        finally:
+            os.chdir(prev)
             os.environ.clear()
-            os.environ.update(_env_for_fork(_default_n_procs(), env))
-            try:
-                return evaluator_fn(structure)
-            finally:
-                os.chdir(prev)
-                os.environ.clear()
-                os.environ.update(saved)
+            os.environ.update(saved)
 
 
 # ---------------------------------------------------------------------------
@@ -241,11 +239,11 @@ class BatchSubmitLauncher(Launcher, ABC):
     """
 
     @abstractmethod
-    def _build_submit_cmd(self, cmd: str, log_path: str, parallel_eval: bool) -> str:
+    def _build_submit_cmd(self, cmd: str, log_path: str) -> str:
         """Return the full shell command that submits *cmd* and waits."""
 
-    def run(self, command: str, log_path: str, env: dict, parallel_eval: bool = True) -> None:
-        submit_cmd = self._build_submit_cmd(command, log_path, parallel_eval)
+    def run(self, command: str, log_path: str, env: dict, _parallel_eval: bool = True) -> None:
+        submit_cmd = self._build_submit_cmd(command, log_path)
         print(f"running: {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=env, check=True)
 
@@ -262,58 +260,54 @@ class SlurmLauncher(BatchSubmitLauncher):
     it finishes (``--wait``).  The command is passed inline via ``--wrap``
     (requires Slurm ≥ 2.6), avoiding temp script files.
 
-    Structure evaluations are submitted in parallel by default
-    (``parallel_eval=True``): all sbatch jobs are submitted simultaneously
-    from separate threads, each blocking on ``--wait``.
+    Structure evaluations are submitted concurrently by default
+    (``concurrent_eval=True``): all sbatch jobs are submitted simultaneously
+    from separate threads, each blocking on ``--wait``.  MPI parallelism is
+    controlled by the job's resource allocation via ``sbatch_args``.
 
     Parameters
     ----------
     sbatch_executable: Path to sbatch binary (default: ``"sbatch"``).
-    sbatch_args:       Extra sbatch options, e.g.
-                       ``["--partition=gpu", "--time=01:00:00"]``.
-    parallel_eval:     Submit structure evaluations concurrently (default: True).
+    sbatch_args:       Extra sbatch options as a single shell string, e.g.
+                       ``"--partition=gpu --time=01:00:00"``.
+    concurrent_eval:   Submit structure evaluations concurrently (default: True).
     """
 
-    def __init__(self, sbatch_executable: str = "sbatch", sbatch_args: str = "", parallel_eval: bool = True):
+    def __init__(self, sbatch_executable: str = "sbatch", sbatch_args: str = "", concurrent_eval: bool = True):
         self.sbatch_executable = sbatch_executable
         self.sbatch_args = sbatch_args
-        self._parallel_eval = parallel_eval
+        self._concurrent_eval = concurrent_eval
 
     @property
-    def parallel_eval(self) -> bool:
-        return self._parallel_eval
+    def concurrent_eval(self) -> bool:
+        return self._concurrent_eval
 
-    def _build_submit_cmd(self, cmd: str, log_path: str, _parallel_eval: bool) -> str:
+    def _build_submit_cmd(self, cmd: str, log_path: str) -> str:
         abs_log = os.path.abspath(log_path)
         cwd = os.getcwd()
         extra = self.sbatch_args
         extra_part = f"{extra} " if extra else ""
         return f"{self.sbatch_executable} --wait --chdir={cwd} --output={abs_log} --open-mode=append {extra_part}--wrap=\"{cmd}\""
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: str, env: dict):
-        """Submit the evaluator as a Slurm batch job.
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, env: dict):
+        """Submit the evaluator as a Slurm batch job and return the result.
 
-        Writes the input structure to *eval_dir*, generates a small Python
-        wrapper that imports ``evaluator.py`` from the original working
-        directory, runs it, and writes the result.  Submits via
-        ``sbatch --wait`` and reads the result back when done.
-
-        Note: *evaluator_fn* is used only to check for custom imports; the
-        actual code dispatched to the batch job always loads ``evaluator.py``
-        from the calling working directory.  For programmatic use with a
-        non-file evaluator, use ``NestedMPILauncher`` or ``ForkLauncher``.
+        Writes the input structure to *eval_dir*, generates a Python wrapper
+        that loads ``evaluator.py`` from the original working directory, submits
+        it via ``sbatch --wait``, and reads the result back.  Always uses
+        absolute paths — no os.chdir needed.
         """
         import ase.io
 
-        os.makedirs(eval_dir, exist_ok=True)
-        eval_dir_abs = os.path.abspath(eval_dir)
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        eval_dir_abs = eval_dir.resolve()
         orig_dir = os.getcwd()
         evaluator_py = os.path.join(orig_dir, "evaluator.py")
 
-        input_path = os.path.join(eval_dir_abs, "input_structure.traj")
-        output_path = os.path.join(eval_dir_abs, "output_structure.traj")
-        eval_log = os.path.join(eval_dir_abs, "eval.log")
-        wrapper_path = os.path.join(eval_dir_abs, "_run_eval.py")
+        input_path = str(eval_dir_abs / "input_structure.traj")
+        output_path = str(eval_dir_abs / "output_structure.traj")
+        eval_log = str(eval_dir_abs / "eval.log")
+        wrapper_path = str(eval_dir_abs / "_run_eval.py")
 
         ase.io.write(input_path, structure)
 
@@ -327,8 +321,7 @@ class SlurmLauncher(BatchSubmitLauncher):
         with open(wrapper_path, "w") as wf:
             wf.write(wrapper)
 
-        extra = self.sbatch_args
-        extra_part = f"{extra} " if extra else ""
+        extra_part = f"{self.sbatch_args} " if self.sbatch_args else ""
         sbatch_cmd = f"{self.sbatch_executable} --wait --chdir={eval_dir_abs} --output={eval_log} --open-mode=append {extra_part}--wrap=\"python {wrapper_path}\""
         print(f"running (eval): {sbatch_cmd}")
         subprocess.run(sbatch_cmd, shell=True, env=env, check=True)
