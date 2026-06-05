@@ -1,0 +1,137 @@
+"""
+ASE Calculator wrapping MTPPotential.
+
+Usage
+-----
+from ase.build import bulk
+from mtp import MTPCalculator
+
+atoms = bulk("Si", cubic=True)
+calc  = MTPCalculator("path/to/SiO.mtp", species=["Si", "O"])
+atoms.calc = calc
+print(atoms.get_potential_energy())
+print(atoms.get_forces())
+"""
+
+import numpy as np
+from ase.calculators.calculator import Calculator, all_changes
+from ase.neighborlist import neighbor_list
+
+from ._mtp import MTPPotential
+
+
+class MTPCalculator(Calculator):
+    """ASE Calculator for the Moment Tensor Potential.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the .mtp potential file (version 1.1.0).
+    species : list of str
+        Element symbols ordered by MTP species index.
+        Example: ``["Si", "O"]`` means Si → 0, O → 1.
+    """
+
+    implemented_properties = ["energy", "forces", "stress"]
+
+    def __init__(self, filename: str, species: list[str], **kwargs):
+        super().__init__(**kwargs)
+        self.potential = MTPPotential(filename)
+        self.species = list(species)
+        if len(self.species) != self.potential.get_species_count():
+            raise ValueError(f"MTP file has {self.potential.get_species_count()} species but {len(self.species)} symbols were provided.")
+        self.cutoff = self.potential.get_max_cutoff()
+
+    def _symbols_to_types(self, atoms) -> np.ndarray:
+        """Map ASE chemical symbols to 0-indexed MTP species."""
+        sym_map = {sym: idx for idx, sym in enumerate(self.species)}
+        try:
+            return np.array([sym_map[s] for s in atoms.get_chemical_symbols()], dtype=np.int32)
+        except KeyError as e:
+            raise ValueError(f"Element {e} not in species list {self.species}. Check the 'species' argument to MTPCalculator.") from e
+
+    def _build_neighbor_list(self, atoms):
+        """Return (ilist, numneigh, firstneigh_flat, displacements) as numpy arrays.
+
+        Uses ASE's neighbor_list with query ``"ijD"`` to obtain PBC-corrected
+        displacement vectors ``D = r_j - r_i + S @ cell``.  Every pair is
+        listed in both directions — equivalent to LAMMPS REQ_FULL.
+        """
+        i_arr, j_arr, D_arr = neighbor_list("ijD", atoms, self.cutoff)
+
+        n_atoms = len(atoms)
+        ilist = np.arange(n_atoms, dtype=np.int32)
+        numneigh = np.bincount(i_arr, minlength=n_atoms).astype(np.int32)
+
+        # Sort so neighbor blocks are contiguous for each central atom
+        order = np.argsort(i_arr, kind="stable")
+        firstneigh = j_arr[order].astype(np.int32)
+        displacements = np.ascontiguousarray(D_arr[order], dtype=np.float64)
+
+        return ilist, numneigh, firstneigh, displacements
+
+    def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+        super().calculate(atoms, properties, system_changes)
+
+        # if atoms is None:
+        #     raise ValueError("MTPCalculator.calculate() requires an ASE Atoms object")
+
+        if properties is None:
+            properties = self.implemented_properties
+
+        types = self._symbols_to_types(atoms)
+        ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
+
+        compute_virials = "stress" in properties
+        result = self.potential.compute(types, ilist, numneigh, firstneigh, displacements, compute_virials=compute_virials, compute_eatom=False)
+
+        self.results["energy"] = float(result["energy"])
+        self.results["forces"] = np.array(result["forces"], dtype=np.float64)
+
+        if compute_virials:
+            vol = atoms.get_volume()
+            # ASE stress convention: Voigt order (xx,yy,zz,yz,xz,xy), positive = tensile
+            # Our virials are (xx,yy,zz,xy,xz,yz), sign: virial = -stress * vol
+            v = result["virials"]
+            self.results["stress"] = np.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]], dtype=np.float64) / vol
+
+    def get_basis_values(self, atoms) -> np.ndarray:
+        """Evaluate MTP basis functions for each atom.
+
+        Returns an array of shape ``(n_atoms, alpha_scalar_count)`` where row
+        ``i`` contains the scalar moment tensor values for that atom's
+        neighbourhood.  Dot-product with ``get_linear_coeffs()`` gives the
+        per-atom energy contributions (after adding ``species_coeffs``).
+
+        Parameters
+        ----------
+        atoms : ase.Atoms
+
+        Returns
+        -------
+        np.ndarray, shape (n_atoms, alpha_scalar_count)
+        """
+        types = self._symbols_to_types(atoms)
+        ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
+        return np.array(self.potential.eval_basis(types, ilist, numneigh, firstneigh, displacements), dtype=np.float64)
+
+    def eval_grad(self, atoms) -> np.ndarray:
+        """Per-atom information vector for extrapolation grade computation.
+
+        Returns an array of shape ``(n_atoms, coeff_count)`` where each row is
+        the gradient of the site energy w.r.t. all MTP coefficients:
+        ``[radial_grads | species_one_hot | basis_values]``.
+        Used with the MaxVol invA matrix to compute extrapolation grades.
+
+        Parameters
+        ----------
+        atoms : ase.Atoms
+
+        Returns
+        -------
+        np.ndarray, shape (n_atoms, coeff_count)
+            coeff_count = radial_coeff_count + species_count + alpha_scalar_count
+        """
+        types = self._symbols_to_types(atoms)
+        ilist, numneigh, firstneigh, displacements = self._build_neighbor_list(atoms)
+        return np.array(self.potential.eval_grad(types, ilist, numneigh, firstneigh, displacements), dtype=np.float64)
