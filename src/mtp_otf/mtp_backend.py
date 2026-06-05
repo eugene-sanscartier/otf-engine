@@ -314,7 +314,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     active = {int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0}
     selected = [atoms for i, atoms in enumerate(candidate_structs) if i in active]
 
-    return selected, weights, mv.A, mv.invA
+    return selected, (weights, mv.A, mv.invA)
 
 
 # ---------------------------------------------------------------------------

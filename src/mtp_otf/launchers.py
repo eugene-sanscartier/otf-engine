@@ -13,7 +13,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 # Variables that prevent nested mpirun from working (parent's MPI job leaks in).
-# These three are the set currently removed by __main__.py and are known to work.
+# These three are the set is known to work on a coumpute canada cluster with OpenMPI.
 _MPIRUN_DELETE_VARS = frozenset({
     "OMPI_MCA_ess",
     "OMPI_MCA_ess_base_jobid",
@@ -43,7 +43,7 @@ _FORK_REMOVE_VARS = frozenset({
 })
 
 
-def _env_for_mpirun(env: dict) -> dict:
+def _env_for_nested(env: dict) -> dict:
     """Return env with nested-mpirun-breaking variables removed."""
     return {k: v for k, v in env.items() if k not in _MPIRUN_DELETE_VARS}
 
@@ -62,16 +62,19 @@ def _env_for_fork(size: int, env: dict) -> dict:
     return base
 
 
+def _physical_cpu_count() -> int:
+    import psutil
+    return psutil.cpu_count(logical=False) or os.cpu_count() or 1
+
+
 def _default_n_procs() -> int:
-    """Best-effort process count: Slurm allocation first, then cpu_count."""
+    """Best-effort process count: Slurm allocation first, then physical CPU cores."""
     for var in ("SLURM_NTASKS", "SLURM_NPROCS"):
         val = os.environ.get(var)
         if val:
-            try:
-                return int(val)
-            except ValueError:
-                pass
-    return os.cpu_count() or 1
+            try: return int(val)
+            except ValueError: pass
+    return _physical_cpu_count()
 
 
 def _run_cmd(cmd: str, log_path: str, env: dict) -> None:
@@ -156,7 +159,22 @@ class NestedMPILauncher(Launcher):
         n_part = f"-n {n_procs} "
         extra = f"{self.mpirun_args} " if self.mpirun_args else ""
         cmd = f"{self.mpirun_executable} {n_part}{extra}{command}"
-        _run_cmd(cmd, log_path, _env_for_mpirun(env))
+        _run_cmd(cmd, log_path, _env_for_nested(env))
+
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, env: dict):
+        """Run evaluator in *eval_dir* with nested-mpirun-breaking vars removed from os.environ."""
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        prev = os.getcwd()
+        os.chdir(eval_dir)
+        saved = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(_env_for_nested(env))
+        try:
+            return evaluator_fn(structure)
+        finally:
+            os.chdir(prev)
+            os.environ.clear()
+            os.environ.update(saved)
 
 
 # ---------------------------------------------------------------------------
