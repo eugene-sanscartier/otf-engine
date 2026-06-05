@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import subprocess
 import threading
 import concurrent.futures
@@ -148,14 +147,13 @@ class Launcher(ABC):
 class NestedMPILauncher(Launcher):
     """Wrap mlp calls with ``mpirun``.  Matches existing behaviour exactly."""
 
-    def __init__(self, mpirun_executable: str = "mpirun", mpirun_args: list[str] | None = None):
+    def __init__(self, mpirun_executable: str = "mpirun", mpirun_args: str = ""):
         self.mpirun_executable = mpirun_executable
-        self.mpirun_args = mpirun_args or []
+        self.mpirun_args = mpirun_args
 
     def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
         n_part = f"-n {n_procs} " if n_procs is not None else ""
-        extra = " ".join(shlex.quote(a) for a in self.mpirun_args)
-        extra = f"{extra} " if extra else ""
+        extra = f"{self.mpirun_args} " if self.mpirun_args else ""
         cmd = f"{self.mpirun_executable} {n_part}{extra}{command}"
         _run_cmd(cmd, log_path, _env_for_mpirun(env))
 
@@ -178,26 +176,26 @@ class ForkLauncher(Launcher):
     when available, otherwise from ``os.cpu_count()``.
     """
 
-    def __init__(self, fork_args: list[str] | None = None):
-        self.fork_args = fork_args or []
+    def __init__(self, fork_args: str = ""):
+        self.fork_args = fork_args
 
     def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
         if n_procs is None:
             n_procs = _default_n_procs()
         child_env = _env_for_fork(n_procs, env)
-        parts = shlex.split(command)
-        binary, args = parts[0], parts[1:]
         with open(log_path, "a") as log_f:
             procs = [subprocess.Popen(
-                [binary] + args,
+                command,
+                shell=True,
                 env=child_env,
+                text=True,
                 stdout=log_f,
                 stderr=subprocess.STDOUT,
             ) for _ in range(n_procs)]
             for p in procs:
                 ret = p.wait()
                 if ret != 0:
-                    raise subprocess.CalledProcessError(ret, binary)
+                    raise subprocess.CalledProcessError(ret, command)
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: str, env: dict):
         """Run evaluator in *eval_dir* with MPI env rebuilt for a fresh universe.
@@ -276,9 +274,9 @@ class SlurmLauncher(BatchSubmitLauncher):
     parallel_eval:     Submit structure evaluations concurrently (default: True).
     """
 
-    def __init__(self, sbatch_executable: str = "sbatch", sbatch_args: list[str] | None = None, parallel_eval: bool = True):
+    def __init__(self, sbatch_executable: str = "sbatch", sbatch_args: str = "", parallel_eval: bool = True):
         self.sbatch_executable = sbatch_executable
-        self.sbatch_args = sbatch_args or []
+        self.sbatch_args = sbatch_args
         self._parallel_eval = parallel_eval
 
     @property
@@ -288,13 +286,9 @@ class SlurmLauncher(BatchSubmitLauncher):
     def _build_submit_cmd(self, cmd: str, log_path: str, _n_procs: int | None) -> str:
         abs_log = os.path.abspath(log_path)
         cwd = os.getcwd()
-        extra = " ".join(shlex.quote(a) for a in self.sbatch_args)
+        extra = self.sbatch_args
         extra_part = f"{extra} " if extra else ""
-        return (f"{self.sbatch_executable} --wait "
-                f"--chdir={shlex.quote(cwd)} "
-                f"--output={shlex.quote(abs_log)} --open-mode=append "
-                f"{extra_part}"
-                f"--wrap={shlex.quote(cmd)}")
+        return f"{self.sbatch_executable} --wait --chdir={cwd} --output={abs_log} --open-mode=append {extra_part}--wrap=\"{cmd}\""
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: str, env: dict):
         """Submit the evaluator as a Slurm batch job.
@@ -333,13 +327,9 @@ class SlurmLauncher(BatchSubmitLauncher):
         with open(wrapper_path, "w") as wf:
             wf.write(wrapper)
 
-        extra = " ".join(shlex.quote(a) for a in self.sbatch_args)
+        extra = self.sbatch_args
         extra_part = f"{extra} " if extra else ""
-        sbatch_cmd = (f"{self.sbatch_executable} --wait "
-                      f"--chdir={shlex.quote(eval_dir_abs)} "
-                      f"--output={shlex.quote(eval_log)} --open-mode=append "
-                      f"{extra_part}"
-                      f"--wrap={shlex.quote(f'python {wrapper_path}')}")
+        sbatch_cmd = f"{self.sbatch_executable} --wait --chdir={eval_dir_abs} --output={eval_log} --open-mode=append {extra_part}--wrap=\"python {wrapper_path}\""
         print(f"running (eval): {sbatch_cmd}")
         subprocess.run(sbatch_cmd, shell=True, env=env, check=True)
 

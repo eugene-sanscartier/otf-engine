@@ -35,12 +35,12 @@ def main():
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "
                         "'slurm': submit each call as a batch job via sbatch --wait.")
-    parser.add_argument("--launcher-extra", nargs="*", default=None, metavar="ARG", help="Extra arguments for the launcher. "
-                        "For nested: passed verbatim between -n and the mlp binary "
-                        "(e.g. --launcher-extra --oversubscribe). "
+    parser.add_argument("--launcher-extra", default="", type=str, metavar="ARGS", help="Extra launcher arguments as one shell string. "
+                        "For nested: inserted between -n and the mlp binary "
+                        "(e.g. --launcher-extra='--oversubscribe'). "
                         "For fork: accepted but ignored. "
-                        "For slurm: passed as sbatch options "
-                        "(e.g. --launcher-extra --partition=gpu --time=01:00:00).")
+                        "For slurm: passed as raw sbatch options "
+                        "(e.g. --launcher-extra='--partition=gpu --time=01:00:00').")
     parser.add_argument("--sequential-eval", dest="parallel_eval", action="store_false", help="Evaluate structures sequentially instead of in parallel for the slurm launcher.")
     parser.set_defaults(parallel_eval=True)
 
@@ -50,7 +50,7 @@ def main():
     if not mlp_command:
         raise RuntimeError("mlp_command not provided and OTF_MTP_COMMAND environment variable is not set. Pass mlp_command= or set: export OTF_MTP_COMMAND=/path/to/mlp")
 
-    extra_args = list(args.launcher_extra) if args.launcher_extra else []
+    extra_args = args.launcher_extra
     if args.launcher == "nested":
         launcher = NestedMPILauncher(mpirun_args=extra_args)
     elif args.launcher == "fork":
