@@ -12,7 +12,7 @@ import numpy as np
 
 from ._mtp import MTPPotential, MTPCalculator, write_mtp
 from .almtp_io import MVSState, read_mvs_state, write_mvs_state
-from .maxvol import MaxVol
+from .maxvol import MaxVol, Rows
 
 # ---------------------------------------------------------------------------
 # Helper: ASE Atoms → design-matrix entry dict
@@ -46,47 +46,33 @@ def _atoms_to_entry(atoms, calc: MTPCalculator) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Helper: neighbor-list-only entry (no DFT data needed)
-# ---------------------------------------------------------------------------
-
-
-def _atoms_to_nl_entry(atoms, calc: MTPCalculator) -> dict:
-    """Build minimal entry dict for grade/selection (no DFT data required)."""
-    types = calc._atoms_to_types(atoms)
-    ilist, numneigh, firstneigh, displacements = calc._build_neighbor_list(atoms)
-    return {
-        "types": types,
-        "ilist": ilist,
-        "numneigh": numneigh,
-        "firstneigh": firstneigh,
-        "displacements": displacements,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Helper: MaxVol information rows for one structure
 # ---------------------------------------------------------------------------
 
 _NL_ARGS = ("types", "ilist", "numneigh", "firstneigh", "displacements")
 _DEFAULT_SELECTION_WEIGHTS = {
-    "cfg": {"energy_weight": 1.0, "force_weight": 0.0, "stress_weight": 0.0, "site_en_weight": 0.0, "weight_scaling": 2},
-    "nbh": {"energy_weight": 0.0, "force_weight": 0.0, "stress_weight": 0.0, "site_en_weight": 1.0, "weight_scaling": 2},
+    "cfg": {
+        "energy_weight": 1.0,
+        "force_weight": 0.0,
+        "stress_weight": 0.0,
+        "site_en_weight": 0.0,
+        "weight_scaling": 2
+    },
+    "nbh": {
+        "energy_weight": 0.0,
+        "force_weight": 0.0,
+        "stress_weight": 0.0,
+        "site_en_weight": 1.0,
+        "weight_scaling": 2
+    },
 }
+_POOL_SAVED = 0
+_POOL_TRAIN = 1
+_POOL_CAND = 2
 
 
-def _cfg_key(atoms) -> tuple:
-    types = atoms.arrays.get("type_index")
-    if types is None:
-        types = atoms.numbers
-    return (
-        tuple(np.asarray(types, dtype=np.int32)),
-        tuple(np.round(atoms.cell.array.reshape(-1), 12)),
-        tuple(np.round(atoms.positions.reshape(-1), 12)),
-    )
-
-
-def _build_info_rows(pot: MTPPotential, entry: dict, weights: dict) -> np.ndarray:
-    """Construct the MaxVol information matrix rows for one structure.
+def _info_rows(pot: MTPPotential, atoms, calc: MTPCalculator, weights: dict) -> Rows:
+    """Construct the MaxVol information rows and mlip equation indices.
 
     Mirrors mlip-3 cfg_selection.cpp::PrepareMatrix(), including its row
     ordering and weighting quirks:
@@ -100,12 +86,22 @@ def _build_info_rows(pot: MTPPotential, entry: dict, weights: dict) -> np.ndarra
     Parameters
     ----------
     pot     : MTPPotential — holds current coefficients
-    entry   : output of _atoms_to_nl_entry (neighbor list only)
+    atoms   : ASE atoms object
+    calc    : calculator used to build the neighbor list
     weights : dict with energy_weight, force_weight, stress_weight,
               site_en_weight, weight_scaling
     """
+    types = calc._atoms_to_types(atoms)
+    ilist, numneigh, firstneigh, displacements = calc._build_neighbor_list(atoms)
+    entry = {
+        "types": types,
+        "ilist": ilist,
+        "numneigh": numneigh,
+        "firstneigh": firstneigh,
+        "displacements": displacements,
+    }
     nl_args = tuple(entry[k] for k in _NL_ARGS)
-    n = len(entry["types"])
+    n = len(types)
     cc = pot.get_coeff_count()
 
     site_en_w = float(weights.get("site_en_weight", 1.0))
@@ -119,6 +115,7 @@ def _build_info_rows(pot: MTPPotential, entry: dict, weights: dict) -> np.ndarra
     need_vg = stress_w != 0.0
 
     rows = []
+    eqn_indices = []
     eg_all = fg_all = vg_all = None  # computed lazily
 
     def _ensure_grad_all():
@@ -134,12 +131,15 @@ def _build_info_rows(pot: MTPPotential, entry: dict, weights: dict) -> np.ndarra
     if energy_w and not need_force and not need_vg:
         _ensure_grad_all()
         rows.append(eg_all.sum(axis=0, keepdims=True) * (energy_w / scale))
+        eqn_indices.append(np.array([0], dtype=np.intp))
     elif energy_w or need_force or need_vg:
         _ensure_grad_all()
         if energy_w:
             rows.append(eg_all.sum(axis=0, keepdims=True))
+            eqn_indices.append(np.array([0], dtype=np.intp))
         if need_force:
             rows.append(fg_all.reshape(n * 3, cc) * force_w)
+            eqn_indices.append(np.arange(1, 1 + 3 * n, dtype=np.intp))
         if need_vg:
             # mlip-3 stores the full 3x3 stress block (9 rows), not Voigt-6.
             vg_full = np.stack([
@@ -154,68 +154,36 @@ def _build_info_rows(pot: MTPPotential, entry: dict, weights: dict) -> np.ndarra
                 vg_all[2],
             ])
             rows.append(vg_full * (stress_w / scale))
+            eqn_indices.append(np.arange(1 + 3 * n, 1 + 3 * n + 9, dtype=np.intp))
 
     # ---- site-energy rows --------------------------------------------------
     if site_en_w:
         _ensure_grad_all()
         rows.append(eg_all)
+        eqn_indices.append(np.arange(1 + 3 * n + 9, 1 + 3 * n + 9 + n, dtype=np.intp))
 
-    return np.vstack(rows) if rows else np.empty((0, cc))
-
-
-def _build_info_row_eqn_indices(entry: dict, weights: dict) -> np.ndarray:
-    """Return mlip-3 equation indices for the rows built by `_build_info_rows`."""
-    n = len(entry["types"])
-    site_en_w = float(weights.get("site_en_weight", 1.0))
-    energy_w = float(weights.get("energy_weight", 0.0))
-    force_w = float(weights.get("force_weight", 0.0))
-    stress_w = float(weights.get("stress_weight", 0.0))
-
-    indices = []
-    if energy_w and force_w == 0.0 and stress_w == 0.0:
-        indices.append(np.array([0], dtype=np.intp))
-    elif energy_w or force_w or stress_w:
-        if energy_w:
-            indices.append(np.array([0], dtype=np.intp))
-        if force_w:
-            indices.append(np.arange(1, 1 + 3 * n, dtype=np.intp))
-        if stress_w:
-            indices.append(np.arange(1 + 3 * n, 1 + 3 * n + 9, dtype=np.intp))
-
-    if site_en_w:
-        indices.append(np.arange(1 + 3 * n + 9, 1 + 3 * n + 9 + n, dtype=np.intp))
-
-    return np.concatenate(indices) if indices else np.empty(0, dtype=np.intp)
+    return Rows(rows=np.vstack(rows) if rows else np.empty((0, cc)), eqn_indices=np.concatenate(eqn_indices) if eqn_indices else np.empty(0, dtype=np.intp))
 
 
-def _resolve_saved_active_rows(state: MVSState, training_structs: list, candidate_structs: list) -> tuple[np.ndarray, np.ndarray]:
-    label_by_sig = {}
-    for i, atoms in enumerate(training_structs):
-        label_by_sig[_cfg_key(atoms)] = i
-    for i, atoms in enumerate(candidate_structs):
-        label_by_sig[_cfg_key(atoms)] = i + len(training_structs)
-
-    selected_labels = np.array([label_by_sig.get(_cfg_key(atoms), -i - 2) for i, atoms in enumerate(state.selected_cfgs)], dtype=np.intp)
-    active_labels = np.array(
-        [selected_labels[idx] if 0 <= idx < len(selected_labels) else -1 for idx in state.active_cfg_indices],
-        dtype=np.intp,
-    )
-    return active_labels, np.asarray(state.active_eqn_indices, dtype=np.intp)
-
-
-def _build_saved_mvs_state(weights: dict, mv: MaxVol, structs: list) -> MVSState:
-    selected_labels = sorted({int(label) for label in mv.active_labels if 0 <= int(label) < len(structs)})
+def _build_saved_mvs_state(weights: dict, mv: MaxVol, structs: list, pool_id: int) -> MVSState:
+    selected_labels = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == pool_id and 0 <= int(struct_index) < len(structs)})
     selected_cfgs = []
     for label in selected_labels:
         atoms = structs[label].copy()
         atoms.calc = structs[label].calc
-        eqn_indices = sorted({int(eqn_index) for active_label, eqn_index in zip(mv.active_labels, mv.active_eqn_indices, strict=True) if int(active_label) == label and int(eqn_index) >= 0})
+        eqn_indices = sorted({int(eqn_index)
+                              for active_pool_id, struct_index, eqn_index in zip(
+                                  mv.active_pool_ids,
+                                  mv.active_struct_indices,
+                                  mv.active_eqn_indices,
+                                  strict=True,
+                              ) if int(active_pool_id) == pool_id and int(struct_index) == label and int(eqn_index) >= 0})
         if eqn_indices:
             atoms.info.setdefault("features", {})["selected_eqn_inds"] = ",".join(str(eqn_index) for eqn_index in eqn_indices)
         selected_cfgs.append(atoms)
 
     cfg_index_of_label = {label: i for i, label in enumerate(selected_labels)}
-    active_cfg_indices = np.array([cfg_index_of_label.get(int(label), -1) for label in mv.active_labels], dtype=np.intp)
+    active_cfg_indices = np.array([cfg_index_of_label.get(int(struct_index), -1) if int(active_pool_id) == pool_id else -1 for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True)], dtype=np.intp)
     return MVSState(weights=weights, A=mv.A, invA=mv.invA, active_cfg_indices=active_cfg_indices, active_eqn_indices=np.asarray(mv.active_eqn_indices, dtype=np.intp), selected_cfgs=selected_cfgs)
 
 
@@ -260,15 +228,14 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     mv = MaxVol.from_arrays(state.A, state.invA)
 
     for atoms in structures:
-        entry = _atoms_to_nl_entry(atoms, calc)
-        rows = _build_info_rows(pot, entry, weights)  # (n_rows, coeff_count)
+        rows = _info_rows(pot, atoms, calc, weights).rows
 
         scores = np.abs(rows @ mv.invA.T)  # (n_rows, n)
         cfg_grade = float(scores.max())
 
         # Per-atom grades come from neighborhood rows, which mlip-3 appends last.
         site_en_w = float(weights.get("site_en_weight", 1.0))
-        n_atoms = len(entry["types"])
+        n_atoms = len(atoms)
         if site_en_w and len(rows) >= n_atoms:
             per_atom = scores[-n_atoms:].max(axis=1)
             cfg_grade = float(per_atom.max())
@@ -325,38 +292,26 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     if state is not None:
         if weights is None:
             weights = state.weights
-        active_labels, active_eqn_indices = _resolve_saved_active_rows(state, training_structs, candidate_structs)
         mv = MaxVol.from_arrays(state.A, state.invA, threshold=threshold)
-        mv.active_labels = active_labels
-        mv.active_eqn_indices = active_eqn_indices
+        mv.restore_active(state.active_cfg_indices, state.active_eqn_indices, _POOL_SAVED)
     else:
         if weights is None:
             weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
         mv = MaxVol(n, threshold=threshold)
 
-    def _rows(atoms):
-        return _build_info_rows(pot, _atoms_to_nl_entry(atoms, calc), weights)
-
-    def _eqn_indices(atoms):
-        return _build_info_row_eqn_indices(_atoms_to_nl_entry(atoms, calc), weights)
-
-    train_rows = [(_rows(a), a) for a in training_structs]
-    cand_rows = [(_rows(a), a) for a in candidate_structs]
-    train_eqn_indices = [_eqn_indices(a) for a in training_structs]
-    cand_eqn_indices = [_eqn_indices(a) for a in candidate_structs]
-    train_labels = np.arange(len(training_structs), dtype=np.intp)
-    cand_labels = np.arange(len(candidate_structs), dtype=np.intp) + len(training_structs)
+    train_rows = [_info_rows(pot, atoms, calc, weights) for atoms in training_structs]
+    cand_rows = [_info_rows(pot, atoms, calc, weights) for atoms in candidate_structs]
 
     # This three-pass sequence matches mlip-3 select_add and must stay ordered:
     # training rebuild at 1.001, candidate selection at threshold, training pass again.
     mv.threshold = 1.001
-    mv.select_candidates(train_rows, labels=train_labels, eqn_indices_per_struct=train_eqn_indices)
+    mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
     mv.threshold = threshold
-    mv.select_candidates(cand_rows, labels=cand_labels, eqn_indices_per_struct=cand_eqn_indices)
-    mv.select_candidates(train_rows, labels=train_labels, eqn_indices_per_struct=train_eqn_indices)
+    mv.select_candidates(cand_rows, pool_id=_POOL_CAND)
+    mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
 
-    active = set(int(x) for x in mv.active_labels if x >= len(training_structs))
-    selected = [atoms for i, atoms in enumerate(candidate_structs) if (i + len(training_structs)) in active]
+    active = {int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0}
+    selected = [atoms for i, atoms in enumerate(candidate_structs) if i in active]
 
     return selected, weights, mv.A, mv.invA
 
@@ -457,8 +412,6 @@ def train(potential, training_structs: list, save_to: str, iteration_limit: int 
         sel_weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
 
     mv = MaxVol(n, threshold=1.001)
-    train_entries = [_atoms_to_nl_entry(atoms, calc_new) for atoms in training_structs]
-    train_rows = [(_build_info_rows(calc_new.potential, entry, sel_weights), atoms) for entry, atoms in zip(train_entries, training_structs, strict=True)]
-    train_eqn_indices = [_build_info_row_eqn_indices(entry, sel_weights) for entry in train_entries]
-    mv.select_candidates(train_rows, eqn_indices_per_struct=train_eqn_indices)
-    write_mvs_state(save_to, _build_saved_mvs_state(sel_weights, mv, training_structs))
+    train_rows = [_info_rows(calc_new.potential, atoms, calc_new, sel_weights) for atoms in training_structs]
+    mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
+    write_mvs_state(save_to, _build_saved_mvs_state(sel_weights, mv, training_structs, _POOL_TRAIN))
