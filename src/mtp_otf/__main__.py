@@ -35,20 +35,13 @@ def main():
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "
                         "'slurm': submit each call as a batch job via sbatch --wait.")
-    parser.add_argument("--train-n-procs", default=None, type=int, metavar="N", help="Number of MPI processes for the train step. "
-                        "Default: None (use all available, i.e. omit -n from mpirun). "
-                        "Only used by nested (mpirun) and slurm launchers.")
     parser.add_argument("--launcher-extra", nargs="*", default=None, metavar="ARG", help="Extra arguments for the launcher. "
                         "For nested: passed verbatim between -n and the mlp binary "
                         "(e.g. --launcher-extra --oversubscribe). "
+                        "For fork: accepted but ignored. "
                         "For slurm: passed as sbatch options "
                         "(e.g. --launcher-extra --partition=gpu --time=01:00:00).")
-    parser.add_argument("--eval-n-procs", default=None, type=int, metavar="N", help="Number of processes per structure evaluation (fork launcher only). "
-                        "Default: None (use all available CPUs). "
-                        "The evaluator profile command must be set to just the binary path "
-                        "(e.g. 'pw.x'), not 'mpiexec -n N pw.x'.")
-    parser.add_argument("--no-parallel-eval", dest="parallel_eval", action="store_false", help="Evaluate structures sequentially instead of in parallel. "
-                        "Default is parallel (applies to slurm and fork launchers).")
+    parser.add_argument("--sequential-eval", dest="parallel_eval", action="store_false", help="Evaluate structures sequentially instead of in parallel for the slurm launcher.")
     parser.set_defaults(parallel_eval=True)
 
     args = parser.parse_args()
@@ -59,9 +52,9 @@ def main():
 
     extra_args = list(args.launcher_extra) if args.launcher_extra else []
     if args.launcher == "nested":
-        launcher = NestedMPILauncher(extra_args=" ".join(extra_args))
+        launcher = NestedMPILauncher(mpirun_args=extra_args)
     elif args.launcher == "fork":
-        launcher = ForkLauncher(eval_n_procs=args.eval_n_procs, parallel_eval=args.parallel_eval)
+        launcher = ForkLauncher(fork_args=extra_args)
     elif args.launcher == "slurm":
         launcher = SlurmLauncher(sbatch_args=extra_args, parallel_eval=args.parallel_eval)
     else:
@@ -74,7 +67,7 @@ def main():
     evaluator_fn = _load_evaluator()
 
     try:
-        _main(args, os.environ, launcher=launcher, mlp_command=mlp_command, train_n_procs=args.train_n_procs, evaluator_fn=evaluator_fn)
+        _main(args, os.environ, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
         print(f"Error during execution: {e}", file=sys.stderr)
 

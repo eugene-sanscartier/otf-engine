@@ -100,13 +100,13 @@ class Launcher(ABC):
     """
 
     @abstractmethod
-    def run(self, mlp_cmd: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
-        """Execute *mlp_cmd* (f-string of ``mlp binary + subcommand + args``,
+    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
+        """Execute *command* (f-string of ``mlp binary + subcommand + args``,
         without any mpirun/srun prefix).
 
         Parameters
         ----------
-        mlp_cmd:  Command string passed to the shell, e.g.
+        command:  Command string passed to the shell, e.g.
                   ``f"{mlp} calculate_grade {potential} ..."``
         log_path: Append combined stdout/stderr here.
         env:      Environment mapping for the subprocess.
@@ -148,16 +148,15 @@ class Launcher(ABC):
 class NestedMPILauncher(Launcher):
     """Wrap mlp calls with ``mpirun``.  Matches existing behaviour exactly."""
 
-    def __init__(self, mpirun_executable: str = "mpirun", extra_args: str = ""):
+    def __init__(self, mpirun_executable: str = "mpirun", mpirun_args: list[str] | None = None):
         self.mpirun_executable = mpirun_executable
-        # extra_args is a string inserted between the -n flag and mlp_cmd,
-        # e.g. "--bind-to none" or "--oversubscribe"
-        self.extra_args = extra_args
+        self.mpirun_args = mpirun_args or []
 
-    def run(self, mlp_cmd: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
+    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
         n_part = f"-n {n_procs} " if n_procs is not None else ""
-        extra = f"{self.extra_args} " if self.extra_args else ""
-        cmd = f"{self.mpirun_executable} {n_part}{extra}{mlp_cmd}"
+        extra = " ".join(shlex.quote(a) for a in self.mpirun_args)
+        extra = f"{extra} " if extra else ""
+        cmd = f"{self.mpirun_executable} {n_part}{extra}{command}"
         _run_cmd(cmd, log_path, _env_for_mpirun(env))
 
 
@@ -170,24 +169,23 @@ class ForkLauncher(Launcher):
     """Run binaries directly without mpirun, constructing a fresh MPI universe
     via environment variables.
 
+    Extra launcher arguments are accepted for interface consistency with the
+    other launchers, but fork mode does not use them.
+
     For the evaluator, configure the DFT profile with just the binary path
     (e.g. ``command='pw.x'``) rather than ``'mpiexec -n 4 pw.x'``.
-    Set *eval_n_procs* to the number of processes the DFT code needs.
+    The number of peer processes is taken from the current Slurm allocation
+    when available, otherwise from ``os.cpu_count()``.
     """
 
-    def __init__(self, eval_n_procs: int | None = None, parallel_eval: bool = True):
-        self.eval_n_procs = eval_n_procs
-        self._parallel_eval = parallel_eval
+    def __init__(self, fork_args: list[str] | None = None):
+        self.fork_args = fork_args or []
 
-    @property
-    def parallel_eval(self) -> bool:
-        return self._parallel_eval
-
-    def run(self, mlp_cmd: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
+    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
         if n_procs is None:
             n_procs = _default_n_procs()
         child_env = _env_for_fork(n_procs, env)
-        parts = mlp_cmd.split()
+        parts = shlex.split(command)
         binary, args = parts[0], parts[1:]
         with open(log_path, "a") as log_f:
             procs = [subprocess.Popen(
@@ -205,13 +203,11 @@ class ForkLauncher(Launcher):
         """Run evaluator in *eval_dir* with MPI env rebuilt for a fresh universe.
 
         The evaluator's profile command should be set to just the binary
-        (e.g. ``'pw.x'``), not ``'mpiexec -n N pw.x'``.  *eval_n_procs*
-        copies of the binary will run as peers in a fresh MPI universe.
+        (e.g. ``'pw.x'``), not ``'mpiexec -n N pw.x'``.  The evaluator uses
+        all available processors in a fresh MPI universe.
 
-        Note: uses a process-wide lock around os.chdir to be thread-safe when
-        parallel_eval=True is used.  Evaluations are serialised here; only
-        SlurmLauncher achieves true parallelism (it submits batch jobs without
-        os.chdir in Python).
+        Note: uses a process-wide lock around os.chdir, so evaluations are
+        serialised here.  Only SlurmLauncher achieves true parallelism.
         """
         os.makedirs(eval_dir, exist_ok=True)
         with _CHDIR_LOCK:
@@ -219,8 +215,7 @@ class ForkLauncher(Launcher):
             os.chdir(eval_dir)
             saved = dict(os.environ)
             os.environ.clear()
-            eval_n_procs = self.eval_n_procs if self.eval_n_procs is not None else _default_n_procs()
-            os.environ.update(_env_for_fork(eval_n_procs, env))
+            os.environ.update(_env_for_fork(_default_n_procs(), env))
             try:
                 return evaluator_fn(structure)
             finally:
@@ -251,8 +246,8 @@ class BatchSubmitLauncher(Launcher, ABC):
     def _build_submit_cmd(self, cmd: str, log_path: str, n_procs: int | None) -> str:
         """Return the full shell command that submits *cmd* and waits."""
 
-    def run(self, mlp_cmd: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
-        submit_cmd = self._build_submit_cmd(mlp_cmd, log_path, n_procs)
+    def run(self, command: str, log_path: str, env: dict, n_procs: int | None = 1) -> None:
+        submit_cmd = self._build_submit_cmd(command, log_path, n_procs)
         print(f"running: {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=env, check=True)
 

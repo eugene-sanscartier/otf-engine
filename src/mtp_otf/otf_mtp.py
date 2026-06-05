@@ -214,7 +214,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, e
                     write_cfg(training_file, training_structures)
 
 
-def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evaluator_fn=None):
+def main(args, _env, launcher=None, mlp_command=None, evaluator_fn=None):
     """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model.
 
     The flow is: load and clean the candidate pool, select which structures
@@ -251,5 +251,5 @@ def main(args, _env, launcher=None, mlp_command=None, train_n_procs=None, evalua
     eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
 
     # Step 7: retrain the potential on the updated training set.
-    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env, n_procs=train_n_procs)
+    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env, n_procs=None)
     os.replace(f"tmp_{args.potential}", args.potential)
