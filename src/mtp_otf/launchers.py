@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import subprocess
 import concurrent.futures
 from abc import ABC, abstractmethod
@@ -265,6 +266,14 @@ class SlurmLauncher(BatchSubmitLauncher):
     from separate threads, each blocking on ``--wait``.  MPI parallelism is
     controlled by the job's resource allocation via ``sbatch_args``.
 
+    **Python environment requirement**: the Python interpreter used to launch
+    this process (``sys.executable``) is embedded directly in the evaluator
+    batch script.  That interpreter — and every package it depends on (``ase``, etc.)
+    — must reside on a filesystem that is accessible from
+    all compute nodes (e.g. a shared NFS/Lustre mount or e.g. /home or /project).  A Python environment
+    built on a local disk of the submission node will not be reachable by the
+    batch job and will cause an import failure at runtime.
+
     Parameters
     ----------
     sbatch_executable: Path to sbatch binary (default: ``"sbatch"``).
@@ -322,7 +331,7 @@ class SlurmLauncher(BatchSubmitLauncher):
             wf.write(wrapper)
 
         extra_part = f"{self.sbatch_args} " if self.sbatch_args else ""
-        sbatch_cmd = f"{self.sbatch_executable} --wait --chdir={eval_dir_abs} --output={eval_log} --open-mode=append {extra_part}--wrap=\"python {wrapper_path}\""
+        sbatch_cmd = f"{self.sbatch_executable} --wait --chdir={eval_dir_abs} --output={eval_log} --open-mode=append {extra_part}--wrap=\"{sys.executable} {wrapper_path}\""
         print(f"running (eval): {sbatch_cmd}")
         subprocess.run(sbatch_cmd, shell=True, env=env, check=True)
 
