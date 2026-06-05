@@ -168,17 +168,11 @@ def calculate_grade(potential_path: str, structures: list) -> list:
         Same structures with .arrays["nbh_grades"] and
         .info["features"]["MV_grade"] populated.
     """
-    pot = MTPPotential(potential_path)
     calc = MTPCalculator(potential_path)
+    pot = calc.potential
 
     weights, A, invA = read_active_set(potential_path)
-    if invA is None:
-        raise RuntimeError(f"No #MVS_v1.1 active-set section found in {potential_path}. "
-                           "Run select_add (or mlp select_add) first to initialise the active set.")
     mv = MaxVol.from_arrays(A, invA)
-
-    if weights is None:
-        weights = {"site_en_weight": 1.0, "energy_weight": 0.0, "force_weight": 0.0, "stress_weight": 0.0, "weight_scaling": 2}
 
     for atoms in structures:
         entry = _atoms_to_nl_entry(atoms, calc)
@@ -227,17 +221,16 @@ def select_add(potential_path: str, training_structs: list, candidate_structs: l
     (selected candidate structures) and weights/A/invA are the updated active-set
     state that the caller may persist via write_active_set if desired.
     """
-    pot = MTPPotential(potential_path)
     calc = MTPCalculator(potential_path)
-
-    # Load existing active set as starting point (mirrors mlip-3 select_add).
-    # Starting from the stored A preserves history from previous OTF cycles.
-    weights, A, invA = read_active_set(potential_path)
-    if weights is None:
-        weights = {"energy_weight": 0.0, "force_weight": 0.0, "stress_weight": 0.0, "site_en_weight": 1.0, "weight_scaling": 2}
+    pot = calc.potential
 
     n = pot.get_coeff_count()
-    mv = MaxVol.from_arrays(A, invA, threshold=threshold) if A is not None else MaxVol(n, threshold=threshold)
+    try:
+        weights, A, invA = read_active_set(potential_path)
+        mv = MaxVol.from_arrays(A, invA, threshold=threshold)
+    except RuntimeError:
+        weights = {"energy_weight": 0.0, "force_weight": 0.0, "stress_weight": 0.0, "site_en_weight": 1.0, "weight_scaling": 2}
+        mv = MaxVol(n, threshold=threshold)
 
     def _rows(atoms):
         return _build_info_rows(pot, _atoms_to_nl_entry(atoms, calc), weights)
@@ -327,17 +320,7 @@ def train(potential_path: str, training_structs: list, save_to: str, iteration_l
     # still holds the old coefficients loaded from potential_path.
     calc_new = MTPCalculator(save_to)
     n = pot.get_coeff_count()
-    # Preserve selection weights from the input file; fall back to mlip-3 defaults.
-    file_weights, _, _ = read_active_set(potential_path)
-    sel_weights = {
-        "energy_weight": 0.0,
-        "force_weight": 0.0,
-        "stress_weight": 0.0,
-        "site_en_weight": 1.0,
-        "weight_scaling": 2,  # mlip-3 cfg_selection.h default
-    }
-    if file_weights is not None:
-        sel_weights.update(file_weights)
+    sel_weights, _, _ = read_active_set(potential_path)
     mv = MaxVol(n)
     train_rows = [(calc_new.eval_grad(atoms), atoms) for atoms in training_structs]
     mv.select_candidates(train_rows)

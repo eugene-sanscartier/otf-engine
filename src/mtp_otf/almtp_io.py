@@ -40,14 +40,14 @@ def read_active_set(almtp_path: str) -> tuple[dict, np.ndarray, np.ndarray]:
     """Return (weights_dict, A, invA) from the #MVS_v1.1 section.
 
     A and invA have shape (n, n) where n = CoeffCount() of the potential.
-    Returns (None, None, None) if the section is absent (untrained potential).
+    Raises RuntimeError if the section is absent.
     """
     with open(almtp_path, "rb") as f:
         data = f.read()
 
     marker_pos = data.find(_MARKER)
     if marker_pos == -1:
-        return None, None, None
+        raise RuntimeError(f"No #MVS_v1.1 active-set section found in {almtp_path}.")
 
     # Parse text weight lines after the marker
     pos = marker_pos + len(_MARKER)
