@@ -3,7 +3,6 @@ from .launchers import (
     Launcher,
     NestedMPILauncher,
     ForkLauncher,
-    BatchSubmitLauncher,
     SlurmLauncher,
 )
 
@@ -12,7 +11,6 @@ __all__ = [
     "Launcher",
     "NestedMPILauncher",
     "ForkLauncher",
-    "BatchSubmitLauncher",
     "SlurmLauncher",
 ]
 

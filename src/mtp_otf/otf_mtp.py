@@ -12,6 +12,7 @@ import ase.io.lammpsrun
 from .io_cfg import read_cfg, write_cfg
 from .mtp_backend import calculate_grade, select_add
 from .cycles import current_cycle_dir
+from .launchers import Launcher
 
 OTF_STATE_FILE = "otf_state.json"
 
@@ -84,10 +85,10 @@ def _checkgrade(cfg):
     return 0
 
 
-def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme_lock_after_ntimes=10):
+def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max_cap, extreme_lock_after_ntimes=10):
 
     state = _load_state()
-    gamma_max0 = state.get("gamma_max0", gamma_max0_cap)
+    gamma_max0 = state.get("gamma_max0", gamma_max_cap)
 
     print("Preselected structures count: ", len(cfgs))
 
@@ -129,7 +130,7 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max0_cap, extreme
             print(f"Skipping selection: {non_extreme_count} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
         _save_state(state)
 
-    if not numpy.any(gammas < gamma_max) and numpy.any(gammas < gamma_max0_cap):
+    if not numpy.any(gammas < gamma_max) and numpy.any(gammas < gamma_max_cap):
         gamma_max0_new = _update_gamma_max0(state, numpy.min(gammas), gamma_max)
         print(f"Updated gamma_max0: {gamma_max0:.4f} -> {gamma_max0_new:.4f}")
         _save_state(state)
@@ -160,12 +161,12 @@ def save_structures(set_name, cfgs):
         write_cfg(set_file, cfgs)
 
 
-def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
+def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
     cycle = current_cycle_dir()
     eval_dir = (cycle / f"eval_{i:03d}") if cycle is not None else Path(f"eval_{i:03d}")
     print(f"Calculating structure {i + 1}")
     try:
-        result = launcher.call_evaluator(evaluator_fn, structure, eval_dir, env)
+        result = launcher.call_evaluator(evaluator_fn, structure, eval_dir)
         if force_threshold is not None and forcesthr_excess(result, threshold=force_threshold):
             print(f"Warning: Structure {i + 1} has forces exceeding threshold, skipping.")
             print(f" Max force component: {numpy.max(numpy.abs(numpy.array(result.calc.results['forces']))):.2f}")
@@ -182,7 +183,7 @@ def _eval_one(i, structure, evaluator_fn, launcher, env, force_threshold):
         return None
 
 
-def eval_structures(selected_structures, training_set, evaluator_fn, launcher, env, force_threshold=None):
+def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None):
     with open(training_set, mode="r") as training_file:
         training_structures = read_cfg(training_file)
 
@@ -190,7 +191,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, e
         print(f"Evaluating {len(selected_structures)} structures in parallel.")
         results = [None] * len(selected_structures)
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = {executor.submit(_eval_one, i, s, evaluator_fn, launcher, env, force_threshold): i for i, s in enumerate(selected_structures)}
+            futures = {executor.submit(_eval_one, i, s, evaluator_fn, launcher, force_threshold): i for i, s in enumerate(selected_structures)}
             for future in concurrent.futures.as_completed(futures):
                 results[futures[future]] = future.result()
         successful = [r for r in results if r is not None]
@@ -200,14 +201,14 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, e
                 write_cfg(training_file, training_structures)
     else:
         for i, selected_structure in enumerate(selected_structures):
-            result = _eval_one(i, selected_structure, evaluator_fn, launcher, env, force_threshold)
+            result = _eval_one(i, selected_structure, evaluator_fn, launcher, force_threshold)
             if result is not None:
                 training_structures += [result]
                 with open(training_set, mode="w") as training_file:
                     write_cfg(training_file, training_structures)
 
 
-def main(args, _env, launcher=None, mlp_command=None, evaluator_fn=None):
+def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
     """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model.
 
     The flow is: load and clean the candidate pool, select which structures
@@ -228,7 +229,7 @@ def main(args, _env, launcher=None, mlp_command=None, evaluator_fn=None):
     # Step 3: optionally apply the preselection policy so uninteresting
     # or disallowed candidates are removed before selection and evaluation stages.
     if args.preselection_filtering:
-        candidate_structures = preselected_filter(candidate_structures, args.gamma_tolerance, args.gamma_max, args.gamma_max0_cap, extreme_lock_after_ntimes=args.extreme_lock_after_ntimes)
+        candidate_structures = preselected_filter(candidate_structures, args.gamma_tolerance, args.gamma_max, args.gamma_max_cap, extreme_lock_after_ntimes=args.extreme_lock_after_ntimes)
 
     # Step 4: optionally cap the surviving pool size. This keeps the next stages
     # bounded when the extrapolative search produced many eligible structures.
@@ -241,8 +242,8 @@ def main(args, _env, launcher=None, mlp_command=None, evaluator_fn=None):
 
     # Step 6: evaluate the selected structures with the configured backend and
     # write evaluated structure into the training set for the retraining step.
-    eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, _env, force_threshold=args.force_threshold)
+    eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold)
 
     # Step 7: retrain the potential on the updated training set.
-    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", "mlip_train.log", _env)
+    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")
     os.replace(f"tmp_{args.potential}", args.potential)
