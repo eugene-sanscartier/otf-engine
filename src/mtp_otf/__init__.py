@@ -1,7 +1,7 @@
 from .otf_mtp import main
 from .launchers import (
     Launcher,
-    NestedMPILauncher,
+    NestedLauncher,
     ForkLauncher,
     SlurmLauncher,
 )
@@ -9,7 +9,7 @@ from .launchers import (
 __all__ = [
     "main",
     "Launcher",
-    "NestedMPILauncher",
+    "NestedLauncher",
     "ForkLauncher",
     "SlurmLauncher",
 ]

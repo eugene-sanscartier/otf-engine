@@ -2,7 +2,7 @@ import os
 import sys
 import argparse
 from .otf_mtp import main as _main
-from .launchers import NestedMPILauncher, ForkLauncher, SlurmLauncher
+from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
 from .cycles import next_cycle_dir, archive_cycle
 
 
@@ -36,12 +36,12 @@ def main():
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "
                         "'slurm': submit each call as a batch job via sbatch --wait.")
-    parser.add_argument("--launcher-args", default="", type=str, metavar="ARGS", help="Extra batch-scheduler options as one shell string (batch launchers only). "
-                        "For slurm: raw sbatch options (e.g. --launcher-args='--partition=gpu --time=01:00:00').")
-    parser.add_argument("--exec-args", default="", type=str, metavar="ARGS", help="Extra arguments appended to the MPI exec prefix as one shell string. "
-                        "For nested: appended to mpirun (e.g. --exec-args='--oversubscribe'). "
+    parser.add_argument("--batch-args", default="", type=str, metavar="ARGS", help="Extra batch-scheduler options as one shell string (batch launchers only). "
+                        "For slurm: raw sbatch options (e.g. --batch-args='--partition=gpu --time=01:00:00').")
+    parser.add_argument("--runner-args", default="", type=str, metavar="ARGS", help="Extra arguments appended to the runner executable as one shell string. "
+                        "For nested: appended to mpirun (e.g. --runner-args='--oversubscribe'). "
                         "For slurm: appended to srun when used as COMMAND_PREFIX or for sequential mlp calls "
-                        "(e.g. --exec-args='--bind-to core'). Ignored for fork.")
+                        "(e.g. --runner-args='--bind-to core'). Ignored for fork.")
     parser.add_argument("--sequential-eval", dest="concurrent_eval", action="store_false", help="Evaluate structures sequentially instead of concurrently for the slurm launcher.")
     parser.set_defaults(concurrent_eval=True)
     args = parser.parse_args()
@@ -52,11 +52,11 @@ def main():
 
     match args.launcher:
         case "nested":
-            launcher = NestedMPILauncher(exec_args=args.exec_args)
+            launcher = NestedLauncher(runner_args=args.runner_args)
         case "fork":
             launcher = ForkLauncher()
         case "slurm":
-            launcher = SlurmLauncher(sbatch_args=args.launcher_args, concurrent_eval=args.concurrent_eval, exec_args=args.exec_args)
+            launcher = SlurmLauncher(batch_args=args.batch_args, concurrent_eval=args.concurrent_eval, runner_args=args.runner_args)
 
     evaluator_fn = _load_evaluator()
     os.environ["COMMAND_PREFIX"] = launcher.command_prefix()
@@ -67,6 +67,8 @@ def main():
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
         print(f"Error during execution: {e}", file=sys.stderr)
+        # archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
+        # sys.exit(1)
 
     archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
     sys.exit(0)

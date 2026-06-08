@@ -84,7 +84,7 @@ def _join(parts: list[str]) -> str:
     return " ".join(parts)
 
 
-# Strips task/node parallelism options from sbatch_args when parallel_eval=False.
+# Used to strips task/node parallelism options from batch_args when parallel_eval=False for slurm sbatch.
 _sbatch_parser = argparse.ArgumentParser(add_help=False)
 _sbatch_parser.add_argument("--ntasks", "-n")
 _sbatch_parser.add_argument("--ntasks-per-node")
@@ -149,23 +149,23 @@ class Launcher(ABC):
 
 
 # ---------------------------------------------------------------------------
-# NestedMPILauncher  (current behaviour, default)
+# NestedLauncher  (current behaviour, default)
 # ---------------------------------------------------------------------------
 
 
-class NestedMPILauncher(Launcher):
+class NestedLauncher(Launcher):
     """Wrap mlp calls with ``mpirun``; passes ``-n 1`` when ``parallel_eval=False``."""
 
-    def __init__(self, exec_prefix: str = "mpirun", exec_args: str = ""):
-        if any(t in ("-n", "-np") for t in exec_args.split()):
-            raise ValueError("exec_args must not contain '-n'/'-np'")
-        self._exec_prefix = exec_prefix
-        self.exec_args = exec_args
+    def __init__(self, runner_exec: str = "mpirun", runner_args: str = ""):
+        if any(t in ("-n", "-np") for t in runner_args.split()):
+            raise ValueError("runner_args must not contain '-n'/'-np'")
+        self._runner_exec = runner_exec
+        self.runner_args = runner_args
 
     def command_prefix(self, parallel_eval: bool = True) -> str:
-        command_parts = [self._exec_prefix]
+        command_parts = [self._runner_exec]
         if not parallel_eval: command_parts += ["-n 1"]
-        if self.exec_args: command_parts += [self.exec_args]
+        if self.runner_args: command_parts += [self.runner_args]
         command_prefix = _join(command_parts)
         return command_prefix
 
@@ -256,9 +256,9 @@ class SlurmLauncher(Launcher):
     Structure evaluations are submitted concurrently by default
     (``concurrent_eval=True``): all sbatch jobs are submitted simultaneously
     from separate threads, each blocking on ``--wait``.  MPI parallelism is
-    controlled by the job's resource allocation via ``sbatch_args``.
+    controlled by the job's resource allocation via ``batch_args``.
 
-    ``COMMAND_PREFIX`` (``exec_prefix``, default ``"srun"``) is set in the parent
+    ``COMMAND_PREFIX`` (``runner_exec``, default ``"srun"``) is set in the parent
     environment before submission and inherited by child jobs — ``evaluator.py``
     reads it via ``build_command()``.
 
@@ -267,39 +267,39 @@ class SlurmLauncher(Launcher):
 
     Parameters
     ----------
-    sbatch_executable: Path to sbatch binary (default: ``"sbatch"``).
-    sbatch_args:       Extra sbatch options, e.g. ``"--account=myaccount --partition=gpu --time=01:00:00"``.
+    batch_exec:        Path to sbatch binary (default: ``"sbatch"``).
+    batch_args:        Extra sbatch options, e.g. ``"--account=myaccount --partition=gpu --time=01:00:00"``.
     concurrent_eval:   Submit evaluations concurrently (default: True).
-    exec_prefix:       Command prefix for evaluator jobs, set as ``COMMAND_PREFIX`` (default: ``"srun"``).
-    exec_args:         Extra arguments appended to ``exec_prefix``, e.g. ``"--bind-to core"``.
+    runner_exec:       Command prefix for evaluator jobs, set as ``COMMAND_PREFIX`` (default: ``"srun"``).
+    runner_args:       Extra arguments appended to ``runner_exec``, e.g. ``"--bind-to core"``.
     """
 
-    def __init__(self, sbatch_executable: str = "sbatch", sbatch_args: str = "", concurrent_eval: bool = True, exec_prefix: str = "srun", exec_args: str = ""):
-        self.sbatch_executable = sbatch_executable
-        self.sbatch_args = sbatch_args
+    def __init__(self, batch_exec: str = "sbatch", batch_args: str = "", concurrent_eval: bool = True, runner_exec: str = "srun", runner_args: str = ""):
+        self.batch_exec = batch_exec
+        self.batch_args = batch_args
         self._concurrent_eval = concurrent_eval
-        self._exec_prefix = exec_prefix
-        self.exec_args = exec_args
+        self._runner_exec = runner_exec
+        self.runner_args = runner_args
 
     @property
     def concurrent_eval(self) -> bool:
         return self._concurrent_eval
 
     def command_prefix(self, parallel_eval: bool = True) -> str:
-        command_parts = [self._exec_prefix]
+        command_parts = [self._runner_exec]
         if not parallel_eval: command_parts += ["-n 1"]
-        if self.exec_args: command_parts += [self.exec_args]
+        if self.runner_args: command_parts += [self.runner_args]
         command_prefix = _join(command_parts)
         return command_prefix
 
     def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True) -> str:
-        sbatch_parts = [self.sbatch_executable, "--wait", f"--chdir={chdir}", f"--output={log_file}", "--open-mode=append"]
-        sbatch_args = shlex.split(self.sbatch_args)
+        batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}", "--open-mode=append"]
+        batch_args = shlex.split(self.batch_args)
         if not parallel_eval:
-            _, sbatch_args = _sbatch_parser.parse_known_args(sbatch_args)
-            sbatch_args += ["--ntasks=1", "--nodes=1"]
-        sbatch_parts += sbatch_args
-        batch_prefix = _join(sbatch_parts)
+            _, batch_args = _sbatch_parser.parse_known_args(batch_args)
+            batch_args += ["--ntasks=1", "--nodes=1"]
+        batch_parts += batch_args
+        batch_prefix = _join(batch_parts)
         return batch_prefix
 
     def run(self, command: str, log_file: str, parallel_eval: bool = True, chdir: str | None = None) -> None:

@@ -15,14 +15,14 @@ def build_command(binary, ase_env=None):
     submitting this script as a batch job via SlurmLauncher):
 
         COMMAND_PREFIX — prefix produced by launcher.command_prefix():
-                         ``"mpirun [exec_args]"`` (NestedMPILauncher),
-                         ``"srun [exec_args]"`` (SlurmLauncher, default exec_prefix),
+                         ``"mpirun [runner_args]"`` (NestedLauncher),
+                         ``"srun [runner_args]"`` (SlurmLauncher, default runner_exec),
                          ``""`` (ForkLauncher, no wrapper).
 
     Two usage patterns:
 
     1. Binary declared here:
-         launcher = NestedMPILauncher(exec_args="--bind-to core")
+         launcher = NestedLauncher(runner_args="--bind-to core")
          command = build_command("pw.x")        # → "mpirun --bind-to core pw.x"
 
     2. ASE env var pattern — lets EspressoProfile read the command automatically:
