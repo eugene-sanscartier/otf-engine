@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import argparse
 from .otf_mtp import main as _main
@@ -17,7 +18,7 @@ def _load_evaluator():
 def main():
     parser = argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
 
-    parser.add_argument("extrapolative_dumps", nargs='+', help=" extrapolative_structures.dump", type=str)
+    parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
     parser.add_argument("-p", "--potential", help="input potential file name, will override input file 'potential' section", type=str, default="potential.almtp")
     parser.add_argument("-t", "--training_set", help="Training dataset file name, ex.: train.cfg", type=str, default="train.cfg")
 
@@ -31,7 +32,7 @@ def main():
     parser.add_argument("-m", "--max_structures", help="Max structures selection", default=-1, type=int)
     parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm", default=300, type=int)
     parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=None, type=float)
-    parser.add_argument("-s", "--species", nargs='+', type=str, default=None, metavar="SYMBOL", help="Ordered list of element symbols matching MTP type indices (e.g. -s Al Cu).")
+    parser.add_argument("-s", "--species", nargs='+', type=str, default=None, metavar="SYMBOLS", help="Ordered element symbols matching MTP type indices. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
 
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "
@@ -45,6 +46,8 @@ def main():
     parser.add_argument("--sequential-eval", dest="concurrent_eval", action="store_false", help="Evaluate structures sequentially instead of concurrently for the slurm launcher.")
     parser.set_defaults(concurrent_eval=True)
     args = parser.parse_args()
+    if args.species:
+        args.species = [sym for s in args.species for sym in re.findall(r'[A-Z][a-z]*', s)]
 
     mlp_command = os.environ.get("OTF_MTP_COMMAND")
     if not mlp_command:
