@@ -29,11 +29,11 @@ def _save_state(state):
         json.dump(state, f, indent=2)
 
 
-def load_extrapolative_dumps(extrapolative_dumps, extrapolation_field="f_extrapolation_grade"):
+def load_extrapolative_dumps(extrapolative_dumps, extrapolation_field="f_extrapolation_grade", species=None):
     collected_dumps = []
     for extrapolative_dump in extrapolative_dumps:
         with open(extrapolative_dump) as dump_file:
-            dumps = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None))
+            dumps = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
             print("Reading extrapolative dump : ", extrapolative_dump, " with ", len(dumps), " structures")
 
             if len(dumps) > 100:
@@ -150,9 +150,9 @@ def max_structureselection(filtred_cfgs, max_structures=-1):
     return filtred_cfgs
 
 
-def load_structures(set_name):
+def load_structures(set_name, species=None):
     with open(set_name, mode="r") as set_file:
-        cfgs = read_cfg(set_file)
+        cfgs = read_cfg(set_file, species)
     return cfgs
 
 
@@ -183,10 +183,7 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
         return None
 
 
-def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None):
-    with open(training_set, mode="r") as training_file:
-        training_structures = read_cfg(training_file)
-
+def eval_structures(selected_structures, training_structures, training_set, evaluator_fn, launcher, force_threshold=None):
     if launcher.concurrent_eval and len(selected_structures) > 1:
         print(f"Evaluating {len(selected_structures)} structures in parallel.")
         results = [None] * len(selected_structures)
@@ -219,7 +216,7 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
     # Step 1: load the extrapolative structures emitted by the upstream run.
     # These dumps are the raw candidate pool from which new training structures
     # may be chosen.
-    candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps)
+    candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps, species=args.species)
 
     # Step 2: ensure every candidate carries an extrapolation grade, even when
     # LAMMPS stopped early and the dump does not already contain the final or correct
@@ -237,12 +234,12 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
         candidate_structures = max_structureselection(candidate_structures, max_structures=args.max_structures)
 
     # Step 5: run the structure-selection step.
-    train_structures = load_structures(args.training_set)
+    train_structures = load_structures(args.training_set, args.species)
     selected_structures, _ = select_add(args.potential, train_structures, candidate_structures)
 
     # Step 6: evaluate the selected structures with the configured backend and
     # write evaluated structure into the training set for the retraining step.
-    eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold)
+    eval_structures(selected_structures, train_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold)
 
     # Step 7: retrain the potential on the updated training set.
     launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")

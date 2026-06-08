@@ -2,21 +2,26 @@ import numpy
 from numpy import int32
 import ase
 import collections
+from typing import IO
 
 
-def read_cfg(fileobj, type_map=None):
+def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, int] | None = None):
     """Read one or more CFG structures.
 
     Parameters
     ----------
     fileobj : file-like
-    type_map : dict[int, str] or None
-        Maps 0-indexed MTP type integers to element symbols
-        (e.g. ``{0: "Al", 1: "Cu"}``).  When provided, chemical symbols are
-        set from this mapping.  When absent, atomic numbers are set to
-        ``type_index + 1`` as a placeholder and the ``type_index`` array on
+    species : list[str] or dict[int, str] or dict[str, int] or None
+        Maps 0-indexed MTP type integers to element symbols.  Accepted forms:
+        an ordered list (``["Al", "Cu"]``), a forward dict (``{0: "Al", 1: "Cu"}``),
+        or an inverse dict (``{"Al": 0, "Cu": 1}``).  When provided, chemical
+        symbols are set from this mapping.  When absent, atomic numbers are set
+        to ``type_index + 1`` as a placeholder and the ``type_index`` array on
         each Atoms carries the authoritative 0-indexed type.
     """
+    if isinstance(species, dict) and species and isinstance(next(iter(species)), str):
+        species = {v: k for k, v in species.items()}
+        
     lines = collections.deque(fileobj.readlines())
     images = []
     while lines:
@@ -73,8 +78,8 @@ def read_cfg(fileobj, type_map=None):
                     stress = numpy.array(stress, dtype=float) / numpy.linalg.det(supercell) * -1
                 calcs["stress"] = stress
 
-            if type and type_map is not None:
-                atoms = ase.Atoms(symbols=[type_map[t] for t in type], positions=cartes, cell=supercell, pbc=True)
+            if type and species is not None:
+                atoms = ase.Atoms(symbols=[species[t] for t in type], positions=cartes, cell=supercell, pbc=True)
             else:
                 atoms = ase.Atoms(numbers=[t + 1 for t in type], positions=cartes, cell=supercell, pbc=True)
             atoms.calc = ase.calculators.singlepoint.SinglePointCalculator(atoms, **calcs)
@@ -92,7 +97,7 @@ def read_cfg(fileobj, type_map=None):
     return images
 
 
-def write_cfg(fileobj, images, fmt='%12.6f'):
+def write_cfg(fileobj: IO[str], images: list[ase.Atoms]):
 
     def map2ranks(arr):
         seen, types = set(), []
@@ -106,13 +111,13 @@ def write_cfg(fileobj, images, fmt='%12.6f'):
     output = []
 
     for atoms in images:
-        output += ["BEGIN_CFG\n"]
-        output += [" Size\n"]
-        output += ["%9d\n" % len(atoms)]
-        output += [" Supercell\n"]
+        output += ["BEGIN_CFG"]
+        output += [" Size"]
+        output += [f"{len(atoms):9d}"]
+        output += [" Supercell"]
         cell = atoms.get_cell()
         for row in cell:
-            output += ["    {} {} {}\n".format(fmt % row[0], fmt % row[1], fmt % row[2])]
+            output += [f"    {row[0]:12.6f} {row[1]:12.6f} {row[2]:12.6f}"]
 
         has_forces = atoms.calc is not None and "forces" in atoms.calc.results
         has_nbh = "nbh_grades" in atoms.arrays
@@ -159,34 +164,33 @@ def write_cfg(fileobj, images, fmt='%12.6f'):
         has_energy = atoms.calc is not None and "energy" in atoms.calc.results
         has_stress = atoms.calc is not None and "stress" in atoms.calc.results
 
-        output += [" AtomData:  " + "    ".join(fields) + "\n"]
+        output += [" AtomData:  " + "    ".join(fields)]
         for i in range(len(atoms)):
-            line = " {:9d} {:3d} {} {} {} ".format(fields_data["id"][i], fields_data["type"][i], fmt % fields_data["cartes_x"][i], fmt % fields_data["cartes_y"][i], fmt % fields_data["cartes_z"][i])
+            line = f" {fields_data['id'][i]:9d} {fields_data['type'][i]:3d} {fields_data['cartes_x'][i]:12.6f} {fields_data['cartes_y'][i]:12.6f} {fields_data['cartes_z'][i]:12.6f} "
             if has_forces:
-                line += " {} {} {} ".format(fmt % fields_data["fx"][i], fmt % fields_data["fy"][i], fmt % fields_data["fz"][i])
+                line += f" {fields_data['fx'][i]:12.6f} {fields_data['fy'][i]:12.6f} {fields_data['fz'][i]:12.6f} "
             if has_nbh:
-                line += " {}".format(fmt % fields_data["nbh_grades"][i])
-            line += "\n"
+                line += f" {fields_data['nbh_grades'][i]:12.6f}"
             output += [line]
 
-        output += [" Energy\n"]
+        output += [" Energy"]
         if has_energy:
-            output += ["    {}\n".format(fmt % atoms.calc.results["energy"])]
+            output += [f"    {atoms.calc.results['energy']:12.6f}"]
         else:
-            output += ["    {}\n".format(fmt % 0.0)]
+            output += [f"    {0.0:12.6f}"]
 
         if has_stress:
             stress_fields, stress_fields_data = ["xx", "yy", "zz", "yz", "xz", "xy"], {}
             for i, stress_field in enumerate(stress_fields):
                 stress_fields_data[stress_field] = atoms.calc.results["stress"][i] * atoms.get_volume() * -1
-            output += [" PlusStress:  " + "   ".join(stress_fields) + "\n"]
-            output += ["    {} {} {} {} {} {}\n".format(fmt % stress_fields_data["xx"], fmt % stress_fields_data["yy"], fmt % stress_fields_data["zz"], fmt % stress_fields_data["yz"], fmt % stress_fields_data["xz"], fmt % stress_fields_data["xy"])]
+            output += [" PlusStress:  " + "   ".join(stress_fields)]
+            output += [f"    {stress_fields_data['xx']:12.6f} {stress_fields_data['yy']:12.6f} {stress_fields_data['zz']:12.6f} {stress_fields_data['yz']:12.6f} {stress_fields_data['xz']:12.6f} {stress_fields_data['xy']:12.6f}"]
 
         if "features" in atoms.info:
             for feature_name, feature_value in atoms.info["features"].items():
-                output += [" Feature    {} {}\n".format(feature_name, feature_value)]
+                output += [f" Feature    {feature_name} {feature_value}"]
 
-        output += ["END_CFG\n"]
-        output += ["\n"]
+        output += ["END_CFG"]
+        output += [""]
 
-    fileobj.write("".join(output))
+    fileobj.write("\n".join(output) + "\n")
