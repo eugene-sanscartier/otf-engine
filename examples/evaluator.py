@@ -1,7 +1,5 @@
 import os
 import argparse
-from pathlib import Path
-
 import ase.io
 import ase.io.extxyz
 import ase.calculators.espresso
@@ -37,7 +35,7 @@ def build_command(binary, ase_env=None):
 
 # Directory containing this file — use for artifact paths (pseudopotentials, etc.)
 # so they resolve correctly regardless of which subdirectory the calculation runs in.
-evaluator_dir = Path(__file__).resolve().parent
+evaluator_dir = os.path.dirname(__file__) or "."
 
 
 def evaluator(structure):

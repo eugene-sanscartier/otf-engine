@@ -8,8 +8,7 @@ from .cycles import next_cycle_dir, archive_cycle
 
 def _load_evaluator():
     import importlib.util
-    path = os.path.join(os.getcwd(), "evaluator.py")
-    spec = importlib.util.spec_from_file_location("evaluator", path)
+    spec = importlib.util.spec_from_file_location("evaluator", "evaluator.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.evaluator

@@ -304,22 +304,19 @@ class SlurmLauncher(Launcher):
 
     def run(self, command: str, log_file: str, parallel_eval: bool = True, chdir: str | None = None) -> None:
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
-        submit_cmd = f'{self.batch_prefix(chdir or os.getcwd(), os.path.abspath(log_file), parallel_eval)} --wrap="{cmd}"'
+        submit_cmd = f'{self.batch_prefix(chdir or os.getcwd(), log_file, parallel_eval)} --wrap="{cmd}"'
         print(f"running: {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
         import ase.io.extxyz
         eval_dir.mkdir(parents=True, exist_ok=True)
-        eval_dir_abs = eval_dir.resolve()
-        input_path = str(eval_dir_abs / "input_structure.extxyz")
-        output_path = str(eval_dir_abs / "output_structure.extxyz")
-        ase.io.extxyz.write_extxyz(input_path, [structure])
+        ase.io.extxyz.write_extxyz(os.path.join(eval_dir, "input_structure.extxyz"), [structure])
         os.environ["COMMAND_PREFIX"] = self.command_prefix()
-        evaluator_py = os.path.join(os.getcwd(), "evaluator.py")
-        eval_cmd = _join([sys.executable, evaluator_py, input_path, output_path])
-        submit_cmd = f'{self.batch_prefix(str(eval_dir_abs), str(eval_dir_abs / "eval.log"))} --wrap="{eval_cmd}"'
+        evaluator_py = os.path.relpath("evaluator.py", eval_dir)
+        eval_cmd = _join([sys.executable, evaluator_py, "input_structure.extxyz", "output_structure.extxyz"])
+        submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log")} --wrap="{eval_cmd}"'
         print(f"running (eval): {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
-        with open(output_path) as f:
+        with open(os.path.join(eval_dir, "output_structure.extxyz")) as f:
             return next(ase.io.extxyz.read_extxyz(f))
