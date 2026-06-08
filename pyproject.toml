@@ -2,6 +2,9 @@
 requires = ["scikit-build-core>=0.3", "pybind11>=2.11"]
 build-backend = "scikit_build_core.build"
 
+[tool.scikit-build]
+cmake.build-type = "Release"
+
 [project]
 name = "mtp_otf"
 version = "0.0.1"
@@ -17,7 +20,7 @@ classifiers = [
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "ase",
   "numpy",
@@ -32,5 +35,5 @@ create-otf-state = "mtp_otf.create_otf_state:main"
 otf-mtp = "mtp_otf.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/pypa/sampleproject"
-Issues = "https://github.com/pypa/sampleproject/issues"
+Homepage = "https://github.com/esanscartier/kmtp-otf"
+Issues = "https://github.com/esanscartier/kmtp-otf/issues"
