@@ -15,7 +15,6 @@ CYCLE_PREFIX = "cycle_"
 _CYCLE_ARTIFACTS_MOVE = ("mlip_train.log", )
 _CYCLE_ARTIFACTS_COPY = ("otf_state.json", )
 
-
 _current: Path | None = None
 
 
@@ -46,8 +45,9 @@ def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files
     - Copies *potential* and *training_set* as snapshots (input and post-run state).
     - Moves _CYCLE_ARTIFACTS_MOVE from cwd into *cycle_dir* (if they exist).
     - Copies _CYCLE_ARTIFACTS_COPY from cwd into *cycle_dir* (if they exist).
-    - Moves each file in *dump_files* into *cycle_dir* (clears the dump dir for
-      the next cycle).
+    - Copies each file in *dump_files* into *cycle_dir* and truncates the
+      original in place so long-lived LAMMPS dump handles keep writing to the
+      same pathname.
     """
     cycle_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,4 +69,6 @@ def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files
     for dump in dump_files:
         p = Path(dump)
         if p.exists():
-            shutil.move(str(p), cycle_dir / p.name)
+            shutil.copy2(p, cycle_dir / p.name)
+            with p.open("r+b") as handle:
+                handle.truncate(0)
