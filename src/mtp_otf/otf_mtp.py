@@ -156,8 +156,8 @@ def load_structures(set_name, species=None):
     return cfgs
 
 
-def save_structures(set_name, cfgs):
-    with open(set_name, mode="w") as set_file:
+def save_structures(set_name, cfgs, append=False):
+    with open(set_name, mode="a" if append else "w") as set_file:
         write_cfg(set_file, cfgs)
 
 
@@ -179,12 +179,12 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
         return None, f"failed: {e}"
 
 
-def eval_structures(selected_structures, training_structures, training_set, evaluator_fn, launcher, force_threshold=None):
+def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None):
     n = len(selected_structures)
     w = len(str(n))
     parallel = launcher.concurrent_eval and n > 1
     print(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
-    ini_size = len(training_structures)
+    n_ok = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=None if parallel else 1) as executor:
         futures = {executor.submit(_eval_one, i, s, evaluator_fn, launcher, force_threshold): i for i, s in enumerate(selected_structures)}
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
@@ -192,9 +192,9 @@ def eval_structures(selected_structures, training_structures, training_set, eval
             result, status = future.result()
             print(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {status}")
             if result is not None:
-                training_structures += [result]
-                save_structures(training_set, training_structures)
-    print(f"Evaluated {len(training_structures) - ini_size}/{n} successfully.")
+                n_ok += 1
+                save_structures(training_set, [result], append=True)
+    print(f"Evaluated {n_ok}/{n} successfully.")
 
 
 def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
@@ -231,7 +231,7 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
 
     # Step 6: evaluate the selected structures with the configured backend and
     # write evaluated structure into the training set for the retraining step.
-    eval_structures(selected_structures, train_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold)
+    eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold)
 
     # Step 7: retrain the potential on the updated training set.
     launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")

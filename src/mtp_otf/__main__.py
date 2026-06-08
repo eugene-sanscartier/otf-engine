@@ -67,8 +67,8 @@ def main():
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
         print(f"Error during execution: {e}", file=sys.stderr)
-        # archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
-        # sys.exit(1)
+        archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
+        sys.exit(67)
 
     archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
     sys.exit(0)
