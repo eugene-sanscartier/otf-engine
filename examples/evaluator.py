@@ -7,7 +7,7 @@ from ase.calculators.espresso import EspressoProfile
 
 
 def build_command(binary, ase_env=None):
-    """Assemble the full DFT executable command from env vars set by the kmtp-otf launcher.
+    """Assemble the full DFT executable command from env vars set by the otf-engine launcher.
 
     The launcher writes ``COMMAND_PREFIX`` before calling evaluator() (or before
     submitting this script as a batch job via SlurmLauncher):

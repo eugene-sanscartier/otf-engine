@@ -1,4 +1,4 @@
-"""Execution backends for otf-mtp: mpirun (nested), fork (direct), and slurm (sbatch --wait)."""
+"""Execution backends for otf-engine: mpirun (nested), fork (direct), and slurm (sbatch --wait)."""
 from __future__ import annotations
 
 import os

@@ -1,4 +1,4 @@
-"""Cycle directory management for otf-mtp runs.
+"""Cycle directory management for otf-engine runs.
 
 Each invocation of the CLI archives its inputs, outputs, and consumed dump
 files into ./otf_cycles/cycle_N/, where N is the current highest cycle index.

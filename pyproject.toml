@@ -6,12 +6,12 @@ build-backend = "scikit_build_core.build"
 cmake.build-type = "Release"
 
 [project]
-name = "mtp_otf"
+name = "otf_engine"
 version = "0.0.1"
 authors = [
   { name="Eugène Sanscartier", email="eugene.sanscartier@gmail.com" },
 ]
-description = "A package for on-the-fly mtp"
+description = "On-the-fly active learning engine for machine learning interatomic potentials"
 readme = "README.md"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -31,9 +31,9 @@ dependencies = [
 mpi = ["mpi4py"]
 
 [project.scripts]
-create-otf-state = "mtp_otf.create_otf_state:main"
-otf-mtp = "mtp_otf.__main__:main"
+create-otf-state = "otf_engine.create_otf_state:main"
+otf-engine = "otf_engine.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/esanscartier/kmtp-otf"
-Issues = "https://github.com/esanscartier/kmtp-otf/issues"
+Homepage = "https://github.com/esanscartier/otf-engine"
+Issues = "https://github.com/esanscartier/otf-engine/issues"
