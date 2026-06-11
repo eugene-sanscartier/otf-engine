@@ -293,7 +293,7 @@ class SlurmLauncher(Launcher):
         return command_prefix
 
     def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True) -> str:
-        batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}", "--open-mode=append", "--quiet"]
+        batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}", "--quiet"]
         batch_args = shlex.split(self.batch_args)
         if not parallel_eval:
             _, batch_args = _sbatch_parser.parse_known_args(batch_args)

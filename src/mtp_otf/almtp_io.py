@@ -20,7 +20,7 @@ n is NOT stored explicitly; it is inferred from the binary block size.
 
 from __future__ import annotations
 
-import math
+import re
 from dataclasses import dataclass
 from io import StringIO
 
@@ -41,6 +41,12 @@ class MVSState:
     active_cfg_indices: ndarray
     active_eqn_indices: ndarray
     selected_cfgs: list
+
+
+def _coeff_count(mtp_text: bytes) -> int:
+    fields = {m[1]: int(m[2]) for m in re.finditer(rb"^\s*(\w+)\s*=\s*(\d+)", mtp_text, re.MULTILINE)}
+    sc = fields[b"species_count"]
+    return fields[b"radial_basis_size"] * sc * sc * fields[b"radial_funcs_count"] + fields[b"alpha_scalar_moments"] + sc
 
 
 def _read_header_and_binary(data: bytes) -> tuple[dict, ndarray, ndarray, int]:
@@ -65,18 +71,14 @@ def _read_header_and_binary(data: bytes) -> tuple[dict, ndarray, ndarray, int]:
     if binary_start == -1:
         raise ValueError("Binary payload marker '#' not found in #MVS_v1.1 section")
     binary_start += 1
-    end_pos = data.find(_END_MARKER, binary_start)
-    if end_pos == -1:
-        raise ValueError("Binary payload terminator '\\n#\\n' not found in #MVS_v1.1 section")
+    n = _coeff_count(data[:marker_pos])
+    n_bytes = 2 * n * n * 8
+    end_pos = binary_start + n_bytes
+    if data[end_pos:end_pos + len(_END_MARKER)] != _END_MARKER:
+        raise ValueError(f"Expected '\\n#\\n' at binary end position {end_pos}, got {data[end_pos:end_pos+3]!r}")
 
-    binary_block = data[binary_start:end_pos]
-    n_bytes = len(binary_block)
-    n = int(math.isqrt(n_bytes // 16))
-    if 2 * n * n * 8 != n_bytes:
-        raise ValueError(f"Binary block size {n_bytes} bytes is not 2*n*n*8 for any integer n")
-
-    A = numpy.frombuffer(binary_block[:n * n * 8], dtype="<f8").reshape(n, n).copy()
-    invA = numpy.frombuffer(binary_block[n * n * 8:], dtype="<f8").reshape(n, n).copy()
+    A = numpy.frombuffer(data[binary_start:binary_start + n * n * 8], dtype="<f8").reshape(n, n).copy()
+    invA = numpy.frombuffer(data[binary_start + n * n * 8:end_pos], dtype="<f8").reshape(n, n).copy()
     return weights, A, invA, end_pos
 
 
