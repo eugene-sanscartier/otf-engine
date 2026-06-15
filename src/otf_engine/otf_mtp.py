@@ -195,6 +195,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
                 n_ok += 1
                 save_structures(training_set, [result], append=True)
     print(f"Evaluated {n_ok}/{n} successfully.")
+    return n_ok
 
 
 def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
@@ -231,7 +232,8 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
 
     # Step 6: evaluate the selected structures with the configured backend and
     # write evaluated structure into the training set for the retraining step.
-    eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold)
+    n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold) if selected_structures else 0
+    if not n_ok: return print("No configurations selected or evaluated — skipping training.")
 
     # Step 7: retrain the potential on the updated training set.
     launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")
