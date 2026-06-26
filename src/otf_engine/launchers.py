@@ -90,14 +90,6 @@ _sbatch_parser.add_argument("--ntasks", "-n")
 _sbatch_parser.add_argument("--ntasks-per-node")
 _sbatch_parser.add_argument("--nodes", "-N")
 
-
-def _run_cmd(cmd: str, log_file: str, env: dict) -> None:
-    """Run a shell command string, appending combined output to log_file."""
-    print(f"running: {cmd}")
-    with open(log_file, "a") as f:
-        subprocess.run(cmd, shell=True, text=True, env=env, stdout=f, stderr=subprocess.STDOUT, check=True)
-
-
 # ---------------------------------------------------------------------------
 # Launcher ABC
 # ---------------------------------------------------------------------------
@@ -171,7 +163,9 @@ class NestedLauncher(Launcher):
 
     def run(self, command: str, log_file: str, parallel_eval: bool = True) -> None:
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
-        _run_cmd(cmd, log_file, _env_for_nested(os.environ))
+        print(f"running: {cmd}")
+        with open(log_file, "a") as file_obj:
+            subprocess.run(cmd, shell=True, text=True, env=_env_for_nested(os.environ), stdout=file_obj, stderr=subprocess.STDOUT, check=True)
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
         eval_dir.mkdir(parents=True, exist_ok=True)
