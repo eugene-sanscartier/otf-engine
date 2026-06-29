@@ -32,7 +32,7 @@ def main():
     parser.add_argument("-m", "--max_structures", help="Max structures selection", default=-1, type=int)
     parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm", default=300, type=int)
     parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=None, type=float)
-    parser.add_argument("-s", "--species", nargs='+', type=str, default=None, metavar="SYMBOLS", help="Ordered element symbols matching MTP type indices. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
+    parser.add_argument("-s", "--species", nargs='+', type=str, default=None, metavar="SYMBOLS", help="Ordered element symbols matching MTP type indices. Must cover ALL types defined in the potential and training set, not just those present in the current simulation. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
 
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "

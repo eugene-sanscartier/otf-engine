@@ -21,7 +21,7 @@ def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, i
     """
     if isinstance(species, dict) and species and isinstance(next(iter(species)), str):
         species = {v: k for k, v in species.items()}
-        
+
     lines = collections.deque(fileobj.readlines())
     images = []
     while lines:
@@ -79,6 +79,7 @@ def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, i
                 calcs["stress"] = stress
 
             if type and species is not None:
+                if len(set(type)) > len(species): raise ValueError(f"CFG contains {len(set(type))} distinct species but species={species!r} only defines {len(species)}.")
                 atoms = ase.Atoms(symbols=[species[t] for t in type], positions=cartes, cell=supercell, pbc=True)
             else:
                 atoms = ase.Atoms(numbers=[t + 1 for t in type], positions=cartes, cell=supercell, pbc=True)
