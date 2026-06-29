@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import traceback
 import argparse
 from .otf_mtp import main as _main
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
@@ -70,6 +71,7 @@ def main():
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
         print(f"Error during execution: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
         sys.exit(67)
 

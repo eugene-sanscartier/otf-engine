@@ -2,6 +2,7 @@ import concurrent.futures
 import json
 import os
 import shutil
+import traceback
 from pathlib import Path
 
 import numpy
@@ -171,6 +172,9 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
             return None, f"skipped (max force {max_f:.2f} eV/Å)"
         return result, "ok"
     except Exception as e:
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        with open(eval_dir / "eval.log", "a") as _f:
+            traceback.print_exc(file=_f)
         try:
             print(f"[struct {i+1}] espresso.err:\n{(eval_dir / 'espresso.err').read_text()}")
             shutil.rmtree(eval_dir / "pwscf.save")
@@ -238,3 +242,4 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
     # Step 7: retrain the potential on the updated training set.
     launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")
     os.replace(f"tmp_{args.potential}", args.potential)
+
