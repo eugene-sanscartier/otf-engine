@@ -228,7 +228,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     weights = state.weights
     mv = MaxVol.from_arrays(state.A, state.invA)
 
-    for atoms in structures:
+    for i, atoms in enumerate(structures):
         rows = _info_rows(pot, atoms, calc, weights).rows
 
         scores = numpy.abs(rows @ mv.invA.T)  # (n_rows, n)
@@ -247,6 +247,8 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
         atoms.arrays["nbh_grades"] = per_atom.astype(float64)
         atoms.info.setdefault("features", {})["MV_grade"] = cfg_grade
 
+        print(f"  [CALCULATE_GRADE] structure[{i}]: extrapolation grade (gamma) = {cfg_grade:.4f}")
+
     return structures
 
 
@@ -255,7 +257,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
 # ---------------------------------------------------------------------------
 
 
-def select_add(potential, training_structs: list, candidate_structs: list, threshold: float = 1.001, state: MVSState | None = None, weights: dict | None = None, al_mode: str = "cfg") -> tuple:
+def select_add(potential, training_structs: list, candidate_structs: list, threshold: float = 1.001, state: MVSState | None = None, weights: dict | None = None, al_mode: str = "nbh") -> tuple:
     """D-optimality greedy structure selection.
 
     Rebuilds the MaxVol active set from *training_structs*, then greedily
@@ -307,12 +309,17 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     # training rebuild at 1.001, candidate selection at threshold, training pass again.
     mv.threshold = 1.001
     mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
+    initial_invA = mv.invA.copy()
     mv.threshold = threshold
     mv.select_candidates(cand_rows, pool_id=_POOL_CAND)
     mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
 
     active = {int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0}
     selected = [atoms for i, atoms in enumerate(candidate_structs) if i in active]
+
+    for i, rows_item in enumerate(r for j, r in enumerate(cand_rows) if j in active):
+        grade = float(numpy.abs(rows_item.rows @ initial_invA.T).max())
+        print(f"  [SELECT_ADD] structure[{i}]: extrapolation grade (gamma) = {grade:.4f}")
 
     return selected, (weights, mv.A, mv.invA)
 
@@ -322,7 +329,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
 # ---------------------------------------------------------------------------
 
 
-def train(potential, training_structs: list, save_to: str, iteration_limit: int = 300, energy_weight: float = 1.0, force_weight: float = 0.01, stress_weight: float = 0.001, weight_scaling: int = 1, pre_train=None, comm=None, backend: str = "scipy", optimizer: str = "lbfgs", al_mode: str = "cfg", selection_state: MVSState | None = None, selection_weights: dict | None = None) -> None:
+def train(potential, training_structs: list, save_to: str, iteration_limit: int = 300, energy_weight: float = 1.0, force_weight: float = 0.01, stress_weight: float = 0.001, weight_scaling: int = 1, pre_train=None, comm=None, backend: str = "scipy", optimizer: str = "lbfgs", al_mode: str = "nbh", selection_state: MVSState | None = None, selection_weights: dict | None = None) -> None:
     """Fit MTP coefficients using NonlinearFitter (bi-level L-BFGS-B).
 
     Mirrors mlip-3's bi-level training approach:
@@ -394,12 +401,10 @@ def train(potential, training_structs: list, save_to: str, iteration_limit: int 
 
     write_mtp(pot, save_to)
 
-    # Rebuild the active set from the training data using the NEW coefficients,
-    # then embed it in save_to — mirrors mlip-3's train which calls select.Save().
+    # Rebuild the active set from the training data using the NEW coefficients.
+    # Resolve selection weights: explicit arg > selection_state > prior file > default.
     # A new MTPCalculator is needed because pot was updated in-place but calc
     # still holds the old coefficients loaded from potential_path.
-    calc_new = MTPCalculator(save_to)
-    n = pot.get_coeff_count()
     if selection_weights is not None:
         sel_weights = selection_weights
     elif selection_state is not None:
@@ -435,4 +440,4 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     mv = MaxVol(calc.potential.get_coeff_count(), threshold=threshold)
     train_rows = [_info_rows(calc.potential, atoms, calc, weights) for atoms in training_structs]
     mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
-    write_mvs_state(save_to, _build_saved_mvs_state(sel_weights, mv, training_structs, _POOL_TRAIN))
+    write_mvs_state(potential, _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN))

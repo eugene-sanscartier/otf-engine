@@ -90,18 +90,18 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max_cap, extreme_
 
     state = _load_state()
     gamma_max0 = state.get("gamma_max0", gamma_max_cap)
-
-    print("Preselected structures count: ", len(cfgs))
+    n_total = len(cfgs)
 
     gammas = numpy.array([_checkgrade(cfg) for cfg in cfgs])
     mask = gammas > gamma_tolerance
     cfgs = [cfg for cfg, m in zip(cfgs, mask) if m]
     gammas = gammas[mask]
+    print(f"Preselection: {len(cfgs)}/{n_total} structures above gamma_tolerance={gamma_tolerance:.4f}")
 
     if not cfgs:
-        print(f"No structures above gamma_tolerance={gamma_tolerance:.4f} — nothing to select.")
         return []
 
+    min_gamma = numpy.min(gammas)
     filtred_cfgs = []
 
     if numpy.any(gammas < gamma_max):
@@ -112,31 +112,28 @@ def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max_cap, extreme_
         print(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
         idx = numpy.argmin(gammas)
         filtred_cfgs = [cfgs[idx]]
-        print(f"Selected structure with gamma = {gammas[idx]}")
+        print(f"Selected structure with gamma = {gammas[idx]:.4f}")
         _record_non_extreme(state, extreme_lock_after_ntimes)
 
     else:
         extreme_allowed = state.get("extreme_allowed", True)
         non_extreme_count = state.get("non_extreme_count", 0)
         state["extreme_count"] = state.get("extreme_count", 0) + 1
-        print(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}. "
-              f"min gamma = {numpy.min(gammas):.4f}, "
-              f"non_extreme_count={non_extreme_count} (extreme_lock_after_ntimes={extreme_lock_after_ntimes}), "
-              f"extreme_allowed={extreme_allowed}")
+        print(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, non_extreme_count={non_extreme_count} (lock_after={extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
         if extreme_allowed:
             filtred_cfgs = [cfgs[numpy.argmin(gammas)]]
             state["non_extreme_count"] = 0
-            print(f"Selecting structure with gamma = {numpy.min(gammas):.4f}")
+            print(f"Selecting structure with gamma = {min_gamma:.4f}")
         else:
             print(f"Skipping selection: {non_extreme_count} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
         _save_state(state)
 
-    if not numpy.any(gammas < gamma_max) and numpy.any(gammas < gamma_max_cap):
-        gamma_max0_new = _update_gamma_max0(state, numpy.min(gammas), gamma_max)
+    if numpy.all(gammas > gamma_max) and min_gamma < gamma_max_cap:
+        gamma_max0_new = _update_gamma_max0(state, min_gamma, gamma_max)
         print(f"Updated gamma_max0: {gamma_max0:.4f} -> {gamma_max0_new:.4f}")
         _save_state(state)
 
-    print("Post-Preselection filtered structures count: ", len(filtred_cfgs))
+    print(f"Post-preselection: {len(filtred_cfgs)} structures after preselection filter")
 
     return filtred_cfgs
 
@@ -244,9 +241,11 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
     # Step 6: evaluate the selected structures with the configured backend and
     # write evaluated structure into the training set for the retraining step.
     n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold) if selected_structures else 0
-    if not n_ok: return print("No configurations selected or evaluated — skipping training.")
+    if not n_ok: print("No configurations selected or evaluated — retraining.")
 
     # Step 7: retrain the potential on the updated training set.
     launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")
+
     os.replace(f"tmp_{args.potential}", args.potential)
+    print(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
