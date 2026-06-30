@@ -1,11 +1,13 @@
+import logging
 import os
 import re
 import sys
-import traceback
 import argparse
 from .otf_mtp import main as _main
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
 from .cycles import next_cycle_dir, archive_cycle
+
+logger = logging.getLogger(__name__)
 
 
 def _load_evaluator():
@@ -65,13 +67,14 @@ def main():
     evaluator_fn = _load_evaluator()
     os.environ["COMMAND_PREFIX"] = launcher.command_prefix()
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(module)s:%(funcName)s: %(message)s")
+
     cycle_dir = next_cycle_dir()
 
     try:
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
-        print(f"Error during execution: {e}", file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
+        logger.exception(f"Error during execution: {e}")
         archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
         sys.exit(67)
 

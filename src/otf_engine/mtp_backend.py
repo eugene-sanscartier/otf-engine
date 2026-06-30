@@ -8,8 +8,11 @@ All functions accept and return ASE Atoms objects — no intermediate files.
 
 from __future__ import annotations
 
+import logging
 import numpy
 from numpy import intp, float64
+
+logger = logging.getLogger(__name__)
 
 from ._mtp import MTPPotential, MTPCalculator, write_mtp
 from .almtp_io import MVSState, read_mvs_state, write_mvs_state
@@ -247,7 +250,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
         atoms.arrays["nbh_grades"] = per_atom.astype(float64)
         atoms.info.setdefault("features", {})["MV_grade"] = cfg_grade
 
-        print(f"  [CALCULATE_GRADE] structure[{i}]: extrapolation grade (gamma) = {cfg_grade:.4f}")
+        logger.info(f"  structure[{i}]: extrapolation grade (gamma) = {cfg_grade:.4f}")
 
     return structures
 
@@ -319,7 +322,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
 
     for i, rows_item in enumerate(r for j, r in enumerate(cand_rows) if j in active):
         grade = float(numpy.abs(rows_item.rows @ initial_invA.T).max())
-        print(f"  [SELECT_ADD] structure[{i}]: extrapolation grade (gamma) = {grade:.4f}")
+        logger.info(f"  selected structure[{i}]: extrapolation grade (gamma) = {grade:.4f}")
 
     return selected, (weights, mv.A, mv.invA)
 
@@ -440,4 +443,6 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     mv = MaxVol(calc.potential.get_coeff_count(), threshold=threshold)
     train_rows = [_info_rows(calc.potential, atoms, calc, weights) for atoms in training_structs]
     mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
-    write_mvs_state(potential, _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN))
+    state = _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN)
+    logger.info(f"Active set rebuilt: {len(state.selected_cfgs)}/{len(training_structs)} active structures from training set.")
+    write_mvs_state(potential, state)

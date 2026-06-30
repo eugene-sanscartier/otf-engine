@@ -1,5 +1,6 @@
 import concurrent.futures
 import json
+import logging
 import os
 import shutil
 import traceback
@@ -12,8 +13,11 @@ import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
 from .mtp_backend import calculate_grade, select_add, update_active_set
+from .almtp_io import read_mvs_state
 from .cycles import current_cycle_dir
 from .launchers import Launcher
+
+logger = logging.getLogger(__name__)
 
 OTF_STATE_FILE = "otf_state.json"
 
@@ -21,8 +25,12 @@ OTF_STATE_FILE = "otf_state.json"
 def _load_state():
     if os.path.isfile(OTF_STATE_FILE):
         with open(OTF_STATE_FILE, "r") as f:
-            return json.load(f)
-    return {}
+            state = json.load(f)
+    else:
+        state = {}
+    if "non_extreme_count" in state and "consecutive_non_extreme" not in state:
+        state["consecutive_non_extreme"] = state.pop("non_extreme_count")
+    return state
 
 
 def _save_state(state):
@@ -35,19 +43,14 @@ def load_extrapolative_dumps(extrapolative_dumps, extrapolation_field="f_extrapo
     for extrapolative_dump in extrapolative_dumps:
         with open(extrapolative_dump) as dump_file:
             dumps = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
-            print("Reading extrapolative dump : ", extrapolative_dump, " with ", len(dumps), " structures")
+            logger.info(f"Reading extrapolative dump: {extrapolative_dump} with {len(dumps)} structures")
 
             if len(dumps) > 100:
-                print("Warning: Large extrapolative dump with ", len(dumps), " structures, this may cause performance issues.")
+                logger.warning(f"Large extrapolative dump with {len(dumps)} structures, this may cause performance issues.")
                 _indices = numpy.random.choice(len(dumps), size=100, replace=False)
                 dumps = [dumps[i] for i in _indices]
 
             collected_dumps += dumps
-
-        # try:
-        #     os.remove(extrapolative_dump)
-        # except Exception as e:
-        #     print(f"Warning: {extrapolative_dump}: {e}")
 
     for dump in collected_dumps:
         if dump.has(extrapolation_field):
@@ -62,20 +65,50 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
     gamma_max0_new = max(numpy.mean(history), gamma_max0_floor)
     state["gamma_max0_history"] = history
     state["gamma_max0"] = gamma_max0_new
+    full = state.get("gamma_max0_full_history", [])
+    full += [float(obs)]
+    state["gamma_max0_full_history"] = full
     return gamma_max0_new
+
+
+def _record_state(state, n_train, n_selected, gammas_selected, n_ok, active_set_size, eval_stats):
+    cycle_dir = current_cycle_dir()
+    cycle = int(cycle_dir.name.split("_")[-1]) if cycle_dir is not None else len(state.get("history", []))
+    state["n_selected_total"] = state.get("n_selected_total", 0) + n_selected
+    state["n_evaluated_total"] = state.get("n_evaluated_total", 0) + n_ok
+    state.setdefault("history", []).append({
+        "cycle": cycle,
+        "selection_branch": state.get("selection_branch", "none"),
+        "n_selected": n_selected,
+        "n_evaluated": n_ok,
+        "n_selected_total": state["n_selected_total"],
+        "n_evaluated_total": state["n_evaluated_total"],
+        "training_set_size": n_train + n_ok,
+        "active_set_size": active_set_size,
+        "gammas_candidates": state.get("gammas_candidates", []),
+        "gammas_selected": gammas_selected,
+        "gammas_evaluated": eval_stats.get("gammas_evaluated", []),
+        "max_forces_evaluated": eval_stats.get("max_forces_evaluated", []),
+        "gamma_max0": state.get("gamma_max0"),
+    })
+
+
+def max_force(atoms):
+    return float(numpy.max(numpy.abs(numpy.array(atoms.calc.results["forces"]))))
 
 
 def forcesthr_excess(atoms, threshold):
     if atoms.calc is None or "forces" not in atoms.calc.results:
         return False
-    return numpy.max(numpy.abs(atoms.calc.results["forces"])) > threshold
+    return max_force(atoms) > threshold
 
 
-def _record_non_extreme(state, extreme_lock_after_ntimes):
-    state["non_extreme_count"] = state.get("non_extreme_count", 0) + 1
-    if state["non_extreme_count"] >= extreme_lock_after_ntimes:
+def _record_non_extreme(state, extreme_lock_after_ntimes, _save=True):
+    state["consecutive_non_extreme"] = state.get("consecutive_non_extreme", 0) + 1
+    if state["consecutive_non_extreme"] >= extreme_lock_after_ntimes:
         state["extreme_allowed"] = False
-    _save_state(state)
+    if _save:
+        _save_state(state)
 
 
 def _checkgrade(cfg):
@@ -86,65 +119,72 @@ def _checkgrade(cfg):
     return 0
 
 
-def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max_cap, extreme_lock_after_ntimes=10):
-
-    state = _load_state()
+def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max_cap, extreme_lock_after_ntimes=10, state=None):
+    _own_state = state is None
+    if _own_state:
+        state = _load_state()
     gamma_max0 = state.get("gamma_max0", gamma_max_cap)
     n_total = len(cfgs)
 
     gammas = numpy.array([_checkgrade(cfg) for cfg in cfgs])
+    state["gammas_candidates"] = gammas.tolist()
     mask = gammas > gamma_tolerance
     cfgs = [cfg for cfg, m in zip(cfgs, mask) if m]
     gammas = gammas[mask]
-    print(f"Preselection: {len(cfgs)}/{n_total} structures above gamma_tolerance={gamma_tolerance:.4f}")
+    logger.info(f"Preselection: {len(cfgs)}/{n_total} structures above gamma_tolerance={gamma_tolerance:.4f}")
 
     if not cfgs:
+        state["selection_branch"] = "none"
         return []
 
     min_gamma = numpy.min(gammas)
     filtred_cfgs = []
+    state["selection_branch"] = "none"
 
     if numpy.any(gammas < gamma_max):
         filtred_cfgs = [cfg for cfg, g in zip(cfgs, gammas) if g < gamma_max]
-        _record_non_extreme(state, extreme_lock_after_ntimes)
+        state["selection_branch"] = "normal"
+        _record_non_extreme(state, extreme_lock_after_ntimes, _save=_own_state)
 
     elif numpy.any(gammas < gamma_max0):
-        print(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
+        logger.info(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
         idx = numpy.argmin(gammas)
         filtred_cfgs = [cfgs[idx]]
-        print(f"Selected structure with gamma = {gammas[idx]:.4f}")
-        _record_non_extreme(state, extreme_lock_after_ntimes)
+        state["selection_branch"] = "intermediate"
+        logger.info(f"Selected structure with gamma = {gammas[idx]:.4f}")
+        _record_non_extreme(state, extreme_lock_after_ntimes, _save=_own_state)
 
     else:
         extreme_allowed = state.get("extreme_allowed", True)
-        non_extreme_count = state.get("non_extreme_count", 0)
+        consecutive_non_extreme = state.get("consecutive_non_extreme", 0)
         state["extreme_count"] = state.get("extreme_count", 0) + 1
-        print(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, non_extreme_count={non_extreme_count} (lock_after={extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
+        logger.warning(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, consecutive_non_extreme={consecutive_non_extreme} (lock_after={extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
         if extreme_allowed:
             filtred_cfgs = [cfgs[numpy.argmin(gammas)]]
-            state["non_extreme_count"] = 0
-            print(f"Selecting structure with gamma = {min_gamma:.4f}")
+            state["consecutive_non_extreme"] = 0
+            state["selection_branch"] = "extreme"
+            logger.info(f"Selecting structure with gamma = {min_gamma:.4f}")
         else:
-            print(f"Skipping selection: {non_extreme_count} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
-        _save_state(state)
+            logger.warning(f"Skipping selection: {consecutive_non_extreme} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
+        if _own_state:
+            _save_state(state)
 
     if numpy.all(gammas > gamma_max) and min_gamma < gamma_max_cap:
         gamma_max0_new = _update_gamma_max0(state, min_gamma, gamma_max)
-        print(f"Updated gamma_max0: {gamma_max0:.4f} -> {gamma_max0_new:.4f}")
-        _save_state(state)
+        logger.info(f"Updated gamma_max0: {gamma_max0:.4f} -> {gamma_max0_new:.4f}")
+        if _own_state:
+            _save_state(state)
 
-    print(f"Post-preselection: {len(filtred_cfgs)} structures after preselection filter")
+    logger.info(f"Post-preselection: {len(filtred_cfgs)} structures selected")
 
     return filtred_cfgs
 
 
 def max_structureselection(filtred_cfgs, max_structures=-1):
-
     if max_structures > 0 and len(filtred_cfgs) > max_structures:
         rnd_selected = numpy.random.choice(len(filtred_cfgs), size=max_structures, replace=False)
         filtred_cfgs = [filtred_cfgs[i] for i in rnd_selected]
-        print("Post-Preselection max-structures count: ", len(filtred_cfgs))
-
+        logger.info(f"Post-preselection max-structures: {len(filtred_cfgs)}")
     return filtred_cfgs
 
 
@@ -165,87 +205,91 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
     try:
         result = launcher.call_evaluator(evaluator_fn, structure, eval_dir)
         if force_threshold is not None and forcesthr_excess(result, threshold=force_threshold):
-            max_f = numpy.max(numpy.abs(numpy.array(result.calc.results['forces'])))
-            return None, f"skipped (max force {max_f:.2f} eV/Å)"
-        return result, "ok"
+            logger.warning(f"struct {i+1}: skipped (max force {max_force(result):.2f} eV/Å exceeds threshold)")
+            return None
+        return result
     except Exception as e:
         eval_dir.mkdir(parents=True, exist_ok=True)
         with open(eval_dir / "eval.log", "a") as _f:
             traceback.print_exc(file=_f)
         try:
-            print(f"[struct {i+1}] espresso.err:\n{(eval_dir / 'espresso.err').read_text()}")
+            logger.error(f"struct {i+1} espresso.err:\n{(eval_dir / 'espresso.err').read_text()}")
             shutil.rmtree(eval_dir / "pwscf.save")
         except Exception:
             pass
-        return None, f"failed: {e}"
+        logger.error(f"struct {i+1}: failed: {e}")
+        return None
 
 
-def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None):
+def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None, stats=None):
     n = len(selected_structures)
     w = len(str(n))
     parallel = launcher.concurrent_eval and n > 1
-    print(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
+    logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
     n_ok = 0
+    gammas_evaluated = []
+    max_forces_evaluated = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=None if parallel else 1) as executor:
         futures = {executor.submit(_eval_one, i, s, evaluator_fn, launcher, force_threshold): i for i, s in enumerate(selected_structures)}
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
             i = futures[future]
-            result, status = future.result()
-            print(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {status}")
+            result = future.result()
+            logger.info(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {'ok' if result is not None else 'skipped/failed'}")
             if result is not None:
                 n_ok += 1
                 save_structures(training_set, [result], append=True)
-    print(f"Evaluated {n_ok}/{n} successfully.")
+                if stats is not None:
+                    gammas_evaluated += [selected_structures[i].info["features"]["MV_grade"]]
+                    max_forces_evaluated += [max_force(result)]
+    logger.info(f"Evaluated {n_ok}/{n} successfully.")
+    if stats is not None:
+        stats["gammas_evaluated"] = gammas_evaluated
+        stats["max_forces_evaluated"] = max_forces_evaluated
     return n_ok
 
 
-def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
-    """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model.
+def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
+    """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model."""
 
-    The flow is: load and clean the candidate pool, select which structures
-    should extend the training set, evaluate those structures with the prepared
-    backend, then retrain the potential in place.
-    """
+    state = _load_state()
 
     # Step 1: load the extrapolative structures emitted by the upstream run.
-    # These dumps are the raw candidate pool from which new training structures
-    # may be chosen.
     candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps, species=args.species)
 
-    # Step 1b: ensure the active set is consistent with the current training set
-    # before any grade is computed. If train.cfg grew past the last training run
-    # the stored invA won't cover the new configs and all downstream grades
-    # (calculate_grade, preselection, select_add) would be evaluated against a
-    # stale baseline.
+    # Step 1b: ensure the active set is consistent with the current training set.
     train_structures = load_structures(args.training_set, args.species)
     update_active_set(args.potential, train_structures)
+    active_set_size = len(read_mvs_state(args.potential).selected_cfgs)
 
-    # Step 2: ensure every candidate carries an extrapolation grade, even when
-    # LAMMPS stopped early and the dump does not already contain the final or correct
-    # extrapolation metadata needed by the downstream selection logic.
+    # Step 2: ensure every candidate carries an extrapolation grade.
     candidate_structures = calculate_grade(args.potential, candidate_structures)
 
-    # Step 3: optionally apply the preselection policy so uninteresting
-    # or disallowed candidates are removed before selection and evaluation stages.
+    # Step 3: optionally apply preselection policy.
+    state["selection_branch"] = "none"
+    state["gammas_candidates"] = [c.info["features"]["MV_grade"] for c in candidate_structures]
     if args.preselection_filtering:
-        candidate_structures = preselected_filter(candidate_structures, args.gamma_tolerance, args.gamma_max, args.gamma_max_cap, extreme_lock_after_ntimes=args.extreme_lock_after_ntimes)
+        candidate_structures = preselected_filter(
+            candidate_structures, args.gamma_tolerance, args.gamma_max, args.gamma_max_cap,
+            extreme_lock_after_ntimes=args.extreme_lock_after_ntimes, state=state)
 
-    # Step 4: optionally cap the surviving pool size. This keeps the next stages
-    # bounded when the extrapolative search produced many eligible structures.
+    # Step 4: optionally cap the surviving pool size.
     if args.max_structures > 0:
         candidate_structures = max_structureselection(candidate_structures, max_structures=args.max_structures)
 
     # Step 5: run the structure-selection step.
     selected_structures, _ = select_add(args.potential, train_structures, candidate_structures)
+    gammas_selected = [s.info["features"]["MV_grade"] for s in selected_structures]
 
-    # Step 6: evaluate the selected structures with the configured backend and
-    # write evaluated structure into the training set for the retraining step.
-    n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold) if selected_structures else 0
-    if not n_ok: print("No configurations selected or evaluated — retraining.")
+    # Step 6: evaluate the selected structures.
+    eval_stats = {}
+    n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold, stats=eval_stats) if selected_structures else 0
+    if not n_ok:
+        logger.info("No configurations selected or evaluated — retraining.")
 
     # Step 7: retrain the potential on the updated training set.
     launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")
-
     os.replace(f"tmp_{args.potential}", args.potential)
-    print(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
+    logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
+    _record_state(state, len(train_structures), len(selected_structures), gammas_selected, n_ok, active_set_size, eval_stats)
+    _save_state(state)
