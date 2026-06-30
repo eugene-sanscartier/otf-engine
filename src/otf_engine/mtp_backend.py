@@ -411,8 +411,28 @@ def train(potential, training_structs: list, save_to: str, iteration_limit: int 
             sel_weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
     else:
         sel_weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
+    update_active_set(save_to, training_structs, weights=sel_weights)
 
-    mv = MaxVol(n, threshold=1.001)
-    train_rows = [_info_rows(calc_new.potential, atoms, calc_new, sel_weights) for atoms in training_structs]
+
+def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh") -> None:
+    """Rebuild the MaxVol active set (A, invA) in-place from the training set.
+
+    Recomputes the selection matrices from scratch using the current MTP
+    coefficients and the given training structures, then writes the updated
+    #MVS_v1.1 section back into *potential*.  The MTP parameters themselves
+    are not changed.
+
+    Use this to resync the active set when train.cfg and potential.almtp have
+    diverged (training_stale), or after any operation that modifies train.cfg
+    without going through the full train() path.
+    """
+    calc = MTPCalculator(potential)
+    if weights is None:
+        try:
+            weights = read_mvs_state(potential).weights
+        except RuntimeError:
+            weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
+    mv = MaxVol(calc.potential.get_coeff_count(), threshold=threshold)
+    train_rows = [_info_rows(calc.potential, atoms, calc, weights) for atoms in training_structs]
     mv.select_candidates(train_rows, pool_id=_POOL_TRAIN)
     write_mvs_state(save_to, _build_saved_mvs_state(sel_weights, mv, training_structs, _POOL_TRAIN))

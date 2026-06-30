@@ -11,7 +11,7 @@ import ase
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-from .mtp_backend import calculate_grade, select_add
+from .mtp_backend import calculate_grade, select_add, update_active_set
 from .cycles import current_cycle_dir
 from .launchers import Launcher
 
@@ -215,6 +215,14 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
     # may be chosen.
     candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps, species=args.species)
 
+    # Step 1b: ensure the active set is consistent with the current training set
+    # before any grade is computed. If train.cfg grew past the last training run
+    # the stored invA won't cover the new configs and all downstream grades
+    # (calculate_grade, preselection, select_add) would be evaluated against a
+    # stale baseline.
+    train_structures = load_structures(args.training_set, args.species)
+    update_active_set(args.potential, train_structures)
+
     # Step 2: ensure every candidate carries an extrapolation grade, even when
     # LAMMPS stopped early and the dump does not already contain the final or correct
     # extrapolation metadata needed by the downstream selection logic.
@@ -231,7 +239,6 @@ def main(args, launcher:Launcher=None, mlp_command=None, evaluator_fn=None):
         candidate_structures = max_structureselection(candidate_structures, max_structures=args.max_structures)
 
     # Step 5: run the structure-selection step.
-    train_structures = load_structures(args.training_set, args.species)
     selected_structures, _ = select_add(args.potential, train_structures, candidate_structures)
 
     # Step 6: evaluate the selected structures with the configured backend and
