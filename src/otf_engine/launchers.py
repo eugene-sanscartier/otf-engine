@@ -67,7 +67,7 @@ def _env_for_fork(size: int, env: dict) -> dict:
     base["OMPI_UNIVERSE_SIZE"] = str(size)
     base["OMPI_COMM_WORLD_SIZE"] = str(size)
     base["PMI_SIZE"] = str(size)
-    
+
     return base
 
 
@@ -107,14 +107,14 @@ _stime_parser = argparse.ArgumentParser(add_help=False)
 _stime_parser.add_argument("--time", "-t")
 
 
-def _seconds_to_slurm_time(s: float) -> str:
+def _seconds_to_hms(s: float) -> str:
     s = int(s)
     h, m, sec = s // 3600, (s % 3600) // 60, s % 60
 
     return f"{h:02d}:{m:02d}:{sec:02d}"
 
 
-def _slurm_time_to_seconds(t: str) -> float | None:
+def _hms_to_seconds(t: str) -> float | None:
     """Parse a Slurm time string (MM, MM:SS, HH:MM:SS, D-HH:MM:SS) into seconds."""
     try:
         t = t.strip()
@@ -133,10 +133,10 @@ def _slurm_time_to_seconds(t: str) -> float | None:
         return None
 
 
-def _parse_initial_time_s(batch_args: str) -> float | None:
+def _parse_time_to_s(batch_args: str) -> float | None:
     parsed, _ = _stime_parser.parse_known_args(shlex.split(batch_args))
 
-    return _slurm_time_to_seconds(parsed.time) if parsed.time else None
+    return _hms_to_seconds(parsed.time) if parsed.time else None
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,12 @@ def _parse_initial_time_s(batch_args: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 _TIMING_WINDOW = 20
-_TIMING_SAFETY_FACTOR = 2.0
+_TIMING_SAFETY_FACTOR = 1.25
+_TIMING_TIMEOUT_FACTOR = 2.0
+_TIMING_EARLY_TIMEOUT_FACTOR = 5.0
+_TIMING_EARLY_CYCLES = 3
+_TIMING_MAX_S = 7 * 24 * 3600
+_TIMING_RIDGE_ALPHA = 1e-3  # multiplied by mean(sizes²) → scale-relative L2 penalty
 
 
 class TimingState:
@@ -211,19 +216,29 @@ class TimingState:
             if not times:
                 return self._initial_time_s
 
+            if not obs[-1]["timed_out"]:
+                factor = _TIMING_SAFETY_FACTOR
+            elif len(obs) <= _TIMING_EARLY_CYCLES:
+                factor = _TIMING_EARLY_TIMEOUT_FACTOR
+            else:
+                factor = _TIMING_TIMEOUT_FACTOR
+
             if len(times) < 2 or next_size is None:
-                return max(times) * _TIMING_SAFETY_FACTOR
+                return min(max(times) * factor, _TIMING_MAX_S)
+
             valid = [(o["size"], o["allocated"] if o["timed_out"] and o["allocated"] is not None else o["elapsed"]) for o in obs if o["size"] is not None and (not o["timed_out"] or o["allocated"] is not None)]
-
-            if len(valid) < 2:
-                return max(times) * _TIMING_SAFETY_FACTOR
-
             sizes = numpy.array([v[0] for v in valid], dtype=float)
             t_vals = numpy.array([v[1] for v in valid], dtype=float)
-            a, b = numpy.polyfit(sizes, t_vals, 1)
-            estimated = max(float(a * next_size + b), max(times))
 
-            return estimated * _TIMING_SAFETY_FACTOR
+            if len(valid) < 2 or numpy.unique(sizes).size < 2:
+                return min(max(times) * factor, _TIMING_MAX_S)
+
+            X = numpy.column_stack([sizes, numpy.ones_like(sizes)])
+            lam = _TIMING_RIDGE_ALPHA * float(numpy.mean(sizes ** 2))
+            w = numpy.linalg.solve(X.T @ X + lam * numpy.eye(2), X.T @ t_vals)
+            estimated = max(float(w[0] * next_size + w[1]), 0.0)
+
+            return min(estimated * factor, _TIMING_MAX_S)
 
     def to_dict(self) -> dict:
         with self._lock:
@@ -467,7 +482,7 @@ class SlurmLauncher(Launcher):
         self._concurrent_eval = concurrent_eval
         self._runner_exec = runner_exec
         self.runner_args = runner_args
-        self._initial_time_s = _parse_initial_time_s(batch_args)
+        self._initial_time_s = _parse_time_to_s(batch_args)
 
     @property
     def concurrent_eval(self) -> bool:
@@ -488,7 +503,7 @@ class SlurmLauncher(Launcher):
 
         if time_limit_s is not None:
             _, batch_args = _stime_parser.parse_known_args(batch_args)
-            batch_args += [f"--time={_seconds_to_slurm_time(time_limit_s)}"]
+            batch_args += [f"--time={_seconds_to_hms(time_limit_s)}"]
 
         batch_parts += batch_args
         return _join(batch_parts)
