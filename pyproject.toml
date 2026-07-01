@@ -25,6 +25,7 @@ dependencies = [
   "ase",
   "numpy",
   "scipy",
+  "wrapt",
 ]
 
 [project.optional-dependencies]
