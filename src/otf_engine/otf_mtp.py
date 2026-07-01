@@ -15,7 +15,7 @@ from .io_cfg import read_cfg, write_cfg
 from .mtp_backend import calculate_grade, select_add, update_active_set
 from .almtp_io import read_mvs_state
 from .cycles import current_cycle_dir
-from .launchers import Launcher
+from .launchers import Launcher, JobTimedOut
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +209,9 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
             logger.warning(f"struct {i+1}: skipped (max force {max_force(result):.2f} eV/Å exceeds threshold)")
             return None
         return result
+    except JobTimedOut:
+        logger.warning(f"struct {i+1}: timed out")
+        return None
     except Exception as e:
         eval_dir.mkdir(parents=True, exist_ok=True)
         with open(eval_dir / "eval.log", "a") as _f:

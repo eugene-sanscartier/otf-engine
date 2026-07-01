@@ -16,6 +16,10 @@ import numpy
 
 logger = logging.getLogger(__name__)
 
+
+class JobTimedOut(subprocess.CalledProcessError):
+    """Raised by SlurmLauncher when sbatch exits non-zero due to a Slurm TIME LIMIT."""
+
 # ---------------------------------------------------------------------------
 # Environment utilities
 # ---------------------------------------------------------------------------
@@ -137,6 +141,13 @@ def _parse_time_to_s(batch_args: str) -> float | None:
     parsed, _ = _stime_parser.parse_known_args(shlex.split(batch_args))
 
     return _hms_to_seconds(parsed.time) if parsed.time else None
+
+
+def _is_slurm_timeout(log_path) -> bool:
+    try:
+        return any(all(cue in line for cue in ("CANCELLED AT", "DUE TO TIME LIMIT", "TIME_LIMIT")) for line in Path(log_path).read_text("utf-8", errors="ignore").splitlines())
+    except OSError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -276,20 +287,21 @@ class Launcher(ABC):
         if time_s:
             logger.info(f"Training time estimate: {time_s:.0f}s for {training_set_size} structures")
         t0 = time.monotonic()
-        exc_raised = False
+        exc = None
 
         try:
             self._run_impl(command, log_file, parallel_eval, time_limit_s=time_s)
-        except Exception:
-            exc_raised = True
+        except Exception as e:
+            exc = e
             raise
         finally:
             elapsed = time.monotonic() - t0
             if self.timing:
-                timed_out = exc_raised and time_s is not None and elapsed >= 0.85 * time_s
+                timed_out = isinstance(exc, JobTimedOut)
                 if timed_out:
-                    logger.warning(f"Training likely timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
-                self.timing.record_train(elapsed, training_set_size, timed_out, time_s)
+                    logger.warning(f"Training timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
+                if not exc or timed_out:
+                    self.timing.record_train(elapsed, training_set_size, timed_out, time_s)
 
     @abstractmethod
     def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
@@ -310,21 +322,21 @@ class Launcher(ABC):
         if time_s:
             logger.info(f"Eval time estimate: {time_s:.0f}s per structure")
         t0 = time.monotonic()
-        exc_raised = False
+        exc = None
 
         try:
             return self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
-        except Exception:
-            exc_raised = True
+        except Exception as e:
+            exc = e
             raise
         finally:
             elapsed = time.monotonic() - t0
             if self.timing:
-                timed_out = exc_raised and time_s is not None and elapsed >= 0.85 * time_s
-
+                timed_out = isinstance(exc, JobTimedOut)
                 if timed_out:
-                    logger.warning(f"Eval likely timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
-                self.timing.record_eval(elapsed, timed_out, time_s)
+                    logger.warning(f"Eval timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
+                if not exc or timed_out:
+                    self.timing.record_eval(elapsed, timed_out, time_s)
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         """Default evaluator dispatch: cd into eval_dir, call evaluator_fn directly."""
@@ -505,7 +517,11 @@ class SlurmLauncher(Launcher):
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
         submit_cmd = f'{self.batch_prefix(os.getcwd(), log_file, parallel_eval, time_limit_s=time_limit_s)} --wrap="{cmd}"'
         logger.info(f"running: {submit_cmd}")
-        subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
+        try:
+            subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
+        except subprocess.CalledProcessError as exc:
+            if _is_slurm_timeout(log_file): raise JobTimedOut(exc.returncode, exc.cmd) from exc
+            raise
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         import ase.io.extxyz
@@ -516,6 +532,10 @@ class SlurmLauncher(Launcher):
         eval_cmd = _join([sys.executable, evaluator_py, "input_structure.extxyz", "output_structure.extxyz"])
         submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log", time_limit_s=time_limit_s)} --wrap="{eval_cmd}"'
         logger.info(f"running (eval): {submit_cmd}")
-        subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
+        try:
+            subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
+        except subprocess.CalledProcessError as exc:
+            if _is_slurm_timeout(eval_dir / "eval.log"): raise JobTimedOut(exc.returncode, exc.cmd) from exc
+            raise
         with open(os.path.join(eval_dir, "output_structure.extxyz")) as f:
             return next(ase.io.extxyz.read_extxyz(f))
