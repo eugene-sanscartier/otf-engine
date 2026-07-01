@@ -175,10 +175,9 @@ class TimingState:
 
     def record_eval(self, elapsed_s: float, timed_out: bool, allocated_s: float | None):
         with self._lock:
-            d = self._d.setdefault("eval", {})
-            d["elapsed"] = (d.get("elapsed", []) + [float(elapsed_s)])[-_TIMING_WINDOW:]
-            d["timed_out"] = (d.get("timed_out", []) + [bool(timed_out)])[-_TIMING_WINDOW:]
-            d["allocated"] = (d.get("allocated", []) + [float(allocated_s) if allocated_s is not None else None])[-_TIMING_WINDOW:]
+            obs = self._d.setdefault("eval", {}).get("observations", [])
+            obs = (obs + [{"elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-_TIMING_WINDOW:]
+            self._d["eval"]["observations"] = obs
             prev_max = self._last_eval.get("eval_time_s") or 0.0
             self._last_eval = {"eval_time_s": max(prev_max, elapsed_s), "eval_time_alloc_s": allocated_s}
 
@@ -197,51 +196,41 @@ class TimingState:
 
     def estimate_eval(self) -> float | None:
         with self._lock:
-            d = self._d.get("eval", {})
-            elapsed_list = d.get("elapsed", [])
-            timed_out_list = d.get("timed_out", [])
-            allocated_list = d.get("allocated", [])
-            times = [a if to and a is not None else e for e, to, a in zip(elapsed_list, timed_out_list, allocated_list) if not to or a is not None]
-
-            if not times:
+            obs = self._d.get("eval", {}).get("observations", [])
+            if not obs:
                 return self._initial_time_s
 
-            factor = _TIMING_TIMEOUT_FACTOR if any(timed_out_list) else _TIMING_SAFETY_FACTOR
-            return numpy.mean(times) * factor
+            tf = _TIMING_TIMEOUT_FACTOR if any(o["timed_out"] for o in obs) else 1.0
+            _t = lambda o: o["allocated"] * tf if o["timed_out"] else o["elapsed"]
+            return numpy.mean([_t(o) for o in obs]) * _TIMING_SAFETY_FACTOR
 
     def estimate_train(self, next_size: int | None) -> float | None:
         with self._lock:
             obs = self._d.get("train", {}).get("observations", [])
-            times = [o["allocated"] if o["timed_out"] and o["allocated"] is not None else o["elapsed"] for o in obs if not o["timed_out"] or o["allocated"] is not None]
-
-            if not times:
+            if not obs:
                 return self._initial_time_s
 
-            if not obs[-1]["timed_out"]:
-                factor = _TIMING_SAFETY_FACTOR
-            elif len(obs) <= _TIMING_EARLY_CYCLES:
-                factor = _TIMING_EARLY_TIMEOUT_FACTOR
-            else:
-                factor = _TIMING_TIMEOUT_FACTOR
+            tf = 1.0 if not obs[-1]["timed_out"] else (_TIMING_EARLY_TIMEOUT_FACTOR if len(obs) <= _TIMING_EARLY_CYCLES else _TIMING_TIMEOUT_FACTOR)
+            _t = lambda o: o["allocated"] * tf if o["timed_out"] else o["elapsed"]
+            times = [_t(o) for o in obs]
 
             _base = lambda t: max(t) if len(t) <= _TIMING_EARLY_CYCLES else numpy.mean(t)
 
             if len(times) < 2 or next_size is None:
-                return min(_base(times) * factor, _TIMING_MAX_S)
+                return min(_base(times) * _TIMING_SAFETY_FACTOR, _TIMING_MAX_S)
 
-            valid = [(o["size"], o["allocated"] if o["timed_out"] and o["allocated"] is not None else o["elapsed"]) for o in obs if o["size"] is not None and (not o["timed_out"] or o["allocated"] is not None)]
+            valid = [(o["size"], _t(o)) for o in obs if o["size"] is not None]
             sizes = numpy.array([v[0] for v in valid], dtype=float)
             t_vals = numpy.array([v[1] for v in valid], dtype=float)
 
             if len(valid) < 2 or numpy.unique(sizes).size < 2:
-                return min(_base(times) * factor, _TIMING_MAX_S)
+                return min(_base(times) * _TIMING_SAFETY_FACTOR, _TIMING_MAX_S)
 
             X = numpy.column_stack([sizes, numpy.ones_like(sizes)])
             lam = _TIMING_RIDGE_ALPHA * numpy.mean(sizes ** 2)
             w = numpy.linalg.solve(X.T @ X + lam * numpy.eye(2), X.T @ t_vals)
-            estimated = max(w[0] * next_size + w[1], 0.0)
 
-            return min(estimated * factor, _TIMING_MAX_S)
+            return min(max(w[0] * next_size + w[1], 0.0) * _TIMING_SAFETY_FACTOR, _TIMING_MAX_S)
 
     def to_dict(self) -> dict:
         with self._lock:
