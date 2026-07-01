@@ -206,7 +206,8 @@ class TimingState:
             if not times:
                 return self._initial_time_s
 
-            return max(times) * _TIMING_SAFETY_FACTOR
+            factor = _TIMING_TIMEOUT_FACTOR if any(timed_out_list) else _TIMING_SAFETY_FACTOR
+            return numpy.mean(times) * factor
 
     def estimate_train(self, next_size: int | None) -> float | None:
         with self._lock:
@@ -223,20 +224,22 @@ class TimingState:
             else:
                 factor = _TIMING_TIMEOUT_FACTOR
 
+            _base = lambda t: max(t) if len(t) <= _TIMING_EARLY_CYCLES else numpy.mean(t)
+
             if len(times) < 2 or next_size is None:
-                return min(max(times) * factor, _TIMING_MAX_S)
+                return min(_base(times) * factor, _TIMING_MAX_S)
 
             valid = [(o["size"], o["allocated"] if o["timed_out"] and o["allocated"] is not None else o["elapsed"]) for o in obs if o["size"] is not None and (not o["timed_out"] or o["allocated"] is not None)]
             sizes = numpy.array([v[0] for v in valid], dtype=float)
             t_vals = numpy.array([v[1] for v in valid], dtype=float)
 
             if len(valid) < 2 or numpy.unique(sizes).size < 2:
-                return min(max(times) * factor, _TIMING_MAX_S)
+                return min(_base(times) * factor, _TIMING_MAX_S)
 
             X = numpy.column_stack([sizes, numpy.ones_like(sizes)])
-            lam = _TIMING_RIDGE_ALPHA * float(numpy.mean(sizes ** 2))
+            lam = _TIMING_RIDGE_ALPHA * numpy.mean(sizes ** 2)
             w = numpy.linalg.solve(X.T @ X + lam * numpy.eye(2), X.T @ t_vals)
-            estimated = max(float(w[0] * next_size + w[1]), 0.0)
+            estimated = max(w[0] * next_size + w[1], 0.0)
 
             return min(estimated * factor, _TIMING_MAX_S)
 
