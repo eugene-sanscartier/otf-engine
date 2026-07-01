@@ -6,12 +6,12 @@ import os
 import sys
 import shlex
 import time
-import threading
 import argparse
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from wrapt import synchronized
 import numpy
 
 logger = logging.getLogger(__name__)
@@ -143,98 +143,98 @@ def _parse_time_to_s(batch_args: str) -> float | None:
 # TimingState
 # ---------------------------------------------------------------------------
 
-_TIMING_WINDOW = 20
-_TIMING_SAFETY_FACTOR = 1.25
-_TIMING_TIMEOUT_FACTOR = 2.0
-_TIMING_EARLY_TIMEOUT_FACTOR = 5.0
-_TIMING_EARLY_CYCLES = 3
-_TIMING_MAX_S = 7 * 24 * 3600
-_TIMING_RIDGE_ALPHA = 1e-3  # multiplied by mean(sizes²) → scale-relative L2 penalty
-
 
 class TimingState:
-    """Thread-safe timing observation store with adaptive time estimates.
+    """Thread-safe timing observation store with adaptive time estimates."""
 
-    Tracks per-structure eval times and (size, time) training observations.
-    Distinguishes between jobs that timed out (ran out of allocated time) and
-    those that completed — timeouts use the allocated time as a lower bound on
-    the actual time needed, so estimates naturally grow until jobs succeed.
-    """
+    window = 20
+    safety = 1.25
+    timeout_f = 2.0
+    early_f = 5.0
+    early_n = 3
+    max_s = 7 * 24 * 3600
+    ridge_alpha = 1e-3
 
     def __init__(self, data: dict, initial_time_s: float | None = None, on_record=None):
         self._d = data
         self._initial_time_s = initial_time_s
         self._on_record = on_record
-        self._lock = threading.Lock()
         self._last_eval: dict = {}
         self._last_train: dict = {}
+        self._refresh()
 
     @classmethod
     def load(cls, data: dict, initial_time_s: float | None = None, on_record=None) -> TimingState:
         return cls(dict(data), initial_time_s=initial_time_s, on_record=on_record)
 
+    @synchronized
     def record_eval(self, elapsed_s: float, timed_out: bool, allocated_s: float | None):
-        with self._lock:
-            obs = self._d.setdefault("eval", {}).get("observations", [])
-            obs = (obs + [{"elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-_TIMING_WINDOW:]
-            self._d["eval"]["observations"] = obs
-            prev_max = self._last_eval.get("eval_time_s") or 0.0
-            self._last_eval = {"eval_time_s": max(prev_max, elapsed_s), "eval_time_alloc_s": allocated_s}
-
+        obs = self._d.setdefault("eval", {}).get("observations", [])
+        obs = (obs + [{"elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-self.window:]
+        self._d["eval"]["observations"] = obs
+        prev_max = self._last_eval.get("eval_time_s") or 0.0
+        self._last_eval = {"eval_time_s": max(prev_max, elapsed_s), "eval_time_alloc_s": allocated_s}
+        self._refresh()
         if self._on_record:
             self._on_record(self.to_dict())
 
+    @synchronized
     def record_train(self, elapsed_s: float, training_set_size: int | None, timed_out: bool, allocated_s: float | None):
-        with self._lock:
-            obs = self._d.setdefault("train", {}).get("observations", [])
-            obs = (obs + [{"size": training_set_size, "elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-_TIMING_WINDOW:]
-            self._d["train"]["observations"] = obs
-            self._last_train = {"train_time_s": elapsed_s, "train_time_alloc_s": allocated_s}
-
+        obs = self._d.setdefault("train", {}).get("observations", [])
+        obs = (obs + [{"size": training_set_size, "elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-self.window:]
+        self._d["train"]["observations"] = obs
+        self._last_train = {"train_time_s": elapsed_s, "train_time_alloc_s": allocated_s}
+        self._refresh()
         if self._on_record:
             self._on_record(self.to_dict())
 
+    @synchronized
     def estimate_eval(self) -> float | None:
-        with self._lock:
-            obs = self._d.get("eval", {}).get("observations", [])
-            if not obs:
-                return self._initial_time_s
+        if self._eval_times is None:
+            return self._initial_time_s
+        return numpy.mean(self._eval_times) * self.safety
 
-            tf = _TIMING_TIMEOUT_FACTOR if any(o["timed_out"] for o in obs) else 1.0
-            _t = lambda o: o["allocated"] * tf if o["timed_out"] else o["elapsed"]
-            return numpy.mean([_t(o) for o in obs]) * _TIMING_SAFETY_FACTOR
-
+    @synchronized
     def estimate_train(self, next_size: int | None) -> float | None:
-        with self._lock:
-            obs = self._d.get("train", {}).get("observations", [])
-            if not obs:
-                return self._initial_time_s
+        if self._train_times is None:
+            return self._initial_time_s
+        base = max(self._train_times) if len(self._train_times) <= self.early_n else numpy.mean(self._train_times)
+        fallback = min(base * self.safety, self.max_s)
+        if self._train_sizes is None or next_size is None or numpy.unique(self._train_sizes).size < 2:
+            return fallback
+        X = numpy.column_stack([self._train_sizes, numpy.ones_like(self._train_sizes)])
+        lam = self.ridge_alpha * numpy.mean(self._train_sizes**2)
+        w = numpy.linalg.solve(X.T @ X + lam * numpy.eye(2), X.T @ self._train_t_vals)
+        return min(max(w[0] * next_size + w[1], 0.0) * self.safety, self.max_s)
 
-            tf = 1.0 if not obs[-1]["timed_out"] else (_TIMING_EARLY_TIMEOUT_FACTOR if len(obs) <= _TIMING_EARLY_CYCLES else _TIMING_TIMEOUT_FACTOR)
-            _t = lambda o: o["allocated"] * tf if o["timed_out"] else o["elapsed"]
-            times = [_t(o) for o in obs]
-
-            _base = lambda t: max(t) if len(t) <= _TIMING_EARLY_CYCLES else numpy.mean(t)
-
-            if len(times) < 2 or next_size is None:
-                return min(_base(times) * _TIMING_SAFETY_FACTOR, _TIMING_MAX_S)
-
-            valid = [(o["size"], _t(o)) for o in obs if o["size"] is not None]
-            sizes = numpy.array([v[0] for v in valid], dtype=float)
-            t_vals = numpy.array([v[1] for v in valid], dtype=float)
-
-            if len(valid) < 2 or numpy.unique(sizes).size < 2:
-                return min(_base(times) * _TIMING_SAFETY_FACTOR, _TIMING_MAX_S)
-
-            X = numpy.column_stack([sizes, numpy.ones_like(sizes)])
-            lam = _TIMING_RIDGE_ALPHA * numpy.mean(sizes ** 2)
-            w = numpy.linalg.solve(X.T @ X + lam * numpy.eye(2), X.T @ t_vals)
-
-            return min(max(w[0] * next_size + w[1], 0.0) * _TIMING_SAFETY_FACTOR, _TIMING_MAX_S)
-
+    @synchronized
     def to_dict(self) -> dict:
-        with self._lock:
-            return dict(self._d)
+        return dict(self._d)
+
+    def _refresh(self):
+        obs = self._d.get("eval", {}).get("observations", [])
+        if obs:
+            tf = self.timeout_f if any(o["timed_out"] for o in obs) else 1.0
+            self._eval_times = [o["allocated"] * tf if o["timed_out"] else o["elapsed"] for o in obs]
+        else:
+            self._eval_times = None
+
+        obs = self._d.get("train", {}).get("observations", [])
+        if not obs:
+            self._train_times = self._train_sizes = self._train_t_vals = None
+            return
+
+        tf = 1.0 if not obs[-1]["timed_out"] else (self.early_f if len(obs) <= self.early_n else self.timeout_f)
+        self._train_times = [o["allocated"] * tf if o["timed_out"] else o["elapsed"] for o in obs]
+
+        sized = [o for o in obs if o["size"] is not None]
+        if len(sized) < 2:
+            self._train_sizes = self._train_t_vals = None
+            return
+
+        self._train_sizes = numpy.array([o["size"] for o in sized], dtype=float)
+        self._train_t_vals = numpy.array([o["allocated"] * tf if o["timed_out"] else o["elapsed"] for o in sized], dtype=float)
+
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +254,7 @@ class Launcher(ABC):
 
     def configure_timing(self, state: dict, save_state_fn) -> None:
         """Load timing from *state* and wire auto-save so timeouts are always persisted."""
+
         def _on_record(timing_dict):
             state["timing"] = timing_dict
             save_state_fn(state)
