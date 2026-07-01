@@ -1,13 +1,20 @@
 """Execution backends for otf-engine: mpirun (nested), fork (direct), and slurm (sbatch --wait)."""
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import shlex
+import time
+import threading
 import argparse
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
+
+import numpy
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Environment utilities
@@ -60,6 +67,7 @@ def _env_for_fork(size: int, env: dict) -> dict:
     base["OMPI_UNIVERSE_SIZE"] = str(size)
     base["OMPI_COMM_WORLD_SIZE"] = str(size)
     base["PMI_SIZE"] = str(size)
+    
     return base
 
 
@@ -77,6 +85,7 @@ def _default_n_procs() -> int:
                 return int(val)
             except ValueError:
                 pass
+
     return _physical_cpu_count()
 
 
@@ -84,11 +93,142 @@ def _join(parts: list[str]) -> str:
     return " ".join(parts)
 
 
-# Used to strips task/node parallelism options from batch_args when parallel_eval=False for slurm sbatch.
+# Used to strip task/node parallelism options from batch_args when parallel_eval=False for slurm sbatch.
 _sbatch_parser = argparse.ArgumentParser(add_help=False)
 _sbatch_parser.add_argument("--ntasks", "-n")
 _sbatch_parser.add_argument("--ntasks-per-node")
 _sbatch_parser.add_argument("--nodes", "-N")
+
+# ---------------------------------------------------------------------------
+# Slurm time utilities
+# ---------------------------------------------------------------------------
+
+_stime_parser = argparse.ArgumentParser(add_help=False)
+_stime_parser.add_argument("--time", "-t")
+
+
+def _seconds_to_slurm_time(s: float) -> str:
+    s = int(s)
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+
+    return f"{h:02d}:{m:02d}:{sec:02d}"
+
+
+def _slurm_time_to_seconds(t: str) -> float | None:
+    """Parse a Slurm time string (MM, MM:SS, HH:MM:SS, D-HH:MM:SS) into seconds."""
+    try:
+        t = t.strip()
+        days = 0
+        if "-" in t:
+            d, t = t.split("-", 1)
+            days = int(d)
+        parts = t.split(":")
+        if len(parts) == 1:
+            return float(days * 86400 + int(parts[0]) * 60)
+        elif len(parts) == 2:
+            return float(days * 86400 + int(parts[0]) * 3600 + int(parts[1]) * 60)
+        else:
+            return float(days * 86400 + int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_initial_time_s(batch_args: str) -> float | None:
+    parsed, _ = _stime_parser.parse_known_args(shlex.split(batch_args))
+
+    return _slurm_time_to_seconds(parsed.time) if parsed.time else None
+
+
+# ---------------------------------------------------------------------------
+# TimingState
+# ---------------------------------------------------------------------------
+
+_TIMING_WINDOW = 20
+_TIMING_SAFETY_FACTOR = 2.0
+
+
+class TimingState:
+    """Thread-safe timing observation store with adaptive time estimates.
+
+    Tracks per-structure eval times and (size, time) training observations.
+    Distinguishes between jobs that timed out (ran out of allocated time) and
+    those that completed — timeouts use the allocated time as a lower bound on
+    the actual time needed, so estimates naturally grow until jobs succeed.
+    """
+
+    def __init__(self, data: dict, initial_time_s: float | None = None, on_record=None):
+        self._d = data
+        self._initial_time_s = initial_time_s
+        self._on_record = on_record
+        self._lock = threading.Lock()
+        self._last_eval: dict = {}
+        self._last_train: dict = {}
+
+    @classmethod
+    def load(cls, data: dict, initial_time_s: float | None = None, on_record=None) -> TimingState:
+        return cls(dict(data), initial_time_s=initial_time_s, on_record=on_record)
+
+    def record_eval(self, elapsed_s: float, timed_out: bool, allocated_s: float | None):
+        with self._lock:
+            d = self._d.setdefault("eval", {})
+            d["elapsed"] = (d.get("elapsed", []) + [float(elapsed_s)])[-_TIMING_WINDOW:]
+            d["timed_out"] = (d.get("timed_out", []) + [bool(timed_out)])[-_TIMING_WINDOW:]
+            d["allocated"] = (d.get("allocated", []) + [float(allocated_s) if allocated_s is not None else None])[-_TIMING_WINDOW:]
+            prev_max = self._last_eval.get("eval_time_s") or 0.0
+            self._last_eval = {"eval_time_s": max(prev_max, elapsed_s), "eval_time_alloc_s": allocated_s}
+
+        if self._on_record:
+            self._on_record(self.to_dict())
+
+    def record_train(self, elapsed_s: float, training_set_size: int | None, timed_out: bool, allocated_s: float | None):
+        with self._lock:
+            obs = self._d.setdefault("train", {}).get("observations", [])
+            obs = (obs + [{"size": training_set_size, "elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-_TIMING_WINDOW:]
+            self._d["train"]["observations"] = obs
+            self._last_train = {"train_time_s": elapsed_s, "train_time_alloc_s": allocated_s}
+
+        if self._on_record:
+            self._on_record(self.to_dict())
+
+    def estimate_eval(self) -> float | None:
+        with self._lock:
+            d = self._d.get("eval", {})
+            elapsed_list = d.get("elapsed", [])
+            timed_out_list = d.get("timed_out", [])
+            allocated_list = d.get("allocated", [])
+            times = [a if to and a is not None else e for e, to, a in zip(elapsed_list, timed_out_list, allocated_list) if not to or a is not None]
+
+            if not times:
+                return self._initial_time_s
+
+            return max(times) * _TIMING_SAFETY_FACTOR
+
+    def estimate_train(self, next_size: int | None) -> float | None:
+        with self._lock:
+            obs = self._d.get("train", {}).get("observations", [])
+            times = [o["allocated"] if o["timed_out"] and o["allocated"] is not None else o["elapsed"] for o in obs if not o["timed_out"] or o["allocated"] is not None]
+
+            if not times:
+                return self._initial_time_s
+
+            if len(times) < 2 or next_size is None:
+                return max(times) * _TIMING_SAFETY_FACTOR
+            valid = [(o["size"], o["allocated"] if o["timed_out"] and o["allocated"] is not None else o["elapsed"]) for o in obs if o["size"] is not None and (not o["timed_out"] or o["allocated"] is not None)]
+
+            if len(valid) < 2:
+                return max(times) * _TIMING_SAFETY_FACTOR
+
+            sizes = numpy.array([v[0] for v in valid], dtype=float)
+            t_vals = numpy.array([v[1] for v in valid], dtype=float)
+            a, b = numpy.polyfit(sizes, t_vals, 1)
+            estimated = max(float(a * next_size + b), max(times))
+
+            return estimated * _TIMING_SAFETY_FACTOR
+
+    def to_dict(self) -> dict:
+        with self._lock:
+            return dict(self._d)
+
 
 # ---------------------------------------------------------------------------
 # Launcher ABC
@@ -98,23 +238,54 @@ _sbatch_parser.add_argument("--nodes", "-N")
 class Launcher(ABC):
     """Abstract execution backend.
 
-    Subclasses implement how mlp binary calls are launched (mpirun, fork,
-    sbatch, …) and optionally how the evaluator function is dispatched.
+    Subclasses implement ``_run_impl()`` and optionally ``_call_evaluator_impl()``.
+    The public ``run()`` and ``call_evaluator()`` are concrete template methods that
+    handle timing instrumentation via an optional ``TimingState``.
     """
 
-    @abstractmethod
-    def run(self, command: str, log_file: str, parallel_eval: bool = True) -> None:
-        """Execute *command* (f-string of ``mlp binary + subcommand + args``,
-        without any mpirun/srun prefix).
+    timing: TimingState | None = None
+
+    def configure_timing(self, state: dict, save_state_fn) -> None:
+        """Load timing from *state* and wire auto-save so timeouts are always persisted."""
+        def _on_record(timing_dict):
+            state["timing"] = timing_dict
+            save_state_fn(state)
+
+        self.timing = TimingState.load(state.get("timing", {}), initial_time_s=getattr(self, "_initial_time_s", None), on_record=_on_record)
+
+    def run(self, command: str, log_file: str, parallel_eval: bool = True, training_set_size: int | None = None) -> None:
+        """Execute *command* with optional timing instrumentation.
 
         Parameters
         ----------
-        command:  Command string passed to the shell, e.g.
-                  ``f"{mlp} calculate_grade {potential} ..."``
-        log_file: Append combined stdout/stderr here.
-        parallel_eval:  When True, use full parallelism; when False, restrict
-                        to a single process (e.g. ``-n 1``).
+        command:            mlp binary + subcommand + args (no runner prefix).
+        log_file:           Append combined stdout/stderr here.
+        parallel_eval:      When True, use full parallelism; False restricts to one process.
+        training_set_size:  Number of training structures — used for time estimation.
         """
+        time_s = self.timing.estimate_train(training_set_size) if self.timing else None
+
+        if time_s:
+            logger.info(f"Training time estimate: {time_s:.0f}s for {training_set_size} structures")
+        t0 = time.monotonic()
+        exc_raised = False
+
+        try:
+            self._run_impl(command, log_file, parallel_eval, time_limit_s=time_s)
+        except Exception:
+            exc_raised = True
+            raise
+        finally:
+            elapsed = time.monotonic() - t0
+            if self.timing:
+                timed_out = exc_raised and time_s is not None and elapsed >= 0.85 * time_s
+                if timed_out:
+                    logger.warning(f"Training likely timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
+                self.timing.record_train(elapsed, training_set_size, timed_out, time_s)
+
+    @abstractmethod
+    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
+        """Backend-specific command execution."""
 
     def command_prefix(self, _parallel_eval: bool = True) -> str:
         """Full command prefix injected as ``COMMAND_PREFIX`` before calling the evaluator."""
@@ -125,10 +296,34 @@ class Launcher(ABC):
         return ""
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
-        """Evaluate *structure* inside *eval_dir* and return the result."""
+        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation."""
+        time_s = self.timing.estimate_eval() if self.timing else None
+
+        if time_s:
+            logger.info(f"Eval time estimate: {time_s:.0f}s per structure")
+        t0 = time.monotonic()
+        exc_raised = False
+
+        try:
+            return self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
+        except Exception:
+            exc_raised = True
+            raise
+        finally:
+            elapsed = time.monotonic() - t0
+            if self.timing:
+                timed_out = exc_raised and time_s is not None and elapsed >= 0.85 * time_s
+
+                if timed_out:
+                    logger.warning(f"Eval likely timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
+                self.timing.record_eval(elapsed, timed_out, time_s)
+
+    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
+        """Default evaluator dispatch: cd into eval_dir, call evaluator_fn directly."""
         eval_dir.mkdir(parents=True, exist_ok=True)
         prev = os.getcwd()
         os.chdir(eval_dir)
+
         try:
             return evaluator_fn(structure)
         finally:
@@ -151,6 +346,7 @@ class NestedLauncher(Launcher):
     def __init__(self, runner_exec: str = "mpirun", runner_args: str = ""):
         if any(t in ("-n", "-np") for t in runner_args.split()):
             raise ValueError("runner_args must not contain '-n'/'-np'")
+
         self._runner_exec = runner_exec
         self.runner_args = runner_args
 
@@ -158,16 +354,17 @@ class NestedLauncher(Launcher):
         command_parts = [self._runner_exec]
         if not parallel_eval: command_parts += ["-n 1"]
         if self.runner_args: command_parts += [self.runner_args]
-        command_prefix = _join(command_parts)
-        return command_prefix
 
-    def run(self, command: str, log_file: str, parallel_eval: bool = True) -> None:
+        return _join(command_parts)
+
+    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
-        print(f"running: {cmd}")
+        logger.info(f"running: {cmd}")
+
         with open(log_file, "a") as file_obj:
             subprocess.run(cmd, shell=True, text=True, env=_env_for_nested(os.environ), stdout=file_obj, stderr=subprocess.STDOUT, check=True)
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
+    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         eval_dir.mkdir(parents=True, exist_ok=True)
         prev = os.getcwd()
         os.chdir(eval_dir)
@@ -176,6 +373,7 @@ class NestedLauncher(Launcher):
         new_env["COMMAND_PREFIX"] = self.command_prefix()
         os.environ.clear()
         os.environ.update(new_env)
+
         try:
             return evaluator_fn(structure)
         finally:
@@ -200,24 +398,18 @@ class ForkLauncher(Launcher):
     def __init__(self, parallel_eval: bool = True):
         self._parallel_eval = parallel_eval
 
-    def run(self, command: str, log_file: str, parallel_eval: bool = True) -> None:
+    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
         n_procs = _default_n_procs() if parallel_eval else 1
         child_env = _env_for_fork(n_procs, os.environ)
+
         with open(log_file, "a") as log_f:
-            procs = [subprocess.Popen(
-                command,
-                shell=True,
-                env=child_env,
-                text=True,
-                stdout=log_f,
-                stderr=subprocess.STDOUT,
-            ) for _ in range(n_procs)]
+            procs = [subprocess.Popen(command, shell=True, env=child_env, text=True, stdout=log_f, stderr=subprocess.STDOUT) for _ in range(n_procs)]
             for p in procs:
                 ret = p.wait()
                 if ret != 0:
                     raise subprocess.CalledProcessError(ret, command)
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
+    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         eval_dir.mkdir(parents=True, exist_ok=True)
         prev = os.getcwd()
         os.chdir(eval_dir)
@@ -226,6 +418,7 @@ class ForkLauncher(Launcher):
         new_env["COMMAND_PREFIX"] = self.command_prefix()
         os.environ.clear()
         os.environ.update(new_env)
+
         try:
             return evaluator_fn(structure)
         finally:
@@ -274,6 +467,7 @@ class SlurmLauncher(Launcher):
         self._concurrent_eval = concurrent_eval
         self._runner_exec = runner_exec
         self.runner_args = runner_args
+        self._initial_time_s = _parse_initial_time_s(batch_args)
 
     @property
     def concurrent_eval(self) -> bool:
@@ -283,34 +477,37 @@ class SlurmLauncher(Launcher):
         command_parts = [self._runner_exec]
         if not parallel_eval: command_parts += ["-n 1"]
         if self.runner_args: command_parts += [self.runner_args]
-        command_prefix = _join(command_parts)
-        return command_prefix
+        return _join(command_parts)
 
-    def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True) -> str:
+    def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> str:
         batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}", "--quiet"]
         batch_args = shlex.split(self.batch_args)
         if not parallel_eval:
             _, batch_args = _sbatch_parser.parse_known_args(batch_args)
             batch_args += ["--ntasks=1", "--nodes=1"]
-        batch_parts += batch_args
-        batch_prefix = _join(batch_parts)
-        return batch_prefix
 
-    def run(self, command: str, log_file: str, parallel_eval: bool = True, chdir: str | None = None) -> None:
+        if time_limit_s is not None:
+            _, batch_args = _stime_parser.parse_known_args(batch_args)
+            batch_args += [f"--time={_seconds_to_slurm_time(time_limit_s)}"]
+
+        batch_parts += batch_args
+        return _join(batch_parts)
+
+    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
-        submit_cmd = f'{self.batch_prefix(chdir or os.getcwd(), log_file, parallel_eval)} --wrap="{cmd}"'
-        print(f"running: {submit_cmd}")
+        submit_cmd = f'{self.batch_prefix(os.getcwd(), log_file, parallel_eval, time_limit_s=time_limit_s)} --wrap="{cmd}"'
+        logger.info(f"running: {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
+    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         import ase.io.extxyz
         eval_dir.mkdir(parents=True, exist_ok=True)
         ase.io.extxyz.write_extxyz(os.path.join(eval_dir, "input_structure.extxyz"), [structure])
         os.environ["COMMAND_PREFIX"] = self.command_prefix()
         evaluator_py = os.path.relpath("evaluator.py", eval_dir)
         eval_cmd = _join([sys.executable, evaluator_py, "input_structure.extxyz", "output_structure.extxyz"])
-        submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log")} --wrap="{eval_cmd}"'
-        print(f"running (eval): {submit_cmd}")
+        submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log", time_limit_s=time_limit_s)} --wrap="{eval_cmd}"'
+        logger.info(f"running (eval): {submit_cmd}")
         subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
         with open(os.path.join(eval_dir, "output_structure.extxyz")) as f:
             return next(ase.io.extxyz.read_extxyz(f))

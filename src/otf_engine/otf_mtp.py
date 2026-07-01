@@ -71,7 +71,7 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
     return gamma_max0_new
 
 
-def _record_state(state, n_train, n_selected, gammas_selected, n_ok, active_set_size, eval_stats):
+def _record_state(state, n_train, n_selected, gammas_selected, n_ok, active_set_size, eval_stats, timing_stats=None):
     cycle_dir = current_cycle_dir()
     cycle = int(cycle_dir.name.split("_")[-1]) if cycle_dir is not None else len(state.get("history", []))
     state["n_selected_total"] = state.get("n_selected_total", 0) + n_selected
@@ -90,6 +90,7 @@ def _record_state(state, n_train, n_selected, gammas_selected, n_ok, active_set_
         "gammas_evaluated": eval_stats.get("gammas_evaluated", []),
         "max_forces_evaluated": eval_stats.get("max_forces_evaluated", []),
         "gamma_max0": state.get("gamma_max0"),
+        **(timing_stats or {}),
     })
 
 
@@ -252,6 +253,7 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
     """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model."""
 
     state = _load_state()
+    launcher.configure_timing(state, _save_state)
 
     # Step 1: load the extrapolative structures emitted by the upstream run.
     candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps, species=args.species)
@@ -287,9 +289,10 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
         logger.info("No configurations selected or evaluated — retraining.")
 
     # Step 7: retrain the potential on the updated training set.
-    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log")
+    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log", training_set_size=len(train_structures) + n_ok)
     os.replace(f"tmp_{args.potential}", args.potential)
     logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
-    _record_state(state, len(train_structures), len(selected_structures), gammas_selected, n_ok, active_set_size, eval_stats)
+    state["timing"] = launcher.timing.to_dict()
+    _record_state(state, len(train_structures), len(selected_structures), gammas_selected, n_ok, active_set_size, eval_stats, timing_stats={**launcher.timing._last_eval, **launcher.timing._last_train})
     _save_state(state)
