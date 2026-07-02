@@ -236,7 +236,7 @@ class TimingState:
             self._train_times = self._train_sizes = self._train_t_vals = None
             return
 
-        tf = 1.0 if not obs[-1]["timed_out"] else self.timeout_f
+        tf = self.timeout_f if any(o["timed_out"] for o in obs) else 1.0
         self._train_times = [o["allocated"] * tf if o["timed_out"] else o["elapsed"] for o in obs]
 
         sized = [o for o in obs if o["size"] is not None]
