@@ -161,7 +161,6 @@ class TimingState:
     window = 20
     safety = 1.25
     timeout_f = 2.0
-    early_f = 5.0
     early_n = 3
     max_s = 7 * 24 * 3600
     ridge_alpha = 1e-3
@@ -213,10 +212,13 @@ class TimingState:
         fallback = min(base * self.safety, self.max_s)
         if self._train_sizes is None or next_size is None or numpy.unique(self._train_sizes).size < 2:
             return fallback
-        X = numpy.column_stack([self._train_sizes, numpy.ones_like(self._train_sizes)])
-        lam = self.ridge_alpha * numpy.mean(self._train_sizes**2)
-        w = numpy.linalg.solve(X.T @ X + lam * numpy.eye(2), X.T @ self._train_t_vals)
-        return min(max(w[0] * next_size + w[1], 0.0) * self.safety, self.max_s)
+        if numpy.ptp(self._train_sizes) < 0.05 * numpy.mean(self._train_sizes):
+            return fallback
+        s_mean = numpy.mean(self._train_sizes)
+        X = numpy.column_stack([self._train_sizes - s_mean, numpy.ones_like(self._train_sizes)])
+        lam = self.ridge_alpha * numpy.mean((self._train_sizes - s_mean)**2)
+        w = numpy.linalg.solve(X.T @ X + numpy.diag([lam, 0.0]), X.T @ self._train_t_vals)
+        return min(max(w[0] * (next_size - s_mean) + w[1], 0.0) * self.safety, self.max_s)
 
     @synchronized
     def to_dict(self) -> dict:
@@ -235,7 +237,7 @@ class TimingState:
             self._train_times = self._train_sizes = self._train_t_vals = None
             return
 
-        tf = 1.0 if not obs[-1]["timed_out"] else (self.early_f if len(obs) <= self.early_n else self.timeout_f)
+        tf = 1.0 if not obs[-1]["timed_out"] else self.timeout_f
         self._train_times = [o["allocated"] * tf if o["timed_out"] else o["elapsed"] for o in obs]
 
         sized = [o for o in obs if o["size"] is not None]
