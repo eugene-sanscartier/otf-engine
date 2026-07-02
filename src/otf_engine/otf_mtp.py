@@ -71,9 +71,11 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
     return gamma_max0_new
 
 
-def _record_state(state, n_train, n_selected, gammas_selected, n_ok, active_set_size, eval_stats, timing_stats=None):
+def _record_state(state, n_train, active_set_size, timing_stats=None):
     cycle_dir = current_cycle_dir()
     cycle = int(cycle_dir.name.split("_")[-1]) if cycle_dir is not None else len(state.get("history", []))
+    n_selected = state.get("n_selected", 0)
+    n_ok = state.get("n_ok", 0)
     state["n_selected_total"] = state.get("n_selected_total", 0) + n_selected
     state["n_evaluated_total"] = state.get("n_evaluated_total", 0) + n_ok
     state.setdefault("history", []).append({
@@ -86,9 +88,9 @@ def _record_state(state, n_train, n_selected, gammas_selected, n_ok, active_set_
         "training_set_size": n_train + n_ok,
         "active_set_size": active_set_size,
         "gammas_candidates": state.get("gammas_candidates", []),
-        "gammas_selected": gammas_selected,
-        "gammas_evaluated": eval_stats.get("gammas_evaluated", []),
-        "max_forces_evaluated": eval_stats.get("max_forces_evaluated", []),
+        "gammas_selected": state.get("gammas_selected", []),
+        "gammas_evaluated": state.get("gammas_evaluated", []),
+        "max_forces_evaluated": state.get("max_forces_evaluated", []),
         "gamma_max0": state.get("gamma_max0"),
         **(timing_stats or {}),
     })
@@ -225,9 +227,9 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
         return None
 
 
-def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None, stats=None):
+def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None, state=None):
     n = len(selected_structures)
-    w = len(str(n))
+    w = len(str(n)) if n else 1
     parallel = launcher.concurrent_eval and n > 1
     logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
     n_ok = 0
@@ -242,13 +244,15 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
             if result is not None:
                 n_ok += 1
                 save_structures(training_set, [result], append=True)
-                if stats is not None:
-                    gammas_evaluated += [selected_structures[i].info["features"]["MV_grade"]]
-                    max_forces_evaluated += [max_force(result)]
+                gammas_evaluated += [selected_structures[i].info["features"]["MV_grade"]]
+                max_forces_evaluated += [max_force(result)]
     logger.info(f"Evaluated {n_ok}/{n} successfully.")
-    if stats is not None:
-        stats["gammas_evaluated"] = gammas_evaluated
-        stats["max_forces_evaluated"] = max_forces_evaluated
+    if state is not None:
+        state["n_selected"] = n
+        state["n_ok"] = n_ok
+        state["gammas_selected"] = [s.info["features"]["MV_grade"] for s in selected_structures]
+        state["gammas_evaluated"] = gammas_evaluated
+        state["max_forces_evaluated"] = max_forces_evaluated
     return n_ok
 
 
@@ -283,11 +287,9 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
 
     # Step 5: run the structure-selection step.
     selected_structures, _ = select_add(args.potential, train_structures, candidate_structures)
-    gammas_selected = [s.info["features"]["MV_grade"] for s in selected_structures]
 
     # Step 6: evaluate the selected structures.
-    eval_stats = {}
-    n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold, stats=eval_stats) if selected_structures else 0
+    n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold, state=state)
     if not n_ok:
         logger.info("No configurations selected or evaluated — retraining.")
 
@@ -297,5 +299,5 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
     logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
     state["timing"] = launcher.timing.to_dict()
-    _record_state(state, len(train_structures), len(selected_structures), gammas_selected, n_ok, active_set_size, eval_stats, timing_stats={**launcher.timing._last_eval, **launcher.timing._last_train})
+    _record_state(state, len(train_structures), active_set_size, timing_stats={**launcher.timing._last_eval, **launcher.timing._last_train})
     _save_state(state)
