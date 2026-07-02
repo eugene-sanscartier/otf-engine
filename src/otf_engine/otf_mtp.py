@@ -1,4 +1,5 @@
 import concurrent.futures
+import datetime
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ from .cycles import current_cycle_dir
 from .launchers import Launcher, JobTimedOut
 
 logger = logging.getLogger(__name__)
+_EVAL_TIMED_OUT = object()
 
 OTF_STATE_FILE = "otf_state.json"
 
@@ -74,23 +76,27 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
 def _record_state(state, n_train, active_set_size, timing_stats=None):
     cycle_dir = current_cycle_dir()
     cycle = int(cycle_dir.name.split("_")[-1]) if cycle_dir is not None else len(state.get("history", []))
-    n_selected = state.get("n_selected", 0)
-    n_ok = state.get("n_ok", 0)
+    n_selected = state.pop("n_selected", 0)
+    n_ok = state.pop("n_ok", 0)
     state["n_selected_total"] = state.get("n_selected_total", 0) + n_selected
     state["n_evaluated_total"] = state.get("n_evaluated_total", 0) + n_ok
     state.setdefault("history", []).append({
         "cycle": cycle,
-        "selection_branch": state.get("selection_branch", "none"),
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "selection_branch": state.pop("selection_branch", "none"),
+        "n_preselected": state.pop("n_preselected", 0),
         "n_selected": n_selected,
         "n_evaluated": n_ok,
+        "n_timed_out": state.pop("n_timed_out", 0),
+        "n_failed": state.pop("n_failed", 0),
         "n_selected_total": state["n_selected_total"],
         "n_evaluated_total": state["n_evaluated_total"],
         "training_set_size": n_train + n_ok,
         "active_set_size": active_set_size,
-        "gammas_candidates": state.get("gammas_candidates", []),
-        "gammas_selected": state.get("gammas_selected", []),
-        "gammas_evaluated": state.get("gammas_evaluated", []),
-        "max_forces_evaluated": state.get("max_forces_evaluated", []),
+        "gammas_candidates": state.pop("gammas_candidates", []),
+        "gammas_selected": state.pop("gammas_selected", []),
+        "gammas_evaluated": state.pop("gammas_evaluated", []),
+        "max_forces_evaluated": state.pop("max_forces_evaluated", []),
         "gamma_max0": state.get("gamma_max0"),
         **(timing_stats or {}),
     })
@@ -213,7 +219,7 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
         return result
     except JobTimedOut:
         logger.warning(f"struct {i+1}: timed out")
-        return None
+        return _EVAL_TIMED_OUT
     except Exception as e:
         eval_dir.mkdir(parents=True, exist_ok=True)
         with open(eval_dir / "eval.log", "a") as _f:
@@ -232,7 +238,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
     w = len(str(n)) if n else 1
     parallel = launcher.concurrent_eval and n > 1
     logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
-    n_ok = 0
+    n_ok = n_timed_out = 0
     gammas_evaluated = []
     max_forces_evaluated = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=None if parallel else 1) as executor:
@@ -240,16 +246,20 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
             i = futures[future]
             result = future.result()
-            logger.info(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {'ok' if result is not None else 'skipped/failed'}")
-            if result is not None:
+            logger.info(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {'ok' if result not in (None, _EVAL_TIMED_OUT) else 'timed out' if result is _EVAL_TIMED_OUT else 'failed'}")
+            if result is _EVAL_TIMED_OUT:
+                n_timed_out += 1
+            elif result is not None:
                 n_ok += 1
                 save_structures(training_set, [result], append=True)
                 gammas_evaluated += [selected_structures[i].info["features"]["MV_grade"]]
                 max_forces_evaluated += [max_force(result)]
-    logger.info(f"Evaluated {n_ok}/{n} successfully.")
+    logger.info(f"Evaluated {n_ok}/{n} successfully ({n_timed_out} timed out, {n - n_ok - n_timed_out} failed).")
     if state is not None:
         state["n_selected"] = n
         state["n_ok"] = n_ok
+        state["n_timed_out"] = n_timed_out
+        state["n_failed"] = n - n_ok - n_timed_out
         state["gammas_selected"] = [s.info["features"]["MV_grade"] for s in selected_structures]
         state["gammas_evaluated"] = gammas_evaluated
         state["max_forces_evaluated"] = max_forces_evaluated
@@ -299,5 +309,6 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
     logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
     state["timing"] = launcher.timing.to_dict()
+    state["n_preselected"] = len(candidate_structures)
     _record_state(state, len(train_structures), active_set_size, timing_stats={**launcher.timing._last_eval, **launcher.timing._last_train})
     _save_state(state)

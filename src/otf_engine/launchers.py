@@ -182,8 +182,7 @@ class TimingState:
         obs = self._d.setdefault("eval", {}).get("observations", [])
         obs = (obs + [{"elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-self.window:]
         self._d["eval"]["observations"] = obs
-        prev_max = self._last_eval.get("eval_time_s") or 0.0
-        self._last_eval = {"eval_time_s": max(prev_max, elapsed_s), "eval_time_alloc_s": allocated_s}
+        if elapsed_s >= (self._last_eval.get("eval_time_s") or 0.0): self._last_eval = {"eval_time_s": elapsed_s, "eval_time_alloc_s": allocated_s}
         self._refresh()
         if self._on_record:
             self._on_record(self.to_dict())
