@@ -161,7 +161,7 @@ class TimingState:
     window = 20
     safety = 1.25
     timeout_f = 2.0
-    early_n = 3
+    n_bootstrap = 3
     max_s = 7 * 24 * 3600
     ridge_alpha = 1e-3
 
@@ -171,7 +171,7 @@ class TimingState:
         self._on_record = on_record
         self._last_eval: dict = {}
         self._last_train: dict = {}
-        self._refresh()
+        self._compute_estimates()
 
     @classmethod
     def load(cls, data: dict, initial_time_s: float | None = None, on_record=None) -> TimingState:
@@ -183,7 +183,7 @@ class TimingState:
         obs = (obs + [{"elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-self.window:]
         self._d["eval"]["observations"] = obs
         if elapsed_s >= (self._last_eval.get("eval_time_s") or 0.0): self._last_eval = {"eval_time_s": elapsed_s, "eval_time_alloc_s": allocated_s}
-        self._refresh()
+        self._compute_estimates()
         if self._on_record:
             self._on_record(self.to_dict())
 
@@ -193,7 +193,7 @@ class TimingState:
         obs = (obs + [{"size": training_set_size, "elapsed": float(elapsed_s), "timed_out": bool(timed_out), "allocated": float(allocated_s) if allocated_s is not None else None}])[-self.window:]
         self._d["train"]["observations"] = obs
         self._last_train = {"train_time_s": elapsed_s, "train_time_alloc_s": allocated_s}
-        self._refresh()
+        self._compute_estimates()
         if self._on_record:
             self._on_record(self.to_dict())
 
@@ -207,7 +207,7 @@ class TimingState:
     def estimate_train(self, next_size: int | None) -> float | None:
         if self._train_times is None:
             return self._initial_time_s
-        base = max(self._train_times) if len(self._train_times) <= self.early_n else numpy.mean(self._train_times)
+        base = max(self._train_times) if len(self._train_times) <= self.n_bootstrap else numpy.mean(self._train_times)
         fallback = min(base * self.safety, self.max_s)
         if self._train_sizes is None or next_size is None or numpy.unique(self._train_sizes).size < 2:
             return fallback
@@ -223,7 +223,7 @@ class TimingState:
     def to_dict(self) -> dict:
         return dict(self._d)
 
-    def _refresh(self):
+    def _compute_estimates(self):
         obs = self._d.get("eval", {}).get("observations", [])
         if obs:
             tf = self.timeout_f if any(o["timed_out"] for o in obs) else 1.0
@@ -263,6 +263,7 @@ class Launcher(ABC):
     """
 
     timing: TimingState | None = None
+    max_retries: int = 0
 
     def configure_timing(self, state: dict, save_state_fn) -> None:
         """Load timing from *state* and wire auto-save so timeouts are always persisted."""
@@ -273,8 +274,8 @@ class Launcher(ABC):
 
         self.timing = TimingState.load(state.get("timing", {}), initial_time_s=getattr(self, "_initial_time_s", None), on_record=_on_record)
 
-    def run(self, command: str, log_file: str, parallel_eval: bool = True, training_set_size: int | None = None) -> None:
-        """Execute *command* with optional timing instrumentation.
+    def run(self, command: str, log_file: str, parallel_eval: bool = True, training_set_size: int | None = None, _backoff: int | None = None) -> None:
+        """Execute *command* with optional timing instrumentation and retry on timeout.
 
         Parameters
         ----------
@@ -283,26 +284,27 @@ class Launcher(ABC):
         parallel_eval:      When True, use full parallelism; False restricts to one process.
         training_set_size:  Number of training structures — used for time estimation.
         """
+        if _backoff is None: _backoff = self.max_retries
         time_s = self.timing.estimate_train(training_set_size) if self.timing else None
-
         if time_s:
-            logger.info(f"Training time estimate: {time_s:.0f}s for {training_set_size} structures")
+            logger.info(f"Training time estimate: {_seconds_to_hms(time_s)} for {training_set_size} structures")
         t0 = time.monotonic()
-        exc = None
-
         try:
             self._run_impl(command, log_file, parallel_eval, time_limit_s=time_s)
-        except Exception as e:
-            exc = e
-            raise
-        finally:
+        except JobTimedOut:
             elapsed = time.monotonic() - t0
+            logger.warning(f"Training timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s)} allocated)")
             if self.timing:
-                timed_out = isinstance(exc, JobTimedOut)
-                if timed_out:
-                    logger.warning(f"Training timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
-                if not exc or timed_out:
-                    self.timing.record_train(elapsed, training_set_size, timed_out, time_s)
+                self.timing.record_train(elapsed, training_set_size, True, time_s)
+            if _backoff > 0:
+                logger.info(f"Retrying training with new estimate ({_backoff} left)...")
+                return self.run(command, log_file, parallel_eval, training_set_size, _backoff=_backoff - 1)
+            raise
+        except Exception:
+            raise
+        elapsed = time.monotonic() - t0
+        if self.timing:
+            self.timing.record_train(elapsed, training_set_size, False, time_s)
 
     @abstractmethod
     def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
@@ -316,28 +318,26 @@ class Launcher(ABC):
         """Batch submission prefix: everything before ``--wrap="cmd"``."""
         return ""
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path):
-        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation."""
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, _backoff: int | None = None):
+        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation and retry on timeout."""
+        if _backoff is None: _backoff = self.max_retries
         time_s = self.timing.estimate_eval() if self.timing else None
-
         if time_s:
-            logger.info(f"Eval time estimate: {time_s:.0f}s per structure")
+            logger.info(f"Eval time estimate: {_seconds_to_hms(time_s)} per structure")
         t0 = time.monotonic()
-        exc = None
-
         try:
             return self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
-        except Exception as e:
-            exc = e
-            raise
-        finally:
+        except JobTimedOut:
             elapsed = time.monotonic() - t0
+            logger.warning(f"Eval timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s)} allocated)")
             if self.timing:
-                timed_out = isinstance(exc, JobTimedOut)
-                if timed_out:
-                    logger.warning(f"Eval timed out ({elapsed:.0f}s elapsed vs {time_s:.0f}s allocated)")
-                if not exc or timed_out:
-                    self.timing.record_eval(elapsed, timed_out, time_s)
+                self.timing.record_eval(elapsed, True, time_s)
+            if _backoff > 0:
+                logger.info(f"Retrying eval with new estimate ({_backoff} left)...")
+                return self.call_evaluator(evaluator_fn, structure, eval_dir, _backoff=_backoff - 1)
+            raise
+        except Exception:
+            raise
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         """Default evaluator dispatch: cd into eval_dir, call evaluator_fn directly."""
@@ -482,13 +482,14 @@ class SlurmLauncher(Launcher):
     runner_args:       Extra arguments appended to ``runner_exec``, e.g. ``"--bind-to core"``.
     """
 
-    def __init__(self, batch_exec: str = "sbatch", batch_args: str = "", concurrent_eval: bool = True, runner_exec: str = "srun", runner_args: str = ""):
+    def __init__(self, batch_exec: str = "sbatch", batch_args: str = "", concurrent_eval: bool = True, runner_exec: str = "srun", runner_args: str = "", max_retries: int = TimingState.n_bootstrap):
         self.batch_exec = batch_exec
         self.batch_args = batch_args
         self._concurrent_eval = concurrent_eval
         self._runner_exec = runner_exec
         self.runner_args = runner_args
         self._initial_time_s = _parse_time_to_s(batch_args)
+        self.max_retries = max_retries
 
     @property
     def concurrent_eval(self) -> bool:
