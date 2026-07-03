@@ -73,7 +73,8 @@ def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
     return gamma_max0_new
 
 
-def _record_state(state, n_train, active_set_size, timing_stats=None):
+def _record_state(state, n_train, active_set_size):
+    timing = state.get("timing", {})
     cycle_dir = current_cycle_dir()
     cycle = int(cycle_dir.name.split("_")[-1]) if cycle_dir is not None else len(state.get("history", []))
     n_selected = state.pop("n_selected", 0)
@@ -99,7 +100,10 @@ def _record_state(state, n_train, active_set_size, timing_stats=None):
         "max_forces_evaluated": state.pop("max_forces_evaluated", []),
         "gamma_max0": state.get("gamma_max0"),
         "training_timed_out": state.pop("training_timed_out", False),
-        **(timing_stats or {}),
+        "eval_time_s": timing.get("eval_time_s"),
+        "eval_time_alloc_s": timing.get("eval_time_alloc_s"),
+        "train_time_s": timing.get("train_time_s"),
+        "train_time_alloc_s": timing.get("train_time_alloc_s"),
     })
 
 
@@ -272,6 +276,7 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
 
     state = _load_state()
     launcher.configure_timing(state, _save_state)
+    launcher.configure_memory(state, _save_state)
 
     # Step 1: load the extrapolative structures emitted by the upstream run.
     candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps, species=args.species)
@@ -310,7 +315,7 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
         launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log", training_set_size=len(train_structures) + n_ok)
     except JobTimedOut as exc:
         train_exc = exc
-        logger.error("Training exhausted retries and timed out — recording cycle as training_timed_out.")
+        logger.error("Training exhausted retries and timed out.")
     else:
         os.replace(f"tmp_{args.potential}", args.potential)
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
@@ -318,7 +323,7 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
     state["timing"] = launcher.timing.to_dict()
     state["n_preselected"] = len(candidate_structures)
     state["training_timed_out"] = train_exc is not None
-    _record_state(state, len(train_structures), active_set_size, timing_stats={**launcher.timing._last_eval, **launcher.timing._last_train})
+    _record_state(state, len(train_structures), active_set_size)
     _save_state(state)
 
     if train_exc is not None:

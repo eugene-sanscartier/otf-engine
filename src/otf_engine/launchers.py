@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 import shlex
@@ -151,6 +152,38 @@ def _is_slurm_timeout(log_path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Slurm memory utilities
+# ---------------------------------------------------------------------------
+
+_MEM_UNITS = {"K": 1.0 / 1024.0, "M": 1.0, "G": 1024.0, "T": 1024.0 ** 2}
+
+_smem_parser = argparse.ArgumentParser(add_help=False)
+_smem_parser.add_argument("--mem")
+
+
+def _parse_mem_to_mb(s: str) -> float | None:
+    """Parse a sacct MaxRSS value (e.g. '58120K', '3075208K', '512M') into MB."""
+    s = s.strip()
+    if not s:
+        return None
+    unit = s[-1].upper()
+    try:
+        return float(s[:-1]) * _MEM_UNITS[unit] if unit in _MEM_UNITS else float(s)
+    except ValueError:
+        return None
+
+
+def _sacct_max_rss_mb(job_id: str) -> float | None:
+    """Query sacct for the peak MaxRSS across all steps of *job_id*, in MB."""
+    try:
+        out = subprocess.run(["sacct", "-j", job_id, "--format=MaxRSS", "--noheader"], capture_output=True, text=True, check=True).stdout
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    values = [v for v in (_parse_mem_to_mb(line) for line in out.splitlines()) if v is not None]
+    return max(values) if values else None
+
+
+# ---------------------------------------------------------------------------
 # TimingState
 # ---------------------------------------------------------------------------
 
@@ -222,7 +255,7 @@ class TimingState:
 
     @synchronized
     def to_dict(self) -> dict:
-        return dict(self._d)
+        return {**self._d, **self._last_eval, **self._last_train}
 
     def _compute_estimates(self):
         obs = self._d.get("eval", {}).get("observations", [])
@@ -249,6 +282,54 @@ class TimingState:
         self._train_t_vals = numpy.array([o["allocated"] * tf if o["timed_out"] else o["elapsed"] for o in sized], dtype=float)
 
 
+# ---------------------------------------------------------------------------
+# MemoryState
+# ---------------------------------------------------------------------------
+
+
+class MemoryState:
+    """Thread-safe store of the peak memory (MB) seen so far for eval/train jobs.
+
+    Estimates are just ``max_seen * safety`` — no windowing, no regression.
+    Used by SlurmLauncher to size ``--mem`` for future job submissions.
+    """
+
+    safety = 1.5
+
+    def __init__(self, data: dict, on_record=None):
+        self._d = data
+        self._on_record = on_record
+
+    @classmethod
+    def load(cls, data: dict, on_record=None) -> MemoryState:
+        return cls(dict(data), on_record=on_record)
+
+    @synchronized
+    def record_eval(self, mem_mb: float):
+        self._d["eval_max_mb"] = max(self._d.get("eval_max_mb", 0.0), float(mem_mb))
+        if self._on_record:
+            self._on_record(self.to_dict())
+
+    @synchronized
+    def record_train(self, mem_mb: float):
+        self._d["train_max_mb"] = max(self._d.get("train_max_mb", 0.0), float(mem_mb))
+        if self._on_record:
+            self._on_record(self.to_dict())
+
+    @synchronized
+    def estimate_eval(self) -> float | None:
+        mem_mb = self._d.get("eval_max_mb")
+        return mem_mb * self.safety if mem_mb else None
+
+    @synchronized
+    def estimate_train(self) -> float | None:
+        mem_mb = self._d.get("train_max_mb")
+        return mem_mb * self.safety if mem_mb else None
+
+    @synchronized
+    def to_dict(self) -> dict:
+        return dict(self._d)
+
 
 # ---------------------------------------------------------------------------
 # Launcher ABC
@@ -264,6 +345,7 @@ class Launcher(ABC):
     """
 
     timing: TimingState | None = None
+    memory: MemoryState | None = None
     max_retries: int = 0
 
     def configure_timing(self, state: dict, save_state_fn) -> None:
@@ -274,6 +356,15 @@ class Launcher(ABC):
             save_state_fn(state)
 
         self.timing = TimingState.load(state.get("timing", {}), initial_time_s=getattr(self, "_initial_time_s", None), on_record=_on_record)
+
+    def configure_memory(self, state: dict, save_state_fn) -> None:
+        """Load memory usage from *state* and wire auto-save. Only acted on by SlurmLauncher."""
+
+        def _on_record(memory_dict):
+            state["memory"] = memory_dict
+            save_state_fn(state)
+
+        self.memory = MemoryState.load(state.get("memory", {}), on_record=_on_record)
 
     def run(self, command: str, log_file: str, parallel_eval: bool = True, training_set_size: int | None = None, _backoff: int | None = None) -> None:
         """Execute *command* with optional timing instrumentation and retry on timeout.
@@ -478,6 +569,11 @@ class SlurmLauncher(Launcher):
     **Python environment requirement**: ``sys.executable`` must be on a shared
     filesystem accessible from all compute nodes (NFS/Lustre, /home, /project).
 
+    **Memory sizing**: after each job, ``sacct`` is queried for peak MaxRSS and
+    the running max (per eval/train) is stored via ``MemoryState``. Subsequent
+    jobs request ``--mem=`` set to ``1.5 x`` that max, overriding any ``--mem``
+    given in ``batch_args``. No estimate is set until a job has completed once.
+
     Parameters
     ----------
     batch_exec:        Path to sbatch binary (default: ``"sbatch"``).
@@ -506,8 +602,8 @@ class SlurmLauncher(Launcher):
         if self.runner_args: command_parts += [self.runner_args]
         return _join(command_parts)
 
-    def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> str:
-        batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}", "--quiet"]
+    def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None, mem_mb: float | None = None) -> str:
+        batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}"]
         batch_args = shlex.split(self.batch_args)
         if not parallel_eval:
             _, batch_args = _sbatch_parser.parse_known_args(batch_args)
@@ -517,18 +613,35 @@ class SlurmLauncher(Launcher):
             _, batch_args = _stime_parser.parse_known_args(batch_args)
             batch_args += [f"--time={_seconds_to_hms(time_limit_s)}"]
 
+        if mem_mb is not None:
+            _, batch_args = _smem_parser.parse_known_args(batch_args)
+            batch_args += [f"--mem={max(1, math.ceil(mem_mb))}M"]
+
         batch_parts += batch_args
         return _join(batch_parts)
 
+    def _submit_and_wait(self, submit_cmd: str) -> tuple[subprocess.CompletedProcess, str | None]:
+        """Run an sbatch --wait command, returning (proc, job_id) parsed from 'Submitted batch job N'."""
+        proc = subprocess.run(submit_cmd, shell=True, env=os.environ, text=True, capture_output=True)
+        job_id = next((line.rsplit(" ", 1)[-1] for line in proc.stdout.splitlines() if line.startswith("Submitted batch job")), None)
+        if proc.returncode != 0 and proc.stderr: sys.stderr.write(proc.stderr)
+        return proc, job_id
+
     def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
+        mem_mb = self.memory.estimate_train() if self.memory else None
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
-        submit_cmd = f'{self.batch_prefix(os.getcwd(), log_file, parallel_eval, time_limit_s=time_limit_s)} --wrap="{cmd}"'
+        submit_cmd = f'{self.batch_prefix(os.getcwd(), log_file, parallel_eval, time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{cmd}"'
         logger.info(f"running: {submit_cmd}")
-        try:
-            subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
-        except subprocess.CalledProcessError as exc:
+        proc, job_id = self._submit_and_wait(submit_cmd)
+
+        if self.memory and job_id:
+            used_mb = _sacct_max_rss_mb(job_id)
+            if used_mb: self.memory.record_train(used_mb)
+
+        if proc.returncode != 0:
+            exc = subprocess.CalledProcessError(proc.returncode, submit_cmd)
             if _is_slurm_timeout(log_file): raise JobTimedOut(exc.returncode, exc.cmd) from exc
-            raise
+            raise exc
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         import ase.io.extxyz
@@ -537,12 +650,18 @@ class SlurmLauncher(Launcher):
         os.environ["COMMAND_PREFIX"] = self.command_prefix()
         evaluator_py = os.path.relpath("evaluator.py", eval_dir)
         eval_cmd = _join([sys.executable, evaluator_py, "input_structure.extxyz", "output_structure.extxyz"])
-        submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log", time_limit_s=time_limit_s)} --wrap="{eval_cmd}"'
+        mem_mb = self.memory.estimate_eval() if self.memory else None
+        submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log", time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{eval_cmd}"'
         logger.info(f"running (eval): {submit_cmd}")
-        try:
-            subprocess.run(submit_cmd, shell=True, env=os.environ, check=True)
-        except subprocess.CalledProcessError as exc:
+        proc, job_id = self._submit_and_wait(submit_cmd)
+
+        if self.memory and job_id:
+            used_mb = _sacct_max_rss_mb(job_id)
+            if used_mb: self.memory.record_eval(used_mb)
+
+        if proc.returncode != 0:
+            exc = subprocess.CalledProcessError(proc.returncode, submit_cmd)
             if _is_slurm_timeout(eval_dir / "eval.log"): raise JobTimedOut(exc.returncode, exc.cmd) from exc
-            raise
+            raise exc
         with open(os.path.join(eval_dir, "output_structure.extxyz")) as f:
             return next(ase.io.extxyz.read_extxyz(f))
