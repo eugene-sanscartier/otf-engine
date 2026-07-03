@@ -217,7 +217,8 @@ class TimingState:
         X = numpy.column_stack([self._train_sizes - s_mean, numpy.ones_like(self._train_sizes)])
         lam = self.ridge_alpha * numpy.mean((self._train_sizes - s_mean)**2)
         w = numpy.linalg.solve(X.T @ X + numpy.diag([lam, 0.0]), X.T @ self._train_t_vals)
-        return min(max(w[0] * (next_size - s_mean) + w[1], 0.0) * self.safety, self.max_s)
+        regression_est = max(w[0] * (next_size - s_mean) + w[1], 0.0) * self.safety
+        return min(max(regression_est, fallback), self.max_s)
 
     @synchronized
     def to_dict(self) -> dict:
@@ -326,7 +327,7 @@ class Launcher(ABC):
             logger.info(f"Eval time estimate: {_seconds_to_hms(time_s)} per structure")
         t0 = time.monotonic()
         try:
-            return self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
+            result = self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
         except JobTimedOut:
             elapsed = time.monotonic() - t0
             logger.warning(f"Eval timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s)} allocated)")
@@ -338,6 +339,10 @@ class Launcher(ABC):
             raise
         except Exception:
             raise
+        elapsed = time.monotonic() - t0
+        if self.timing:
+            self.timing.record_eval(elapsed, False, time_s)
+        return result
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
         """Default evaluator dispatch: cd into eval_dir, call evaluator_fn directly."""

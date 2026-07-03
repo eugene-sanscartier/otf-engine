@@ -98,6 +98,7 @@ def _record_state(state, n_train, active_set_size, timing_stats=None):
         "gammas_evaluated": state.pop("gammas_evaluated", []),
         "max_forces_evaluated": state.pop("max_forces_evaluated", []),
         "gamma_max0": state.get("gamma_max0"),
+        "training_timed_out": state.pop("training_timed_out", False),
         **(timing_stats or {}),
     })
 
@@ -304,11 +305,21 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
         logger.info("No configurations selected or evaluated — retraining.")
 
     # Step 7: retrain the potential on the updated training set.
-    launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log", training_set_size=len(train_structures) + n_ok)
-    os.replace(f"tmp_{args.potential}", args.potential)
-    logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
+    train_exc = None
+    try:
+        launcher.run(f"{mlp_command} train {args.potential} {args.training_set} --save_to=tmp_{args.potential} --iteration_limit={args.iteration_limit} ", log_file="mlip_train.log", training_set_size=len(train_structures) + n_ok)
+    except JobTimedOut as exc:
+        train_exc = exc
+        logger.error("Training exhausted retries and timed out — recording cycle as training_timed_out.")
+    else:
+        os.replace(f"tmp_{args.potential}", args.potential)
+        logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
     state["timing"] = launcher.timing.to_dict()
     state["n_preselected"] = len(candidate_structures)
+    state["training_timed_out"] = train_exc is not None
     _record_state(state, len(train_structures), active_set_size, timing_stats={**launcher.timing._last_eval, **launcher.timing._last_train})
     _save_state(state)
+
+    if train_exc is not None:
+        raise train_exc
