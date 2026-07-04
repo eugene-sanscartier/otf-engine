@@ -144,9 +144,12 @@ def _parse_time_to_s(batch_args: str) -> float | None:
     return _hms_to_seconds(parsed.time) if parsed.time else None
 
 
+# slurmstepd: error: *** STEP 17136522.0 ON c149 CANCELLED AT 2026-07-03T08:33:56 DUE TO TIME LIMIT ***
+# slurmstepd: error: *** JOB 17136522 ON c149 CANCELLED AT 2026-07-03T08:33:56 DUE TO TIME LIMIT ***
+
 def _is_slurm_timeout(log_path) -> bool:
     try:
-        return any(all(cue in line for cue in ("CANCELLED AT", "DUE TO TIME LIMIT", "TIME_LIMIT")) for line in Path(log_path).read_text("utf-8", errors="ignore").splitlines())
+        return any(all(cue in line for cue in ("JOB", "CANCELLED AT", "DUE TO TIME LIMIT")) for line in Path(log_path).read_text("utf-8", errors="ignore").splitlines())
     except OSError:
         return False
 
