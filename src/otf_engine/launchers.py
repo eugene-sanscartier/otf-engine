@@ -169,7 +169,7 @@ _smem_parser.add_argument("--mem")
 
 
 def _parse_mem_to_mb(s: str) -> float | None:
-    """Parse a sacct MaxRSS value (e.g. '58120K', '3075208K', '512M') into MB."""
+    """Parse a Slurm memory value (e.g. '58120K', '3075208K', '512M') into MB."""
     s = s.strip()
     if not s:
         return None
@@ -180,13 +180,19 @@ def _parse_mem_to_mb(s: str) -> float | None:
         return None
 
 
-def _sacct_max_rss_mb(job_id: str) -> float | None:
-    """Query sacct for the peak MaxRSS across all steps of *job_id*, in MB."""
+def _sacct_mem_mb(job_id: str) -> float | None:
+    """Query sacct for the peak TRESUsageInTot 'mem=' across all steps of *job_id*, in MB.
+
+    Plain per-step MaxRSS badly undercounts jobs launched via mpirun inside
+    --wrap (its child processes aren't reflected there); TRESUsageInTot is the
+    cgroup-aggregated total memory for the step — the same source seff uses.
+    --parsable avoids sacct's column-width truncation of this field.
+    """
     try:
-        out = subprocess.run(["sacct", "-j", job_id, "--format=MaxRSS", "--noheader"], capture_output=True, text=True, check=True).stdout
+        out = subprocess.run(["sacct", "-j", job_id, "--format=TRESUsageInTot", "--noheader", "--parsable"], capture_output=True, text=True, check=True).stdout
     except (subprocess.CalledProcessError, OSError):
         return None
-    values = [v for v in (_parse_mem_to_mb(line) for line in out.splitlines()) if v is not None]
+    values = [v for line in out.splitlines() for field in line.split(",") if field.startswith("mem=") for v in [_parse_mem_to_mb(field[len("mem="):])] if v is not None]
     return max(values) if values else None
 
 
@@ -642,7 +648,7 @@ class SlurmLauncher(Launcher):
         proc, job_id = self._submit_and_wait(submit_cmd)
 
         if self.memory and job_id:
-            used_mb = _sacct_max_rss_mb(job_id)
+            used_mb = _sacct_mem_mb(job_id)
             if used_mb: self.memory.record_train(used_mb)
 
         if proc.returncode != 0:
@@ -663,7 +669,7 @@ class SlurmLauncher(Launcher):
         proc, job_id = self._submit_and_wait(submit_cmd)
 
         if self.memory and job_id:
-            used_mb = _sacct_max_rss_mb(job_id)
+            used_mb = _sacct_mem_mb(job_id)
             if used_mb: self.memory.record_eval(used_mb)
 
         if proc.returncode != 0:
