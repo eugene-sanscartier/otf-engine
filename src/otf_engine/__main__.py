@@ -75,10 +75,10 @@ def main():
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
     except Exception as e:
         logger.exception(f"Error during execution: {e}")
-        archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
+        archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps, ok=False)
         sys.exit(67)
 
-    archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps)
+    archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps, ok=True)
     sys.exit(0)
 
 
