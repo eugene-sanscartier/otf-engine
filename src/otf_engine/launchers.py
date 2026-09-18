@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 class JobTimedOut(subprocess.CalledProcessError):
     """Raised by SlurmLauncher when sbatch exits non-zero due to a Slurm TIME LIMIT."""
 
+
+class JobOutOfMemory(subprocess.CalledProcessError):
+    """Raised by SlurmLauncher when a job was OOM-killed and a larger ``--mem`` can still be requested."""
+
 # ---------------------------------------------------------------------------
 # Environment utilities
 # ---------------------------------------------------------------------------
@@ -164,11 +168,13 @@ def _is_slurm_timeout(log_path) -> bool:
 
 _MEM_UNITS = {"K": 1.0 / 1024.0, "M": 1.0, "G": 1024.0, "T": 1024.0 ** 2}
 
+# --mem-per-cpu is parsed only to be stripped: sbatch rejects it alongside --mem.
 _smem_parser = argparse.ArgumentParser(add_help=False)
 _smem_parser.add_argument("--mem")
+_smem_parser.add_argument("--mem-per-cpu")
 
 
-def _parse_mem_to_mb(s: str) -> float | None:
+def _mem_to_mb(s: str) -> float | None:
     """Parse a Slurm memory value (e.g. '58120K', '3075208K', '512M') into MB."""
     s = s.strip()
     if not s:
@@ -180,20 +186,49 @@ def _parse_mem_to_mb(s: str) -> float | None:
         return None
 
 
-def _sacct_mem_mb(job_id: str) -> float | None:
-    """Query sacct for the peak TRESUsageInTot 'mem=' across all steps of *job_id*, in MB.
+def _parse_mem_to_mb(batch_args: str) -> float | None:
+    """Parse the ``--mem`` ceiling out of sbatch arguments, in MB.
+
+    ``--mem=0`` requests all memory on the node and is therefore no ceiling.
+    ``--mem-per-cpu`` sets no ceiling: it cannot be converted without knowing
+    the job's CPU count.
+    """
+    parsed, _ = _smem_parser.parse_known_args(shlex.split(batch_args))
+
+    return (_mem_to_mb(parsed.mem) if parsed.mem else None) or None
+
+
+# slurmstepd: error: Detected 1 oom_kill event in StepId=17136522.batch. Some of the job steps have been OOM Killed.
+# slurmstepd: error: Exceeded job memory limit
+
+_SLURM_OOM_RE = re.compile(r"oom[-_]kill|OOM Killed|Exceeded (?:job|step) memory limit", re.IGNORECASE)
+
+
+def _is_slurm_oom(log_path) -> bool:
+    try:
+        return bool(_SLURM_OOM_RE.search(Path(log_path).read_text("utf-8", errors="ignore")))
+    except OSError:
+        return False
+
+
+def _sacct_job(job_id: str) -> tuple[bool, float | None]:
+    """Query sacct for *job_id*: whether any step was killed OUT_OF_MEMORY, and its peak memory in MB.
 
     Plain per-step MaxRSS badly undercounts jobs launched via mpirun inside
     --wrap (its child processes aren't reflected there); TRESUsageInTot is the
     cgroup-aggregated total memory for the step — the same source seff uses.
-    --parsable avoids sacct's column-width truncation of this field.
+    --parsable avoids sacct's column-width truncation of these fields.
+
+    Accounting can lag the completion of ``sbatch --wait``, in which case the
+    state and the usage are both reported as unknown.
     """
     try:
-        out = subprocess.run(["sacct", "-j", job_id, "--format=TRESUsageInTot", "--noheader", "--parsable"], capture_output=True, text=True, check=True).stdout
+        out = subprocess.run(["sacct", "-j", job_id, "--format=State,TRESUsageInTot", "--noheader", "--parsable"], capture_output=True, text=True, check=True).stdout
     except (subprocess.CalledProcessError, OSError):
-        return None
-    values = [v for line in out.splitlines() for field in line.split(",") if field.startswith("mem=") for v in [_parse_mem_to_mb(field[len("mem="):])] if v is not None]
-    return max(values) if values else None
+        return False, None
+    values = [v for line in out.splitlines() for field in line.split(",") if field.startswith("mem=") for v in [_mem_to_mb(field[len("mem="):])] if v is not None]
+
+    return "OUT_OF_MEMORY" in out, (max(values) if values else None)
 
 
 # ---------------------------------------------------------------------------
@@ -301,43 +336,44 @@ class TimingState:
 
 
 class MemoryState:
-    """Thread-safe store of the peak memory (MB) seen so far for eval/train jobs.
+    """Thread-safe store of the peak memory (MB) seen so far per job *kind* ("eval", "train").
 
-    Estimates are just ``max_seen * safety`` — no windowing, no regression.
-    Used by SlurmLauncher to size ``--mem`` for future job submissions.
+    Estimates are just ``max_seen * safety`` — no windowing, no regression —
+    capped at ``ceiling_mb``.  Before any observation the estimate is
+    ``ceiling_mb`` itself, so a job is only ever submitted without ``--mem``
+    when neither an observation nor a ceiling exists.  Used by SlurmLauncher to
+    size ``--mem`` for future job submissions.
+
+    Unlike TimingState, whose estimates are means and can fall, max_seen only
+    ever rises — hence the ceiling.
     """
 
     safety = 1.5
 
-    def __init__(self, data: dict, on_record=None):
+    def __init__(self, data: dict, ceiling_mb: float | None = None, on_record=None):
         self._d = data
+        self._ceiling_mb = ceiling_mb
         self._on_record = on_record
 
     @classmethod
-    def load(cls, data: dict, on_record=None) -> MemoryState:
-        return cls(dict(data), on_record=on_record)
+    def load(cls, data: dict, ceiling_mb: float | None = None, on_record=None) -> MemoryState:
+        return cls(dict(data), ceiling_mb=ceiling_mb, on_record=on_record)
 
     @synchronized
-    def record_eval(self, mem_mb: float):
-        self._d["eval_max_mb"] = max(self._d.get("eval_max_mb", 0.0), float(mem_mb))
+    def record(self, kind: str, mem_mb: float):
+        key = f"{kind}_max_mb"
+        self._d[key] = max(self._d.get(key, 0.0), float(mem_mb))
         if self._on_record:
             self._on_record(self.to_dict())
 
     @synchronized
-    def record_train(self, mem_mb: float):
-        self._d["train_max_mb"] = max(self._d.get("train_max_mb", 0.0), float(mem_mb))
-        if self._on_record:
-            self._on_record(self.to_dict())
+    def estimate(self, kind: str) -> float | None:
+        mem_mb = self._d.get(f"{kind}_max_mb")
+        if not mem_mb:
+            return self._ceiling_mb
+        request_mb = mem_mb * self.safety
 
-    @synchronized
-    def estimate_eval(self) -> float | None:
-        mem_mb = self._d.get("eval_max_mb")
-        return mem_mb * self.safety if mem_mb else None
-
-    @synchronized
-    def estimate_train(self) -> float | None:
-        mem_mb = self._d.get("train_max_mb")
-        return mem_mb * self.safety if mem_mb else None
+        return min(request_mb, self._ceiling_mb) if self._ceiling_mb else request_mb
 
     @synchronized
     def to_dict(self) -> dict:
@@ -377,10 +413,10 @@ class Launcher(ABC):
             state["memory"] = memory_dict
             save_state_fn(state)
 
-        self.memory = MemoryState.load(state.get("memory", {}), on_record=_on_record)
+        self.memory = MemoryState.load(state.get("memory", {}), ceiling_mb=getattr(self, "_mem_ceiling_mb", None), on_record=_on_record)
 
     def run(self, command: str, log_file: str, parallel_eval: bool = True, training_set_size: int | None = None, _backoff: int | None = None) -> None:
-        """Execute *command* with optional timing instrumentation and retry on timeout.
+        """Execute *command* with optional timing instrumentation and retry on timeout or OOM.
 
         Parameters
         ----------
@@ -405,7 +441,10 @@ class Launcher(ABC):
                 logger.info(f"Retrying training with new estimate ({_backoff} left)...")
                 return self.run(command, log_file, parallel_eval, training_set_size, _backoff=_backoff - 1)
             raise
-        except Exception:
+        except JobOutOfMemory:
+            if _backoff > 0:
+                logger.info(f"Retrying training with a larger memory request ({_backoff} left)...")
+                return self.run(command, log_file, parallel_eval, training_set_size, _backoff=_backoff - 1)
             raise
         elapsed = time.monotonic() - t0
         if self.timing:
@@ -424,7 +463,7 @@ class Launcher(ABC):
         return ""
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, _backoff: int | None = None):
-        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation and retry on timeout."""
+        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation and retry on timeout or OOM."""
         if _backoff is None: _backoff = self.max_retries
         time_s = self.timing.estimate_eval() if self.timing else None
         if time_s:
@@ -441,7 +480,10 @@ class Launcher(ABC):
                 logger.info(f"Retrying eval with new estimate ({_backoff} left)...")
                 return self.call_evaluator(evaluator_fn, structure, eval_dir, _backoff=_backoff - 1)
             raise
-        except Exception:
+        except JobOutOfMemory:
+            if _backoff > 0:
+                logger.info(f"Retrying eval with a larger memory request ({_backoff} left)...")
+                return self.call_evaluator(evaluator_fn, structure, eval_dir, _backoff=_backoff - 1)
             raise
         elapsed = time.monotonic() - t0
         if self.timing:
@@ -582,10 +624,18 @@ class SlurmLauncher(Launcher):
     **Python environment requirement**: ``sys.executable`` must be on a shared
     filesystem accessible from all compute nodes (NFS/Lustre, /home, /project).
 
-    **Memory sizing**: after each job, ``sacct`` is queried for peak MaxRSS and
+    **Memory sizing**: after each job, ``sacct`` is queried for peak memory and
     the running max (per eval/train) is stored via ``MemoryState``. Subsequent
-    jobs request ``--mem=`` set to ``1.5 x`` that max, overriding any ``--mem``
-    given in ``batch_args``. No estimate is set until a job has completed once.
+    jobs request ``--mem=`` set to ``1.5 x`` that max, capped at the ``--mem``
+    given in ``batch_args``, which acts as a hard ceiling rather than a starting
+    point. Until a job has completed once, the ceiling itself is requested.
+    ``--mem-per-cpu`` in ``batch_args`` is dropped when ``--mem`` is substituted
+    and sets no ceiling.
+
+    **Out-of-memory recovery**: an OOM-killed job is resubmitted with a larger
+    ``--mem`` (up to ``max_retries``), because the request it died at is recorded
+    as a lower bound on its demand. Once the request reaches the ceiling a retry
+    would be identical, so the job fails instead.
 
     Parameters
     ----------
@@ -603,6 +653,7 @@ class SlurmLauncher(Launcher):
         self._runner_exec = runner_exec
         self.runner_args = runner_args
         self._initial_time_s = _parse_time_to_s(batch_args)
+        self._mem_ceiling_mb = _parse_mem_to_mb(batch_args)
         self.max_retries = max_retries
 
     @property
@@ -640,20 +691,40 @@ class SlurmLauncher(Launcher):
         if proc.returncode != 0 and proc.stderr: sys.stderr.write(proc.stderr)
         return proc, job_id
 
+    def _escalate_mem(self, kind: str, request_mb: float | None, used_mb: float | None) -> bool:
+        """Record an OOM-killed job's demand and report whether a larger ``--mem`` can still be requested.
+
+        The job needed more than it was given, so the request itself is a lower
+        bound on its demand — a firmer one than sacct's sampled peak, which for
+        a killed job can come back low, missing, or below what is already stored.
+        """
+        if self.memory is None: return False
+        demand_mb = max(request_mb or 0.0, used_mb or 0.0)
+        if demand_mb: self.memory.record(kind, demand_mb)
+        next_mb = self.memory.estimate(kind)
+        if next_mb is not None and (request_mb is None or next_mb > request_mb):
+            at = f" at --mem={math.ceil(request_mb)}M" if request_mb else ""
+            logger.warning(f"{kind} job ran out of memory{at}, retrying at --mem={math.ceil(next_mb)}M")
+            return True
+
+        if next_mb is None: logger.error(f"{kind} job ran out of memory and sacct reported no usage — cannot size a larger request")
+        else: logger.error(f"{kind} job ran out of memory at --mem={math.ceil(next_mb)}M, the ceiling set by --mem in batch_args — raise it to continue")
+        return False
+
     def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
-        mem_mb = self.memory.estimate_train() if self.memory else None
+        mem_mb = self.memory.estimate("train") if self.memory else None
         cmd = f"{self.command_prefix(parallel_eval)} {command}"
         submit_cmd = f'{self.batch_prefix(os.getcwd(), log_file, parallel_eval, time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{cmd}"'
         logger.info(f"running: {submit_cmd}")
         proc, job_id = self._submit_and_wait(submit_cmd)
 
-        if self.memory and job_id:
-            used_mb = _sacct_mem_mb(job_id)
-            if used_mb: self.memory.record_train(used_mb)
+        oom, used_mb = _sacct_job(job_id) if job_id else (False, None)
+        if self.memory and used_mb: self.memory.record("train", used_mb)
 
         if proc.returncode != 0:
             exc = subprocess.CalledProcessError(proc.returncode, submit_cmd)
             if _is_slurm_timeout(log_file): raise JobTimedOut(exc.returncode, exc.cmd) from exc
+            if (oom or _is_slurm_oom(log_file)) and self._escalate_mem("train", mem_mb, used_mb): raise JobOutOfMemory(exc.returncode, exc.cmd) from exc
             raise exc
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
@@ -663,18 +734,18 @@ class SlurmLauncher(Launcher):
         os.environ["COMMAND_PREFIX"] = self.command_prefix()
         evaluator_py = os.path.relpath("evaluator.py", eval_dir)
         eval_cmd = _join([sys.executable, evaluator_py, "input_structure.extxyz", "output_structure.extxyz"])
-        mem_mb = self.memory.estimate_eval() if self.memory else None
+        mem_mb = self.memory.estimate("eval") if self.memory else None
         submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log", time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{eval_cmd}"'
         logger.info(f"running (eval): {submit_cmd}")
         proc, job_id = self._submit_and_wait(submit_cmd)
 
-        if self.memory and job_id:
-            used_mb = _sacct_mem_mb(job_id)
-            if used_mb: self.memory.record_eval(used_mb)
+        oom, used_mb = _sacct_job(job_id) if job_id else (False, None)
+        if self.memory and used_mb: self.memory.record("eval", used_mb)
 
         if proc.returncode != 0:
             exc = subprocess.CalledProcessError(proc.returncode, submit_cmd)
             if _is_slurm_timeout(eval_dir / "eval.log"): raise JobTimedOut(exc.returncode, exc.cmd) from exc
+            if (oom or _is_slurm_oom(eval_dir / "eval.log")) and self._escalate_mem("eval", mem_mb, used_mb): raise JobOutOfMemory(exc.returncode, exc.cmd) from exc
             raise exc
         with open(os.path.join(eval_dir, "output_structure.extxyz")) as f:
             return next(ase.io.extxyz.read_extxyz(f))

@@ -16,7 +16,7 @@ from .io_cfg import read_cfg, write_cfg
 from .mtp_backend import calculate_grade, select_add, update_active_set
 from .almtp_io import read_mvs_state
 from .cycles import current_cycle_dir
-from .launchers import Launcher, JobTimedOut
+from .launchers import Launcher, JobTimedOut, JobOutOfMemory
 
 logger = logging.getLogger(__name__)
 _EVAL_TIMED_OUT = object()
@@ -100,6 +100,7 @@ def _record_state(state, n_train, active_set_size):
         "max_forces_evaluated": state.pop("max_forces_evaluated", []),
         "gamma_max0": state.get("gamma_max0"),
         "training_timed_out": state.pop("training_timed_out", False),
+        "training_out_of_memory": state.pop("training_out_of_memory", False),
         "eval_time_s": timing.get("eval_time_s"),
         "eval_time_alloc_s": timing.get("eval_time_alloc_s"),
         "train_time_s": timing.get("train_time_s"),
@@ -316,13 +317,17 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
     except JobTimedOut as exc:
         train_exc = exc
         logger.error("Training exhausted retries and timed out.")
+    except JobOutOfMemory as exc:
+        train_exc = exc
+        logger.error("Training exhausted retries and ran out of memory.")
     else:
         os.replace(f"tmp_{args.potential}", args.potential)
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {args.potential}.")
 
     state["timing"] = launcher.timing.to_dict()
     state["n_preselected"] = len(candidate_structures)
-    state["training_timed_out"] = train_exc is not None
+    state["training_timed_out"] = isinstance(train_exc, JobTimedOut)
+    state["training_out_of_memory"] = isinstance(train_exc, JobOutOfMemory)
     _record_state(state, len(train_structures), active_set_size)
     _save_state(state)
 
