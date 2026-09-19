@@ -2,7 +2,8 @@
 
 Each invocation of the CLI archives its inputs, outputs, and consumed dump
 files into ./otf_cycles/cycle_N/, where N is the current highest cycle index,
-and records the outcome in ./otf_cycles/cycle_N/status.
+writes its log to ./otf_cycles/cycle_N/otf.log, and records the outcome in
+./otf_cycles/cycle_N/status.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from pathlib import Path
 CYCLE_BASE = Path("./otf_cycles")
 CYCLE_PREFIX = "cycle_"
 STATUS_FILE = "status"
+LOG_FILE = "otf.log"
 
 _CYCLE_ARTIFACTS_MOVE = ("mlip_train.log", )
 _CYCLE_ARTIFACTS_COPY = ("otf_state.json", )

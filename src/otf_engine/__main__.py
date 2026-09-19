@@ -5,7 +5,7 @@ import sys
 import argparse
 from .otf_mtp import main as _main
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
-from .cycles import next_cycle_dir, archive_cycle
+from .cycles import next_cycle_dir, archive_cycle, LOG_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,11 @@ def main():
     evaluator_fn = _load_evaluator()
     os.environ["COMMAND_PREFIX"] = launcher.command_prefix()
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(module)s:%(funcName)s: %(message)s")
-
     cycle_dir = next_cycle_dir()
+    log_path = cycle_dir / LOG_FILE
+
+    logging.basicConfig(level=logging.INFO, filename=log_path, filemode="a", format="%(levelname)s %(module)s:%(funcName)s: %(message)s")
+    print(f"{cycle_dir.name} running — {log_path}")
 
     try:
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)

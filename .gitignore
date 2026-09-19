@@ -47,3 +47,6 @@ target/
 
 # VS Code settings
 .vscode/
+examples/**
+.claude/**
+tmp-*
