@@ -40,24 +40,48 @@ def _save_state(state):
         json.dump(state, f, indent=2)
 
 
-def load_extrapolative_dumps(extrapolative_dumps, extrapolation_field="f_extrapolation_grade", species=None):
-    collected_dumps = []
-    for extrapolative_dump in extrapolative_dumps:
-        with open(extrapolative_dump) as dump_file:
-            dumps = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
-            logger.info(f"Reading extrapolative dump: {extrapolative_dump} with {len(dumps)} structures")
+MAX_STRUCTURES_PER_DUMP = 1000
 
-            if len(dumps) > 100:
-                logger.warning(f"Large extrapolative dump with {len(dumps)} structures, this may cause performance issues.")
-                _indices = numpy.random.choice(len(dumps), size=100, replace=False)
-                dumps = [dumps[i] for i in _indices]
 
-            collected_dumps += dumps
+def _grade_one_dump(extrapolative_dump, potential, extrapolation_field, species, max_structures):
+    """Parse one extrapolative dump and grade the structures it keeps."""
+    with open(extrapolative_dump) as dump_file:
+        structures = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
 
-    for dump in collected_dumps:
-        if dump.has(extrapolation_field):
-            dump.set_array("nbh_grades", dump.get_array(extrapolation_field).flatten())
-    return collected_dumps
+    if len(structures) > max_structures:
+        kept = numpy.random.choice(len(structures), size=max_structures, replace=False)
+        structures = [structures[i] for i in kept]
+
+    for atoms in structures:
+        if atoms.has(extrapolation_field):
+            atoms.set_array("nbh_grades", atoms.get_array(extrapolation_field).flatten())
+
+    calculate_grade(potential, structures)
+    return structures
+
+
+def grade_extrapolative_dumps(potential, extrapolative_dumps, extrapolation_field="f_extrapolation_grade", species=None, max_structures=MAX_STRUCTURES_PER_DUMP):
+    """Parse and grade every extrapolative dump, one file per core.
+
+    Grading holds the GIL inside the MTP extension, so the fan-out uses processes.
+    Workers never log: the root logger is configured only in the parent.
+    """
+    # Pin each worker's BLAS to one thread, or they oversubscribe the cores the pool already claims.
+    # This has to happen before the pool exists: a worker imports numpy while resolving the task
+    # function, and BLAS fixes its thread count then.
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+
+    graded_structures = []
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        futures = {executor.submit(_grade_one_dump, dump, potential, extrapolation_field, species, max_structures): dump for dump in extrapolative_dumps}
+        for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
+            structures = future.result()
+            logger.info(f"Graded dump {k}/{len(futures)}: {futures[future]} with {len(structures)} structures")
+            graded_structures += structures
+
+    return graded_structures
 
 
 def _update_gamma_max0(state, obs, gamma_max0_floor, gamma_max0_window=10):
@@ -279,16 +303,13 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
     launcher.configure_timing(state, _save_state)
     launcher.configure_memory(state, _save_state)
 
-    # Step 1: load the extrapolative structures emitted by the upstream run.
-    candidate_structures = load_extrapolative_dumps(args.extrapolative_dumps, species=args.species)
-
-    # Step 1b: ensure the active set is consistent with the current training set.
+    # Step 1: ensure the active set is consistent with the current training set.
     train_structures = load_structures(args.training_set, args.species)
     update_active_set(args.potential, train_structures)
     active_set_size = len(read_mvs_state(args.potential).selected_cfgs)
 
-    # Step 2: ensure every candidate carries an extrapolation grade.
-    candidate_structures = calculate_grade(args.potential, candidate_structures)
+    # Step 2: parse the extrapolative dumps and grade them against that active set.
+    candidate_structures = grade_extrapolative_dumps(args.potential, args.extrapolative_dumps, species=args.species)
 
     # Step 3: optionally apply preselection policy.
     state["selection_branch"] = "none"

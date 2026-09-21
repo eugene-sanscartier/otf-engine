@@ -50,3 +50,4 @@ target/
 examples/**
 .claude/**
 tmp-*
+tmp
