@@ -305,7 +305,7 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
 
     # Step 1: ensure the active set is consistent with the current training set.
     train_structures = load_structures(args.training_set, args.species)
-    update_active_set(args.potential, train_structures)
+    train_eqns = update_active_set(args.potential, train_structures)
     active_set_size = len(read_mvs_state(args.potential).selected_cfgs)
 
     # Step 2: parse the extrapolative dumps and grade them against that active set.
@@ -324,7 +324,8 @@ def main(args, launcher: Launcher = None, mlp_command=None, evaluator_fn=None):
         candidate_structures = max_structureselection(candidate_structures, max_structures=args.max_structures)
 
     # Step 5: run the structure-selection step.
-    selected_structures, _ = select_add(args.potential, train_structures, candidate_structures)
+    # train_eqns were built in step 1 from the same coefficients and weights.
+    selected_structures, _ = select_add(args.potential, train_structures, candidate_structures, train_eqns=train_eqns)
 
     # Step 6: evaluate the selected structures.
     n_ok = eval_structures(selected_structures, args.training_set, evaluator_fn, launcher, force_threshold=args.force_threshold, state=state)

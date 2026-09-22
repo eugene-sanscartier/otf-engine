@@ -22,7 +22,7 @@ class LinearFitter:
 
     Parameters
     ----------
-    pot : MTPPotential
+    pot : MTPTraining
         Potential whose linear_coeffs / species_coeffs will be updated in-place
         after calling fit().
     weight_energy / weight_forces / weight_stress : float
@@ -51,7 +51,7 @@ class LinearFitter:
 
         Parameters
         ----------
-        dataset : list of entry dicts (see design_matrix module for format)
+        dataset : list of Sample
         comm : mpi4py communicator or None
             When provided each rank processes dataset[rank::size]; the local
             rows are allgathered before the linear solve; fitted coefficients
@@ -117,14 +117,12 @@ class LinearFitter:
 
     def rmse(self, dataset):
         """Root-mean-square energy error (eV/atom) on dataset after fitting."""
-        from .design_matrix import _eval_basis
         linear_coeffs = self.linear_coeffs_
         species_coeffs = self.species_coeffs_
         errors = []
-        for entry in dataset:
-            basis = _eval_basis(self.pot, entry)
-            types = entry["types"]
-            e_pred = (basis @ linear_coeffs).sum() + sum(species_coeffs[t] for t in types)
-            e_ref = float(entry["energy"])
-            errors.append((e_pred - e_ref) / len(types))
+        for sample in dataset:
+            basis = np.asarray(self.pot.eval_basis(sample.neighbors))
+            types = np.asarray(sample.neighbors.types)
+            e_pred = (basis @ linear_coeffs).sum() + species_coeffs[types].sum()
+            errors += [(e_pred - sample.energy) / sample.n_atoms]
         return float(np.sqrt(np.mean(np.array(errors)**2)))

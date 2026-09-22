@@ -22,10 +22,10 @@ def rescale(pot, dataset, lf_kwargs, max_iter=10):
 
     Parameters
     ----------
-    pot : MTPPotential
+    pot : MTPTraining
         Modified in-place.
-    dataset : list of entry dicts
-        Training data (same format as LinearFitter / build_design_matrix).
+    dataset : list of Sample
+        Training data.
     lf_kwargs : dict
         Keyword arguments forwarded to LinearFitter (weights, weight_scaling).
     max_iter : int

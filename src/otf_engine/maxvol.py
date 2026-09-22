@@ -22,9 +22,15 @@ from numpy import intp, float64, ndarray
 
 
 @dataclass
-class Rows:
-    rows: ndarray
-    eqn_indices: ndarray
+class Equations:
+    """The MaxVol equations one structure contributes.
+
+    grads   : (n_equations, coeff_count) d(observable)/d(coefficients)
+    indices : (n_equations,) mlip equation index of each
+    """
+
+    grads: ndarray
+    indices: ndarray
 
 
 class MaxVol:
@@ -82,70 +88,69 @@ class MaxVol:
     # Greedy swap (Sherman-Morrison)
     # ------------------------------------------------------------------
 
-    def select_candidates(self, rows_per_struct: list[Rows], pool_id: int = -1, max_swaps: int = 99999) -> ndarray:
+    def select_candidates(self, per_struct: list[Equations], pool_id: int = -1, max_swaps: int = 99999) -> ndarray:
         """Batch MaxVol selection mirroring mlip-3's MaximizeVol.
 
-        At each step: find the globally highest-grade row across ALL structures,
-        swap it in, repeat until no row has grade > threshold or max_swaps is
-        exhausted.  Vectorised: all grades computed as one matrix-multiply per
-        sweep  (O(n_rows × n²) but in NumPy, not Python loops).
+        At each step: find the globally highest-grade equation across ALL
+        structures, swap it in, repeat until none grades above threshold or
+        max_swaps is exhausted.  Vectorised: all grades computed as one
+        matrix-multiply per sweep (O(n_equations × n²), in NumPy).
 
         Parameters
         ----------
-        rows_per_struct : list of Rows
-            Each item holds the per-structure row block and matching mlip
-            equation indices.
+        per_struct : list of Equations
+            The equations each structure contributes.
         pool_id : int
-            Pool identifier stored in active row provenance.
+            Pool identifier recorded with each active equation.
         max_swaps : int
             Maximum number of swaps (mlip-3 default: 99999).
 
-        Returns the current active-row structure indices.
+        Returns the structure index of each active equation.
         """
-        if not rows_per_struct:
+        if not per_struct:
             return self.active_struct_indices.copy()
 
-        all_rows = []
-        row_struct_indices = []
-        row_eqn_indices = []
-        for struct_index, item in enumerate(rows_per_struct):
-            all_rows.extend(item.rows)
-            row_struct_indices.extend([struct_index] * len(item.eqn_indices))
-            row_eqn_indices.extend(int(eqn_index) for eqn_index in item.eqn_indices)
+        grads = []
+        struct_of_eqn = []
+        index_of_eqn = []
+        for struct_index, eqns in enumerate(per_struct):
+            grads.extend(eqns.grads)
+            struct_of_eqn.extend([struct_index] * len(eqns.indices))
+            index_of_eqn.extend(int(index) for index in eqns.indices)
 
-        if not all_rows:
+        if not grads:
             return self.active_struct_indices.copy()
-        all_rows = numpy.asarray(all_rows, dtype=float64)
+        grads = numpy.asarray(grads, dtype=float64)
         n_swaps = 0
 
         while n_swaps < max_swaps:
-            # grades[j] = max_i |all_rows[j] @ invA.T|  — one matmul for all rows
-            BinvAT = all_rows @ self.invA.T  # (total_atoms, n)
-            grades = numpy.abs(BinvAT).max(axis=1)  # (total_atoms,)
+            # grades[j] = max_i |grads[j] @ invA.T|  — one matmul for all equations
+            BinvAT = grads @ self.invA.T  # (n_equations, n)
+            grades = numpy.abs(BinvAT).max(axis=1)  # (n_equations,)
 
             best_j = int(grades.argmax())
             if grades[best_j] <= self.threshold:
                 break  # converged
 
-            swapped, _k, swap_row, swap_pool_id, swap_struct_index, swap_eqn_index = self.try_swap(
-                all_rows[best_j],
+            swapped, _k, displaced_grad, displaced_pool_id, displaced_struct_index, displaced_index = self.try_swap(
+                grads[best_j],
                 pool_id=pool_id,
-                struct_index=row_struct_indices[best_j],
-                eqn_index=row_eqn_indices[best_j],
+                struct_index=struct_of_eqn[best_j],
+                eqn_index=index_of_eqn[best_j],
             )
             if not swapped:
                 break
-            # mlip-3 swaps the entering B row with the displaced active row,
+            # mlip-3 swaps the entering equation with the displaced active one,
             # so future iterations grade the updated candidate matrix.
-            all_rows[best_j] = swap_row
-            row_struct_indices[best_j] = swap_struct_index
-            row_eqn_indices[best_j] = swap_eqn_index
+            grads[best_j] = displaced_grad
+            struct_of_eqn[best_j] = displaced_struct_index
+            index_of_eqn[best_j] = displaced_index
             n_swaps += 1
 
         return self.active_struct_indices.copy()
 
     def restore_active(self, cfg_indices: ndarray, eqn_indices: ndarray, pool_id: int) -> None:
-        """Restore active-row provenance from saved config/equation indices."""
+        """Restore the provenance of each active equation from saved indices."""
         cfg_indices = numpy.asarray(cfg_indices, dtype=intp)
         self.active_pool_ids[:] = numpy.where(cfg_indices >= 0, pool_id, -1)
         self.active_struct_indices[:] = cfg_indices
@@ -165,7 +170,9 @@ class MaxVol:
         Returns
         -------
         tuple
-            ``(swapped, active_row_index, swap_row, swap_pool_id, swap_struct_index, swap_eqn_index)``.
+            ``(swapped, active_index, displaced_grad, displaced_pool_id,
+            displaced_struct_index, displaced_eqn_index)`` — the last four
+            describe the equation that v evicted from the active set.
         """
         w = v @ self.invA.T  # grade elements
         k = int(numpy.abs(w).argmax())
@@ -176,12 +183,12 @@ class MaxVol:
         tmp = 1.0 / w[k]
         buf3 = tmp * (self.invA @ dv)  # invA * dv
         self.invA -= numpy.outer(buf3, self.invA[k].copy())
-        swap_row = self.A[k].copy()
-        swap_pool_id = int(self.active_pool_ids[k])
-        swap_struct_index = int(self.active_struct_indices[k])
-        swap_eqn_index = int(self.active_eqn_indices[k])
+        displaced_grad = self.A[k].copy()
+        displaced_pool_id = int(self.active_pool_ids[k])
+        displaced_struct_index = int(self.active_struct_indices[k])
+        displaced_eqn_index = int(self.active_eqn_indices[k])
         self.A[k] = v
         self.active_pool_ids[k] = pool_id
         self.active_struct_indices[k] = struct_index
         self.active_eqn_indices[k] = eqn_index
-        return True, k, swap_row, swap_pool_id, swap_struct_index, swap_eqn_index
+        return True, k, displaced_grad, displaced_pool_id, displaced_struct_index, displaced_eqn_index

@@ -41,38 +41,37 @@ _LINOPT_STEPS = (25, 70, 100, 150, 250, 400)
 
 def _weighted_rmse(pot, dataset, w_E=1.0, w_F=1.0, w_S=0.1):
     """Scalar weighted RMSE across energy, forces, stresses."""
-    from .design_matrix import _eval_basis
-
     lc = pot.get_linear_coeffs()
     sc = pot.get_species_coeffs()
     sq_sum = 0.0
     n_total = 0
 
-    for entry in dataset:
-        types = entry["types"]
-        n_atoms = len(types)
+    for sample in dataset:
+        n_atoms = sample.n_atoms
+        types = numpy.asarray(sample.neighbors.types)
 
         # Energy
-        basis = _eval_basis(pot, entry)
-        e_pred = (basis @ lc).sum() + sum(sc[t] for t in types)
-        e_err = (e_pred - float(entry["energy"])) / n_atoms
+        basis = numpy.asarray(pot.eval_basis(sample.neighbors), dtype=float64)
+        e_pred = (basis @ lc).sum() + sc[types].sum()
+        e_err = (e_pred - sample.energy) / n_atoms
         sq_sum += w_E * e_err**2
         n_total += 1
 
+        want_stress = sample.stress is not None and sample.volume is not None and w_S > 0
+        if (sample.forces is not None and w_F > 0) or want_stress:
+            result = pot.compute(sample.neighbors, compute_virials=want_stress, compute_eatom=False)
+
         # Forces
-        if "forces" in entry and w_F > 0:
-            result = pot.compute(entry["types"], entry["ilist"], entry["numneigh"], entry["firstneigh"], entry["displacements"], compute_virials=False, compute_eatom=False)
-            f_err = (result["forces"] - entry["forces"]).ravel()
+        if sample.forces is not None and w_F > 0:
+            f_err = (result["forces"] - sample.forces).ravel()
             sq_sum += w_F * numpy.dot(f_err, f_err) / (n_atoms * 3)
             n_total += 1
 
         # Stress
-        if "stress" in entry and "volume" in entry and w_S > 0:
-            result = pot.compute(entry["types"], entry["ilist"], entry["numneigh"], entry["firstneigh"], entry["displacements"], compute_virials=True, compute_eatom=False)
+        if want_stress:
             v = result["virials"]
-            vol = entry["volume"]
-            s_pred = numpy.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]]) / vol
-            s_err = s_pred - numpy.asarray(entry["stress"])
+            s_pred = numpy.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]]) / sample.volume
+            s_err = s_pred - sample.stress
             sq_sum += w_S * numpy.dot(s_err, s_err) / 6
             n_total += 1
 
@@ -95,41 +94,32 @@ def _compute_efs_grad(pot, local_data, n_radial, w_E, w_F, w_S, comm):
     total_loss = 0.0
     grad = numpy.zeros(n_radial, dtype=float64)
 
-    for entry in local_data:
-        n = len(entry["types"])
-        has_stress = w_S > 0 and "stress" in entry and "volume" in entry
+    for sample in local_data:
+        n = sample.n_atoms
+        has_stress = w_S > 0 and sample.stress is not None and sample.volume is not None
 
-        energy, forces, virials, e_grad, fg, vg = pot.compute_with_radial_grad(
-            entry["types"],
-            entry["ilist"],
-            entry["numneigh"],
-            entry["firstneigh"],
-            entry["displacements"],
-            has_stress,
-        )
+        energy, forces, virials, e_grad, fg, vg = pot.compute_with_radial_grad(sample.neighbors, has_stress)
 
         if w_E > 0:
             # w_E/N * E_err² — matches mlip-3: wgt_energy = w_E / N^wgt_scale_power_energy
-            E_err = float(energy) - float(entry["energy"])
+            E_err = float(energy) - sample.energy
             total_loss += w_E / n * E_err**2
-            grad += w_E / n * 2.0 * E_err * e_grad[:n_radial]
+            grad += w_E / n * 2.0 * E_err * e_grad
 
-        if w_F > 0 and "forces" in entry:
+        if w_F > 0 and sample.forces is not None:
             # w_F * Σ_ia f_err² — matches mlip-3: wgt_forces = w_F (wgt_scale_power_forces=0)
-            f_err = (numpy.asarray(forces) - entry["forces"]).ravel()
+            f_err = (numpy.asarray(forces) - sample.forces).ravel()
             total_loss += w_F * numpy.dot(f_err, f_err)
-            grad += w_F * 2.0 * f_err @ fg[:, :, :n_radial].reshape(n * 3, n_radial)
+            grad += w_F * 2.0 * f_err @ fg.reshape(n * 3, n_radial)
 
         if has_stress:
-            vol = entry["volume"]
             # w_S/N * Σ_ab virial_err² — matches mlip-3: wgt_stress = w_S / N.
-            # entry["stress"] is ASE Voigt (eV/Å³); multiply by vol → virial (eV).
+            # sample.stress is ASE Voigt (eV/Å³); multiply by volume → virial (eV).
             v_pred = numpy.array([-virials[0], -virials[1], -virials[2], -virials[5], -virials[4], -virials[3]])
-            v_ref = numpy.asarray(entry["stress"]) * vol
-            v_err = v_pred - v_ref
+            v_err = v_pred - sample.stress * sample.volume
             total_loss += w_S / n * numpy.dot(v_err, v_err)
             vg_v = numpy.stack([-vg[0], -vg[1], -vg[2], -vg[5], -vg[4], -vg[3]])
-            grad += w_S * 2.0 / n * v_err @ vg_v[:, :n_radial]
+            grad += w_S * 2.0 / n * v_err @ vg_v
 
     if comm is not None:
         buf = numpy.array([total_loss])
@@ -233,7 +223,7 @@ class _TorchNonlinearFitter:
         import torch
         from .linear_fit import LinearFitter
 
-        n_radial = (self.pot.get_coeff_count() - self.pot.get_alpha_scalar_count() - self.pot.get_species_count())
+        n_radial = self.pot.get_radial_coeff_count()
         K = len(dataset)
 
         x0 = numpy.array(self.pot.get_radial_basis_coeffs()).ravel()[:n_radial].copy()
@@ -303,7 +293,7 @@ class NonlinearFitter:
 
     Parameters
     ----------
-    pot : MTPPotential
+    pot : MTPTraining
         Potential to fit (modified in-place after fit()).
     backend : {"scipy", "torch"}
         "scipy"  — Scipy L-BFGS-B; full EFS analytical gradient; no extra deps.
@@ -353,7 +343,7 @@ class NonlinearFitter:
 
         Parameters
         ----------
-        dataset : list of entry dicts (see design_matrix module for format)
+        dataset : list of Sample
         comm : mpi4py communicator or None
 
         Returns

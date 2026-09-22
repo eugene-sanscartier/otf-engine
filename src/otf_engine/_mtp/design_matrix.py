@@ -1,99 +1,53 @@
-"""
-Design matrix assembly for MTP linear fitting.
+"""Design matrix assembly for MTP linear fitting.
 
-Each dataset entry is a dict with keys:
-    types        : int32  (n_atoms,)
-    ilist        : int32  (n_atoms,)
-    numneigh     : int32  (n_atoms,)
-    firstneigh   : int32  (sum_numneigh,)
-    displacements: float64 (sum_numneigh, 3)
-    energy       : float
-    forces       : float64 (n_atoms, 3)   — optional
-    stress       : float64 (6,)           — optional, ASE Voigt convention
-
-All forces/stresses are optional; pass weight=0 to exclude them.
+The unknown vector is ``x = [linear_coeffs | species_coeffs]``. Energy, force
+and stress rows are all linear in it, so one ``eval_grad_linear`` pass per
+sample supplies every column: the site-energy gradient is the basis matrix, the
+force gradient is the force block, and the virial gradient is the stress block.
 """
 
-import numpy as np
+import numpy
 from numpy import float64
 
 
-def _eval_basis(pot, entry):
-    """Return basis matrix (n_atoms, n_basis) for one dataset entry."""
-    return np.asarray(pot.eval_basis(
-        entry["types"],
-        entry["ilist"],
-        entry["numneigh"],
-        entry["firstneigh"],
-        entry["displacements"],
-    ), dtype=float64)
+def linear_columns(pot, sample, need_forces, need_stress):
+    """Return (basis, A_F, A_S) for one sample.
 
-
-def _eval_force_and_stress_columns(pot, entry, n_basis):
+    basis : (n_atoms, n_basis)          d(site energy)/d(linear coeffs)
+    A_F   : (n_atoms, 3, n_basis)       d(forces)/d(linear coeffs), or None
+    A_S   : (6, n_basis)                d(stress * volume)/d(linear coeffs) in
+                                        ASE Voigt order, or None
     """
-    Return force design matrix (n_atoms, 3, n_basis) and
-    virial design matrix (6, n_basis) for one entry.
+    if not need_forces and not need_stress:
+        return numpy.asarray(pot.eval_basis(sample.neighbors), dtype=float64), None, None
 
-    Uses the column-by-column trick: set linear_coeffs = e_k, call compute(),
-    read forces and virials.  Cost: n_basis compute() calls.
-    """
-    original = pot.get_linear_coeffs().copy()
-    original_sc = pot.get_species_coeffs().copy()
+    basis, force_grad, virial_grad = pot.eval_grad_linear(sample.neighbors, need_stress)
 
-    # Zero species_coeffs so only the linear part contributes to forces/virials
-    pot.set_species_coeffs(np.zeros_like(original_sc))
+    A_S = None
+    if need_stress:
+        # virial_grad is (xx,yy,zz,xy,xz,yz); stress = -virial, ASE Voigt order.
+        vg = numpy.asarray(virial_grad, dtype=float64)
+        A_S = -numpy.stack([vg[0], vg[1], vg[2], vg[5], vg[4], vg[3]])
 
-    n_atoms = len(entry["types"])
-    A_F = np.zeros((n_atoms, 3, n_basis))
-    A_S = np.zeros((6, n_basis))
-
-    e_k = np.zeros(n_basis)
-    for k in range(n_basis):
-        e_k[k] = 1.0
-        pot.set_linear_coeffs(e_k)
-        result = pot.compute(
-            entry["types"],
-            entry["ilist"],
-            entry["numneigh"],
-            entry["firstneigh"],
-            entry["displacements"],
-            compute_virials=True,
-            compute_eatom=False,
-        )
-        A_F[:, :, k] = result["forces"]
-        # virials are (xx,yy,zz,xy,xz,yz); convert to ASE Voigt (xx,yy,zz,yz,xz,xy)
-        v = result["virials"]
-        A_S[:, k] = [-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]]
-        e_k[k] = 0.0
-
-    # Restore
-    pot.set_linear_coeffs(original)
-    pot.set_species_coeffs(original_sc)
-    return A_F, A_S
+    return numpy.asarray(basis, dtype=float64), numpy.asarray(force_grad, dtype=float64), A_S
 
 
 def build_design_matrix(pot, dataset, weight_energy=1.0, weight_forces=0.01, weight_stress=0.001, weight_scaling=1, include_forces=True, include_stress=True):
-    """
-    Assemble the full weighted design matrix and right-hand-side vector
-    for linear MTP fitting.
-
-    The unknown vector has length  n_basis + species_count:
-        x = [linear_coeffs | species_coeffs]
+    """Assemble the weighted design matrix and right-hand side.
 
     Parameters
     ----------
-    pot : MTPPotential
-    dataset : list of entry dicts (see module docstring)
+    pot : MTPTraining
+    dataset : list of Sample
     weight_energy / weight_forces / weight_stress : float
         Base weights for the three observable types.
     weight_scaling : int
         Exponent for per-config size normalisation: energy and stress rows are
-        divided by N^weight_scaling.  weight_scaling=1 (default) → divide by N,
-        matching mlip-3's wgt_scale_power_energy/stress = 1 convention.
-        Forces are never scaled (mlip-3 wgt_scale_power_forces default = 0).
+        divided by N^weight_scaling, matching mlip-3's
+        wgt_scale_power_energy/stress = 1.  Forces are never scaled
+        (mlip-3 wgt_scale_power_forces default = 0).
     include_forces / include_stress : bool
-        Whether to add force/stress rows (requires n_basis compute() calls
-        per structure; can be slow for large n_basis).
+        Whether to add force / stress rows.
 
     Returns
     -------
@@ -104,58 +58,42 @@ def build_design_matrix(pot, dataset, weight_energy=1.0, weight_forces=0.01, wei
     n_species = pot.get_species_count()
     n_params = n_basis + n_species
 
-    rows_A, rows_b = [], []
+    A_blocks, b_blocks = [], []
 
-    for entry in dataset:
-        types = entry["types"]
-        n_atoms = len(types)
-        basis = _eval_basis(pot, entry)  # (n_atoms, n_basis)
+    for sample in dataset:
+        n_atoms = sample.n_atoms
+        need_forces = include_forces and sample.forces is not None
+        need_stress = include_stress and sample.stress is not None
 
+        basis, A_F, A_S = linear_columns(pot, sample, need_forces, need_stress)
         scale = n_atoms**weight_scaling
 
         # --- Energy row ---
         w_e = weight_energy / scale
-        row_e = np.zeros(n_params)
-        row_e[:n_basis] = basis.sum(axis=0)
-        # species one-hot columns
-        for t in types:
-            row_e[n_basis + t] += 1.0
-        rows_A.append(w_e * row_e)
-        rows_b.append(np.array([w_e * float(entry["energy"])]))
+        energy_row = numpy.zeros(n_params)
+        energy_row[:n_basis] = basis.sum(axis=0)
+        types = numpy.asarray(sample.neighbors.types)
+        energy_row[n_basis:] = numpy.bincount(types, minlength=n_species)
+        A_blocks += [w_e * energy_row[None, :]]
+        b_blocks += [numpy.array([w_e * sample.energy])]
 
-        # --- Force rows ---
-        if include_forces and "forces" in entry:
-            A_F, A_S = _eval_force_and_stress_columns(pot, entry, n_basis)
-            w_f = weight_forces  # forces: no per-size scaling (weight_scaling_forces=0)
-            # shape (n_atoms*3, n_params): force rows have no species column contribution
-            A_F_flat = A_F.reshape(n_atoms * 3, n_basis)
-            B_F = np.zeros((n_atoms * 3, n_params))
-            B_F[:, :n_basis] = A_F_flat
-            rows_A.append(w_f * B_F)
-            rows_b.append(w_f * entry["forces"].ravel())
+        # --- Force rows ---  no per-size scaling
+        if need_forces:
+            B_F = numpy.zeros((n_atoms * 3, n_params))
+            B_F[:, :n_basis] = A_F.reshape(n_atoms * 3, n_basis)
+            A_blocks += [weight_forces * B_F]
+            b_blocks += [weight_forces * sample.forces.ravel()]
 
-            # --- Stress rows ---
-            if include_stress and "stress" in entry:
-                vol = entry.get("volume")
-                if vol is None:
-                    raise ValueError("Entry must include 'volume' when include_stress=True")
-                w_s = weight_stress / scale
-                B_S = np.zeros((6, n_params))
-                B_S[:, :n_basis] = A_S / vol
-                rows_A.append(w_s * B_S)
-                rows_b.append(w_s * np.asarray(entry["stress"], dtype=float64))
-        elif include_stress and "stress" in entry and "forces" not in entry:
-            # Compute stress columns without forces
-            _, A_S = _eval_force_and_stress_columns(pot, entry, n_basis)
-            vol = entry.get("volume")
-            if vol is None:
-                raise ValueError("Entry must include 'volume' when include_stress=True")
+        # --- Stress rows ---
+        if need_stress:
+            if sample.volume is None:
+                raise ValueError("Sample must carry a volume when stress rows are included")
             w_s = weight_stress / scale
-            B_S = np.zeros((6, n_params))
-            B_S[:, :n_basis] = A_S / vol
-            rows_A.append(w_s * B_S)
-            rows_b.append(w_s * np.asarray(entry["stress"], dtype=float64))
+            B_S = numpy.zeros((6, n_params))
+            B_S[:, :n_basis] = A_S / sample.volume
+            A_blocks += [w_s * B_S]
+            b_blocks += [w_s * sample.stress]
 
-    A = np.vstack(rows_A)
-    b = np.concatenate(rows_b)
+    A = numpy.vstack(A_blocks)
+    b = numpy.concatenate(b_blocks)
     return A, b

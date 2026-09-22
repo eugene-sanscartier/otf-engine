@@ -18,7 +18,7 @@ def write_mtp(potential, filename, template_filename=None):
     """Write an MTP potential to an .mtp file.
 
     The current implementation writes the canonical file structure expected by
-    MTPPotential.read_file(). If template_filename is provided, it is accepted
+    PairMTP::read_file(). If template_filename is provided, it is accepted
     for API compatibility but not required.
     """
     path = Path(filename)
