@@ -21,12 +21,18 @@ static py::tuple grad_block(MTPTraining& self, const PyNeighbors& nb, MTPTrainin
         vg_ptr = vg.mutable_data();
     }
 
-    if (radial) {
-        self.eval_grad_radial(nb.view(), eg.mutable_data(), fg.mutable_data(), vg_ptr);
-    } else if (cols == MTPTraining::LINEAR) {
-        self.eval_grad_linear(nb.view(), eg.mutable_data(), fg.mutable_data(), vg_ptr);
-    } else {
-        self.eval_grad_all(nb.view(), eg.mutable_data(), fg.mutable_data(), vg_ptr);
+    double* eg_ptr = eg.mutable_data();
+    double* fg_ptr = fg.mutable_data();
+
+    {
+        py::gil_scoped_release unlocked;
+        if (radial) {
+            self.eval_grad_radial(nb.view(), eg_ptr, fg_ptr, vg_ptr);
+        } else if (cols == MTPTraining::LINEAR) {
+            self.eval_grad_linear(nb.view(), eg_ptr, fg_ptr, vg_ptr);
+        } else {
+            self.eval_grad_all(nb.view(), eg_ptr, fg_ptr, vg_ptr);
+        }
     }
 
     return py::make_tuple(eg, fg, compute_virial_grad ? py::object(vg) : py::none());
@@ -58,7 +64,16 @@ static py::tuple compute_with_radial_grad(MTPTraining& self, const PyNeighbors& 
         vg_ptr = vg.mutable_data();
     }
 
-    double energy = self.compute_with_radial_grad(nb.view(), forces.mutable_data(), virials.mutable_data(), eg.mutable_data(), fg.mutable_data(), vg_ptr);
+    double* forces_ptr = forces.mutable_data();
+    double* virials_ptr = virials.mutable_data();
+    double* eg_ptr = eg.mutable_data();
+    double* fg_ptr = fg.mutable_data();
+
+    double energy;
+    {
+        py::gil_scoped_release unlocked;
+        energy = self.compute_with_radial_grad(nb.view(), forces_ptr, virials_ptr, eg_ptr, fg_ptr, vg_ptr);
+    }
 
     return py::make_tuple(energy, forces, virials, eg, fg, compute_virial_grad ? py::object(vg) : py::none());
 }

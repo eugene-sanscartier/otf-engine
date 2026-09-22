@@ -12,7 +12,15 @@ static py::dict compute(PairMTP& self, const PyNeighbors& nb, bool compute_viria
     auto virials = zeros({6});
     auto eatom = zeros({compute_eatom ? n : 0});
 
-    double energy = self.compute(nb.view(), forces.mutable_data(), compute_virials ? virials.mutable_data() : nullptr, compute_eatom ? eatom.mutable_data() : nullptr);
+    double* forces_ptr = forces.mutable_data();
+    double* virials_ptr = compute_virials ? virials.mutable_data() : nullptr;
+    double* eatom_ptr = compute_eatom ? eatom.mutable_data() : nullptr;
+
+    double energy;
+    {
+        py::gil_scoped_release unlocked;
+        energy = self.compute(nb.view(), forces_ptr, virials_ptr, eatom_ptr);
+    }
 
     py::dict result;
     result["energy"] = energy;
@@ -27,7 +35,11 @@ static py::dict compute(PairMTP& self, const PyNeighbors& nb, bool compute_viria
 
 static DoubleArray eval_basis(PairMTP& self, const PyNeighbors& nb) {
     auto out = zeros({nb.inum(), self.get_alpha_scalar_count()});
-    self.eval_basis(nb.view(), out.mutable_data());
+    double* out_ptr = out.mutable_data();
+    {
+        py::gil_scoped_release unlocked;
+        self.eval_basis(nb.view(), out_ptr);
+    }
     return out;
 }
 

@@ -8,7 +8,13 @@
 
 static py::tuple grade(PairMTPExtrapolation& self, const PyNeighbors& nb) {
     auto grades = zeros({nb.inum()});
-    double cfg_grade = self.grade(nb.view(), grades.mutable_data());
+    double* grades_ptr = grades.mutable_data();
+
+    double cfg_grade;
+    {
+        py::gil_scoped_release unlocked;
+        cfg_grade = self.grade(nb.view(), grades_ptr);
+    }
     return py::make_tuple(grades, cfg_grade);
 }
 
@@ -18,7 +24,11 @@ static py::tuple grade(PairMTPExtrapolation& self, const PyNeighbors& nb) {
 
 static DoubleArray eval_grad(PairMTPExtrapolation& self, const PyNeighbors& nb) {
     auto out = zeros({nb.inum(), self.coeff_count()});
-    self.eval_grad(nb.view(), out.mutable_data());
+    double* out_ptr = out.mutable_data();
+    {
+        py::gil_scoped_release unlocked;
+        self.eval_grad(nb.view(), out_ptr);
+    }
     return out;
 }
 
