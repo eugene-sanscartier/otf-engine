@@ -49,6 +49,7 @@ class PairMTP {
     double get_max_cutoff() const { return max_cutoff; }
     double get_scaling() const { return scaling; }
     const std::string& get_potential_name() const { return potential_name; }
+    const std::string& get_radial_basis_type() const { return radial_basis_type; }
 
     // radial_basis_coeffs: flat [species^2 * radial_func_count * radial_basis_size]
     const double* get_radial_basis_coeffs() const { return radial_basis_coeffs.data(); }
@@ -72,6 +73,7 @@ class PairMTP {
 
     std::string potential_name = "Untitled";
     std::string potential_tag;
+    std::string radial_basis_type;
 
     int species_count = 0;
     double scaling = 1.0;

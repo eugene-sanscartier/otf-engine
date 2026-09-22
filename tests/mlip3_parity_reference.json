@@ -1,0 +1,482 @@
+{
+  "match_criteria": {
+    "calculate_grade": [
+      "compare MV_grade per configuration by absolute difference",
+      "compare nbh_grades per configuration by max absolute per-atom difference"
+    ],
+    "select_add": [
+      "compare selected candidate identities by structure fingerprint",
+      "compare selected candidate order",
+      "report selected candidate indices relative to the candidate slice and to the full example set"
+    ]
+  },
+  "calculate_grade": {
+    "max_mv_diff": 4.964560332609835e-06,
+    "max_nbh_diff": 4.997504682080489e-06,
+    "mean_mv_diff": 2.381574186096374e-06,
+    "mean_nbh_diff": 4.898047443390632e-06,
+    "worst_mv_config": {
+      "cfg_index": 21,
+      "mlp_mv_grade": 321.68188,
+      "py_mv_grade": 321.68187503543965,
+      "abs_diff": 4.964560332609835e-06
+    },
+    "worst_nbh_config": {
+      "cfg_index": 18,
+      "mlp_max_nbh_grade": 223.78994,
+      "py_max_nbh_grade": 223.7899401259106,
+      "max_abs_diff": 4.997504682080489e-06
+    }
+  },
+  "select_add": [
+    {
+      "train_n": 1,
+      "cand_n": 8,
+      "mlp_selected": 4,
+      "py_selected": 4,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        5,
+        6,
+        7,
+        8
+      ],
+      "py_candidate_global_indices": [
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "train_n": 2,
+      "cand_n": 8,
+      "mlp_selected": 5,
+      "py_selected": 5,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "py_candidate_global_indices": [
+        5,
+        6,
+        7,
+        8,
+        9
+      ]
+    },
+    {
+      "train_n": 3,
+      "cand_n": 8,
+      "mlp_selected": 6,
+      "py_selected": 6,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "py_candidate_global_indices": [
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "train_n": 5,
+      "cand_n": 8,
+      "mlp_selected": 7,
+      "py_selected": 7,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        5,
+        6,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "py_candidate_global_indices": [
+        5,
+        6,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    {
+      "train_n": 8,
+      "cand_n": 8,
+      "mlp_selected": 6,
+      "py_selected": 6,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        9,
+        10,
+        12,
+        13,
+        14,
+        15
+      ],
+      "py_candidate_global_indices": [
+        9,
+        10,
+        12,
+        13,
+        14,
+        15
+      ]
+    },
+    {
+      "train_n": 10,
+      "cand_n": 8,
+      "mlp_selected": 7,
+      "py_selected": 7,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        10,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "py_candidate_global_indices": [
+        10,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ]
+    },
+    {
+      "train_n": 12,
+      "cand_n": 8,
+      "mlp_selected": 7,
+      "py_selected": 7,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        0,
+        1,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        12,
+        13,
+        15,
+        16,
+        17,
+        18,
+        19
+      ],
+      "py_candidate_global_indices": [
+        12,
+        13,
+        15,
+        16,
+        17,
+        18,
+        19
+      ]
+    },
+    {
+      "train_n": 16,
+      "cand_n": 8,
+      "mlp_selected": 7,
+      "py_selected": 7,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7
+      ],
+      "py_candidate_local_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        23
+      ],
+      "py_candidate_global_indices": [
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        23
+      ]
+    },
+    {
+      "train_n": 20,
+      "cand_n": 8,
+      "mlp_selected": 4,
+      "py_selected": 4,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        0,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        0,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        20,
+        25,
+        26,
+        27
+      ],
+      "py_candidate_global_indices": [
+        20,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "train_n": 24,
+      "cand_n": 8,
+      "mlp_selected": 6,
+      "py_selected": 6,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "py_candidate_local_indices": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "mlp_candidate_global_indices": [
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ],
+      "py_candidate_global_indices": [
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ]
+    },
+    {
+      "train_n": 28,
+      "cand_n": 6,
+      "mlp_selected": 6,
+      "py_selected": 6,
+      "same_order": true,
+      "same_set": true,
+      "mlp_candidate_local_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "py_candidate_local_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "mlp_candidate_global_indices": [
+        28,
+        29,
+        30,
+        31,
+        32,
+        33
+      ],
+      "py_candidate_global_indices": [
+        28,
+        29,
+        30,
+        31,
+        32,
+        33
+      ]
+    }
+  ],
+  "splits": [
+    "1:8",
+    "2:8",
+    "3:8",
+    "5:8",
+    "8:8",
+    "10:8",
+    "12:8",
+    "16:8",
+    "20:8",
+    "24:8",
+    "28:6"
+  ]
+}

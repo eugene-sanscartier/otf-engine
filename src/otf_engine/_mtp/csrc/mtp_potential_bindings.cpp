@@ -76,6 +76,7 @@ xx,yy,zz,xy,xz,yz, and "eatom" (n_atoms) when compute_eatom is True.
         .def("get_scaling", &PairMTP::get_scaling)
         .def("set_scaling", &PairMTP::set_scaling, py::arg("scaling"), "Set the global scaling parameter.")
         .def("get_potential_name", &PairMTP::get_potential_name)
+        .def("get_radial_basis_type", &PairMTP::get_radial_basis_type)
 
         .def("get_radial_basis_coeffs",
              [](const PairMTP& self) {

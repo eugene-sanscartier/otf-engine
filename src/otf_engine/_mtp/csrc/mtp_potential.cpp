@@ -357,7 +357,6 @@ void PairMTP::read_file(std::istream& is) {
 
     if (tfr.keyword() != "radial_basis_type")
         throw std::runtime_error("PairMTP: no radial basis set type is specified");
-    std::string radial_basis_type;
     tfr.rest() >> radial_basis_type;
 
     // Set the type of radial basis. Only RBChebyshev is in the reference; the
