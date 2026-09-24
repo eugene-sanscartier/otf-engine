@@ -81,6 +81,46 @@ def _env_for_fork(size: int, env: dict) -> dict:
     return base
 
 
+# A new job must not inherit variables tied to an instance of the submitter
+# (its job, srun step, mpirun launch, rank or process); it must keep those
+# describing the compute environment (cluster, Slurm config, modules, user
+# settings).  sbatch cannot do this itself: SLURM_* are propagated under
+# every --export mode, and NONE/NIL also drop the loaded modules.
+
+_SBATCH_REMOVE_VAR_PREFIXES = (
+    # Launch / rank scope.  PMIx and PMI: connection to one server and this process's
+    # identity in it.  Open MPI: world/universe layout and launch markers.
+    "PMIX_", "PMI_", "OMPI_COMM_WORLD_", "OMPI_WORLD_",
+    # OMPI_MCA_* is a config namespace (btl, pml, plm_slurm_args ... are kept), but the
+    # launcher also passes per-launch runtime state through it: daemon URIs, session
+    # dirs, per-job transport key, jobid/vpid, size, cwd, binding state.
+    "OMPI_MCA_orte_", "OMPI_MCA_ess", "OMPI_MCA_prte_",
+    # Job and step scope: everything Slurm sets for one allocation or srun step.  A new
+    # job gets fresh values for what applies to it, but leftovers are never unset and
+    # srun reads them as input (e.g. MEM_PER_CPU next to MEM_PER_NODE is fatal,
+    # CPU_BIND masks of another step make task launch fail).
+    "SLURM_", "SLURMD_", "SRUN_DEBUG",
+)
+_SBATCH_REMOVE_VARS = frozenset({
+    "OMPI_UNIVERSE_SIZE", "OMPI_APP_CTX_NUM_PROCS", "OMPI_NUM_APP_CTX", "OMPI_FIRST_RANKS",
+    "OMPI_ARGV", "OMPI_COMMAND", "OMPI_FILE_LOCATION", "OMPI_TOOL_NAME", "OMPI_LIBDIR_LOC",
+    "OMPI_VERSION", "OPAL_USER_PARAMS_GIVEN", "ORTE_SCHIZO_DETECTION", "PRTE_LAUNCHED", "PRTE_SHARED_FS",
+    "OMPI_MCA_pmix", "OMPI_MCA_num_procs", "OMPI_MCA_initial_wdir", "OMPI_MCA_mpi_oversubscribe",
+    "OMPI_MCA_hwloc_base_binding_policy", "OMPI_MCA_cpu_type", "OMPI_MCA_shmem_RUNTIME_QUERY_hint",
+    "OMPI_MCA_PREFIXES",
+    # Process scope: defaults MPI_Init sets for each process; every new process derives them again.
+    "PSM2_DEVICES", "HFI_NO_BACKTRACE", "IPATH_NO_BACKTRACE", "ZES_ENABLE_SYSMAN", "HOSTNAME",
+    "LOCAL_SCRATCH", "XDG_RUNTIME_DIR", "ENVIRONMENT",
+})
+# Cluster properties living in the SLURM_ namespace.
+_SLURM_ENVIRONMENT_NAMES = frozenset({"SLURM_MPI_TYPE", "SLURM_CONF"})
+
+
+def _env_for_sbatch(env: dict) -> dict:
+    """Return env for a new Slurm job: the submitter's env without its job/step/launch/rank/process state."""
+    return {k: v for k, v in env.items() if k in _SLURM_ENVIRONMENT_NAMES or not (k.startswith(_SBATCH_REMOVE_VAR_PREFIXES) or k in _SBATCH_REMOVE_VARS)}
+
+
 def _physical_cpu_count() -> int:
     import psutil
     return psutil.cpu_count(logical=False) or os.cpu_count() or 1
@@ -686,7 +726,7 @@ class SlurmLauncher(Launcher):
 
     def _submit_and_wait(self, submit_cmd: str) -> tuple[subprocess.CompletedProcess, str | None]:
         """Run an sbatch --wait command, returning (proc, job_id) parsed from 'Submitted batch job N'."""
-        proc = subprocess.run(submit_cmd, shell=True, env=os.environ, text=True, capture_output=True)
+        proc = subprocess.run(submit_cmd, shell=True, env=_env_for_sbatch(os.environ), text=True, capture_output=True)
         job_id = next((line.rsplit(" ", 1)[-1] for line in proc.stdout.splitlines() if line.startswith("Submitted batch job")), None)
         if proc.returncode != 0 and proc.stderr: sys.stderr.write(proc.stderr)
         return proc, job_id
