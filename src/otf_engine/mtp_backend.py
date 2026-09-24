@@ -15,6 +15,7 @@ from numpy import intp, float64
 logger = logging.getLogger(__name__)
 
 from ._mtp import MTPCalculator, MTPTraining, sample, write_mtp
+from ._mtp.neighbors import mtp_types
 from .almtp_io import MVSState, read_mvs_state, write_mvs_state
 from .maxvol import Equations, MaxVol
 
@@ -375,30 +376,36 @@ def train(potential, training_structs: list, save_to: str, iteration_limit: int 
 
 
 def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh") -> list:
-    """Rebuild the MaxVol active set (A, invA) in-place from the training set.
+    """Converge the #MVS_v1.1 active set in *potential* over *training_structs*, seeded from the one saved there.
 
-    Recomputes the selection matrices from scratch using the current MTP
-    coefficients and the given training structures, then writes the updated
-    #MVS_v1.1 section back into *potential*.  The MTP parameters themselves
-    are not changed.
-
-    Use this to resync the active set when train.cfg and potential.almtp have
-    diverged (training_stale), or after any operation that modifies train.cfg
-    without going through the full train() path.
-
-    Returns the selection equations it built, so a select_add call in the same
-    cycle need not rebuild them.
+    Returns the selection equations of *training_structs*, for select_add to reuse.
     """
     calc = MTPCalculator(potential)
+    pot = calc.potential
+    try:
+        saved = read_mvs_state(potential)
+    except RuntimeError:
+        saved = None
     if weights is None:
-        try:
-            weights = read_mvs_state(potential).weights
-        except RuntimeError:
-            weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
-    mv = MaxVol(calc.potential.get_coeff_count(), threshold=threshold)
-    train_eqns = [selection_equations(calc.potential, calc.neighbors(atoms), weights) for atoms in training_structs]
+        weights = saved.weights if saved is not None else dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
+
+    train_eqns = [selection_equations(pot, calc.neighbors(atoms), weights) for atoms in training_structs]
+
+    # The seed is the saved active equations of structures still in the training set, taken from train_eqns
+    # rather than the stored A: stored rows may predate the coefficients, and the search never re-grades an active row.
+    seed = [numpy.zeros(len(eqns.indices), dtype=bool) for eqns in train_eqns]
+    if saved is not None:
+        def key(atoms): return mtp_types(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
+        index_of = {key(atoms): i for i, atoms in enumerate(training_structs)}
+        match = [index_of.get(key(cfg)) for cfg in saved.selected_cfgs]
+        for c, e in zip(saved.active_cfg_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True):
+            if c >= 0 and match[c] is not None: seed[match[c]] |= train_eqns[match[c]].indices == e
+
+    mv = MaxVol(pot.get_coeff_count(), threshold=threshold)
+    mv.select_candidates([Equations(grads=eqns.grads[m], indices=eqns.indices[m]) for eqns, m in zip(train_eqns, seed, strict=True)], pool_id=_POOL_TRAIN)
     mv.select_candidates(train_eqns, pool_id=_POOL_TRAIN)
+
     state = _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN)
-    logger.info(f"Active set rebuilt: {len(state.selected_cfgs)}/{len(training_structs)} active structures from training set.")
+    logger.info(f"Active set: {len(state.selected_cfgs)}/{len(training_structs)} active structures, seeded with {sum(int(m.sum()) for m in seed)} equations.")
     write_mvs_state(potential, state)
     return train_eqns
