@@ -73,8 +73,11 @@ def grade_extrapolative_dumps(potential, extrapolative_dumps, extrapolation_fiel
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
 
+    n_workers = min(os.process_cpu_count(), len(extrapolative_dumps))
+    logger.info(f"Grading {len(extrapolative_dumps)} dumps on {n_workers} workers")
+
     graded_structures = []
-    with concurrent.futures.ProcessPoolExecutor() as executor:
+    with concurrent.futures.ProcessPoolExecutor(n_workers) as executor:
         futures = {executor.submit(_grade_one_dump, dump, potential, extrapolation_field, species, max_structures): dump for dump in extrapolative_dumps}
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
             structures = future.result()

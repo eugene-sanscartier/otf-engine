@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import argparse
+from pathlib import Path
 from .otf_mtp import main as _main
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
 from .cycles import next_cycle_dir, archive_cycle, LOG_FILE
@@ -18,8 +19,18 @@ def _load_evaluator():
     return mod.evaluator
 
 
+def _cgroup_cpus() -> set[int]:
+    """Return the CPUs this process's cgroup v2 cpuset allows."""
+    cgroup = Path("/proc/self/cgroup").read_text().split("0::", 1)[1].split()[0]
+    text = Path(f"/sys/fs/cgroup{cgroup}/cpuset.cpus.effective").read_text()
+    bounds = [[int(n) for n in part.split("-")] for part in text.strip().split(",")]
+    cpus = {cpu for b in bounds for cpu in range(b[0], b[-1] + 1)}
+    return cpus
+
+
 def main():
-    parser = argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
+
+    parser =argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
 
     parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
     parser.add_argument("-p", "--potential", help="input potential file name, will override input file 'potential' section", type=str, default="potential.almtp")
@@ -72,6 +83,12 @@ def main():
 
     logging.basicConfig(level=logging.INFO, filename=log_path, filemode="a", format="%(levelname)s %(module)s:%(funcName)s: %(message)s")
     print(f"{cycle_dir.name} running — {log_path}")
+
+    # The engine is often started by one MPI rank (pyKMC) and would inherit its binding to one core.
+    try:
+        os.sched_setaffinity(0, _cgroup_cpus())
+    except Exception as e:
+        logger.warning(f"Inherited {os.process_cpu_count()} CPUs, cgroup cpuset unreadable: {e!r}")
 
     try:
         _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
