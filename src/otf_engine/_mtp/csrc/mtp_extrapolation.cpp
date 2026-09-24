@@ -45,9 +45,8 @@ double PairMTPExtrapolation::compute(const NeighList& list, double* forces, doub
 
     const int cc = coeff_count();
     const int linear_basis_offset = radial_coeff_count + species_count;
-    const size_t radial_jacobian_size = (size_t) alpha_index_basic_count * species_count * radial_coeff_count_per_pair;
 
-    radial_jacobian.resize(radial_jacobian_size);
+    energy_ders_wrt_radial_vals.resize(radial_func_count);
     energy_ders_wrt_coeffs.resize(cc);
 
     max_grade = 0;
@@ -77,11 +76,15 @@ double PairMTPExtrapolation::compute(const NeighList& list, double* forces, doub
             valid_j.resize(jac_size);
             valid_dr.resize(jac_size);
         }
+        // Sized apart from jac_size, which MTPTraining also grows
+        if (neighbor_basis_vals.size() < (size_t) jnum * radial_basis_size) {
+            angular_factors.resize((size_t) jnum * alpha_index_basic_count);
+            neighbor_basis_vals.resize((size_t) jnum * radial_basis_size);
+        }
 
         // Reset the working arrays
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
         std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
-        std::fill(radial_jacobian.begin(), radial_jacobian.end(), 0.0);
         std::fill(energy_ders_wrt_coeffs.begin(), energy_ders_wrt_coeffs.end(), 0.0);
 
         // ------------ Calculate Basic Moments ------------
@@ -97,6 +100,7 @@ double PairMTPExtrapolation::compute(const NeighList& list, double* forces, doub
 
             const double dist = std::sqrt(rsq);
             radial_basis->calc_radial_basis_ders(dist);
+            std::copy_n(radial_basis->radial_basis_vals.begin(), radial_basis_size, neighbor_basis_vals.begin() + (size_t) valid_count * radial_basis_size);
 
             // Precompute the coord and distance power
             for (int k = 1; k < max_alpha_index_basic; k++) {
@@ -135,17 +139,15 @@ double PairMTPExtrapolation::compute(const NeighList& list, double* forces, doub
                 double pow2 = coord_powers[alpha_index_basic[k][3]][2];
                 double pow = pow0 * pow1 * pow2;
 
-                // Calculate the radial jacobian
-                int mu_offset = mu * radial_basis_size;
-                double* jac_row = radial_jacobian.data() + ((size_t) k * species_count + jtype) * radial_coeff_count_per_pair + mu_offset;
-                for (int ri = 0; ri < radial_basis_size; ri++)
-                    jac_row[ri] += radial_basis->radial_basis_vals[ri] * norm_fac * pow;
+                // Angular factor of the radial jacobian, contracted after backpropagation
+                angular_factors[(size_t) valid_count * alpha_index_basic_count + k] = norm_fac * pow;
 
                 val *= norm_fac;
                 der = der * norm_fac - norm_rank * val / dist;
                 moment_tensor_vals[k] += val * pow;
 
                 // Calculate the Jacobian from derivatives
+                if (!forces) continue;
                 const size_t jac = (size_t) valid_count * alpha_index_basic_count + k;
                 pow *= der / dist;
                 moment_jacobian[jac][0] = pow * r[0];
@@ -239,15 +241,17 @@ double PairMTPExtrapolation::compute(const NeighList& list, double* forces, doub
         }
 
         //------------ Multiply energy ders wrt moment by the radial jacobian to get rad ders ------------
-        for (int k = 0; k < alpha_index_basic_count; k++) {
-            const double der = nbh_energy_ders_wrt_moments[k];
-            if (der == 0.0) continue;
-            for (int jjtype = 0; jjtype < species_count; jjtype++) {
-                const int offset = (itype * species_count + jjtype) * radial_coeff_count_per_pair;
-                const double* jac_row = radial_jacobian.data() + ((size_t) k * species_count + jjtype) * radial_coeff_count_per_pair;
-                for (int ri = 0; ri < radial_coeff_count_per_pair; ri++)
-                    energy_ders_wrt_coeffs[offset + ri] += der * jac_row[ri];
-            }
+        for (int jj = 0; jj < valid_count; jj++) {
+            std::fill(energy_ders_wrt_radial_vals.begin(), energy_ders_wrt_radial_vals.end(), 0.0);
+            const double* ang = angular_factors.data() + (size_t) jj * alpha_index_basic_count;
+            for (int k = 0; k < alpha_index_basic_count; k++)
+                energy_ders_wrt_radial_vals[alpha_index_basic[k][0]] += nbh_energy_ders_wrt_moments[k] * ang[k];
+
+            const double* basis = neighbor_basis_vals.data() + (size_t) jj * radial_basis_size;
+            const int offset = (itype * species_count + list.types[valid_j[jj]]) * radial_coeff_count_per_pair;
+            for (int mu = 0; mu < radial_func_count; mu++)
+                for (int ri = 0; ri < radial_basis_size; ri++)
+                    energy_ders_wrt_coeffs[offset + mu * radial_basis_size + ri] += energy_ders_wrt_radial_vals[mu] * basis[ri];
         }
 
         // The per-atom row is what select_add needs; the reference discards it.

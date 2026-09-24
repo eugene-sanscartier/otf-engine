@@ -52,7 +52,9 @@ class PairMTPExtrapolation : public PairMTP {
     double max_grade = 0.0;                  // Grade of current iteration
     std::vector<double> inverse_active_set;  // [coeff_count * coeff_count]
 
-    std::vector<double> radial_jacobian;         // ders of basic moments wrt radial coeffs
+    std::vector<double> angular_factors;         // [valid neighbor * alpha_index_basic_count] pow_k(r) / r^rank_k
+    std::vector<double> neighbor_basis_vals;     // [valid neighbor * radial_basis_size] radial basis at r_ij
+    std::vector<double> energy_ders_wrt_radial_vals;  // [radial_func_count] per neighbor
     std::vector<double> energy_ders_wrt_coeffs;  // candidate information vector
     std::vector<double> cfg_ders_wrt_coeffs;     // its sum over the configuration
 };

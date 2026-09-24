@@ -44,6 +44,7 @@ class MTPTraining : public PairMTPExtrapolation {
     std::vector<double> angular_values;    // [jac_size * alpha_index_basic_count]
     std::vector<double> angular_jacobians; // [jac_size * alpha_index_basic_count * 3]
 
+    std::vector<double> radial_jacobian; // [alpha_index_basic_count * species_count * radial_coeff_count_per_pair] ders of basic moments wrt radial coeffs
     std::vector<double> dM_dc;      // [alpha_moment_count * radial_coeff_count]
     std::vector<double> dG;         // [alpha_moment_count * radial_coeff_count]
     std::vector<double> dG_lin;     // [alpha_moment_count * alpha_scalar_count]
