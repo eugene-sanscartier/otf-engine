@@ -40,7 +40,7 @@ def _save_state(state):
         json.dump(state, f, indent=2)
 
 
-MAX_STRUCTURES_PER_DUMP = 1000
+MAX_STRUCTURES_PER_DUMP = 10000
 
 
 def _grade_one_dump(extrapolative_dump, potential, extrapolation_field, species, max_structures):
@@ -53,6 +53,7 @@ def _grade_one_dump(extrapolative_dump, potential, extrapolation_field, species,
         structures = [structures[i] for i in kept]
 
     for atoms in structures:
+        atoms.arrays["type_index"] = (atoms.arrays["type"] - 1).astype(numpy.int32)
         if atoms.has(extrapolation_field):
             atoms.set_array("nbh_grades", atoms.get_array(extrapolation_field).flatten())
 
@@ -63,7 +64,6 @@ def _grade_one_dump(extrapolative_dump, potential, extrapolation_field, species,
 def grade_extrapolative_dumps(potential, extrapolative_dumps, extrapolation_field="f_extrapolation_grade", species=None, max_structures=MAX_STRUCTURES_PER_DUMP):
     """Parse and grade every extrapolative dump, one file per core.
 
-    Grading holds the GIL inside the MTP extension, so the fan-out uses processes.
     Workers never log: the root logger is configured only in the parent.
     """
     # Pin each worker's BLAS to one thread, or they oversubscribe the cores the pool already claims.

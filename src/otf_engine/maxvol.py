@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy
 from numpy import intp, float64, ndarray
 
+SWEEP_ROWS = 1024
+
 
 @dataclass
 class Equations:
@@ -93,8 +95,8 @@ class MaxVol:
 
         At each step: find the globally highest-grade equation across ALL
         structures, swap it in, repeat until none grades above threshold or
-        max_swaps is exhausted.  Vectorised: all grades computed as one
-        matrix-multiply per sweep (O(n_equations × n²), in NumPy).
+        max_swaps is exhausted.  Vectorised: each sweep grades every equation
+        with one matrix-multiply per SWEEP_ROWS-row block (O(n_equations × n²), in NumPy).
 
         Parameters
         ----------
@@ -121,12 +123,17 @@ class MaxVol:
         if not grads:
             return self.active_struct_indices.copy()
         grads = numpy.asarray(grads, dtype=float64)
+        grades = numpy.empty(len(grads))
+        BinvAT = numpy.empty((min(SWEEP_ROWS, len(grads)), grads.shape[1]))
         n_swaps = 0
 
         while n_swaps < max_swaps:
-            # grades[j] = max_i |grads[j] @ invA.T|  — one matmul for all equations
-            BinvAT = grads @ self.invA.T  # (n_equations, n)
-            grades = numpy.abs(BinvAT).max(axis=1)  # (n_equations,)
+            # grades[j] = max_i |grads[j] @ invA.T|, a block of rows at a time so the full product is never held
+            for start in range(0, len(grads), SWEEP_ROWS):
+                block = BinvAT[:min(SWEEP_ROWS, len(grads) - start)]
+                numpy.matmul(grads[start:start + SWEEP_ROWS], self.invA.T, out=block)
+                numpy.abs(block, out=block)
+                block.max(axis=1, out=grades[start:start + SWEEP_ROWS])
 
             best_j = int(grades.argmax())
             if grades[best_j] <= self.threshold:

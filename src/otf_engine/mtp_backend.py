@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from ._mtp import MTPCalculator, MTPTraining, sample, write_mtp
 from ._mtp.neighbors import mtp_types
-from .almtp_io import MVSState, read_mvs_state, write_mvs_state
+from .almtp_io import MVSState, read_mvs_header, read_mvs_state, write_mvs_state
 from .maxvol import Equations, MaxVol
 
 # ---------------------------------------------------------------------------
@@ -184,10 +184,10 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     calc, potential_path = _open_calculator(potential)
     pot = calc.potential
 
-    if state is None and potential_path is not None:
-        state = read_mvs_state(potential_path)
-    weights = state.weights
-    mv = MaxVol.from_arrays(state.A, state.invA)
+    if state is None:
+        weights, _, invA = read_mvs_header(potential_path)
+    else:
+        weights, invA = state.weights, state.invA
     site_en_w = float(weights.get("site_en_weight", 1.0))
 
     # The contraction is a coeff_count-square GEMM, so numpy outruns
@@ -195,7 +195,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     for i, atoms in enumerate(structures):
         grads = selection_equations(pot, calc.neighbors(atoms), weights).grads
 
-        scores = numpy.abs(grads @ mv.invA.T)  # (n_equations, n)
+        scores = numpy.abs(grads @ invA.T)  # (n_equations, n)
         cfg_grade = float(scores.max())
 
         # Per-atom grades come from the site-energy equations, which mlip-3
@@ -367,7 +367,7 @@ def train(potential, training_structs: list, save_to: str, iteration_limit: int 
         sel_weights = selection_state.weights
     elif potential_path is not None:
         try:
-            sel_weights = read_mvs_state(potential_path).weights
+            sel_weights = read_mvs_header(potential_path)[0]
         except RuntimeError:
             sel_weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
     else:

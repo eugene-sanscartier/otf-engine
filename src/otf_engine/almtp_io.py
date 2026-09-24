@@ -56,7 +56,7 @@ def _read_header_and_binary(data: bytes) -> tuple[dict, ndarray, ndarray, int]:
 
     pos = marker_pos + len(_MARKER)
     weights = {}
-    for _ in range(5):
+    while len(weights) < 5:
         nl = data.find(b"\n", pos)
         if nl == -1:
             raise ValueError("Unexpected EOF while reading #MVS_v1.1 header")
@@ -106,6 +106,18 @@ def _read_links_and_cfgs(data: bytes, n: int, end_pos: int) -> tuple[ndarray, nd
     cfg_text = data[pos + 2:].decode()
     selected_cfgs = [] if not cfg_text.strip() else read_cfg(StringIO(cfg_text))
     return active_cfg_indices, active_eqn_indices, selected_cfgs
+
+
+def read_mvs_header(almtp_path: str) -> tuple[dict, ndarray, ndarray]:
+    """Return the selection weights, A and invA, without parsing the stored configurations."""
+    with open(almtp_path, "rb") as f:
+        data = f.read()
+
+    try:
+        weights, A, invA, _ = _read_header_and_binary(data)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
+    return weights, A, invA
 
 
 def read_mvs_state(almtp_path: str) -> MVSState:
