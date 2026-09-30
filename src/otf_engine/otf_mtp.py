@@ -64,11 +64,13 @@ def grade_dump(dump, potential, species=None):
     return structures
 
 
-def grade_extrapolative_dumps(potential, extrapolative_dumps, species=None, submit_grade=None):
-    """Grade every extrapolative dump, one task per dump, and return the graded structures.
+def preselect(potential, extrapolative_dumps, state, *, species, submit_grade, preselection_filtering, gamma_tolerance, gamma_max, gamma_max_cap, extreme_lock_after_ntimes, max_structures):
+    """Grade the extrapolative dumps, one task per dump, and reduce the graded structures to the candidates for selection.
 
+    state        : the OTF state; records the candidates, and carries the gamma policy's history
     submit_grade : submit_grade(dump=, potential=, species=) runs grade_dump as a task and returns its
                    Future; by default a process pool runs them, one worker per core. Tasks never log.
+    The other options are run_cycle's.
     """
     pool = contextlib.nullcontext()
     if submit_grade is None:
@@ -77,15 +79,73 @@ def grade_extrapolative_dumps(potential, extrapolative_dumps, species=None, subm
         pool = concurrent.futures.ProcessPoolExecutor(n_workers)
         submit_grade = functools.partial(pool.submit, grade_dump)
 
-    graded_structures = []
+    candidates = []
     with pool:
         futures = {submit_grade(dump=dump, potential=potential, species=species): dump for dump in extrapolative_dumps}
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
             structures = future.result()
             logger.info(f"Graded dump {k}/{len(futures)}: {futures[future]} with {len(structures)} structures")
-            graded_structures += structures
+            candidates += structures
 
-    return graded_structures
+    gammas = numpy.array([atoms.info["features"]["MV_grade"] for atoms in candidates])
+    state["gammas_candidates"] = gammas.tolist()
+    state["selection_branch"] = "none"
+
+    # The gamma policy: of the candidates above gamma_tolerance, those below gamma_max ("normal"), or else
+    # the lowest, when it lies below gamma_max0 ("intermediate") or extremes are still allowed ("extreme").
+    if preselection_filtering:
+        above = gammas > gamma_tolerance
+        candidates, gammas = [atoms for atoms, a in zip(candidates, above) if a], gammas[above]
+        logger.info(f"Preselection: {len(candidates)}/{len(above)} structures above gamma_tolerance={gamma_tolerance:.4f}")
+
+        if candidates:
+            gamma_max0 = state.get("gamma_max0", gamma_max_cap)
+            lowest = int(numpy.argmin(gammas))
+            min_gamma = gammas[lowest]
+            if numpy.any(gammas < gamma_max):
+                candidates = [atoms for atoms, g in zip(candidates, gammas) if g < gamma_max]
+                state["selection_branch"] = "normal"
+            elif min_gamma < gamma_max0:
+                logger.info(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
+                candidates = [candidates[lowest]]
+                state["selection_branch"] = "intermediate"
+                logger.info(f"Selected structure with gamma = {min_gamma:.4f}")
+            else:
+                extreme_allowed = state.get("extreme_allowed", True)
+                consecutive_non_extreme = state.get("consecutive_non_extreme", 0)
+                state["extreme_count"] = state.get("extreme_count", 0) + 1
+                logger.warning(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, consecutive_non_extreme={consecutive_non_extreme} (lock_after={extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
+                candidates = [candidates[lowest]] if extreme_allowed else []
+                if extreme_allowed:
+                    state["consecutive_non_extreme"] = 0
+                    state["selection_branch"] = "extreme"
+                    logger.info(f"Selecting structure with gamma = {min_gamma:.4f}")
+                else:
+                    logger.warning(f"Skipping selection: {consecutive_non_extreme} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
+
+            # After extreme_lock_after_ntimes cycles in a row without an extreme one, extremes are never selected again.
+            if state["selection_branch"] in ("normal", "intermediate"):
+                state["consecutive_non_extreme"] = state.get("consecutive_non_extreme", 0) + 1
+                if state["consecutive_non_extreme"] >= extreme_lock_after_ntimes: state["extreme_allowed"] = False
+
+            # gamma_max0 is the mean of the last 10 lowest gammas recorded here, and never below gamma_max.
+            if numpy.all(gammas > gamma_max) and min_gamma < gamma_max_cap:
+                history = (state.get("gamma_max0_history", []) + [float(min_gamma)])[-10:]
+                state["gamma_max0_history"] = history
+                state["gamma_max0_full_history"] = state.get("gamma_max0_full_history", []) + [float(min_gamma)]
+                state["gamma_max0"] = max(numpy.mean(history), gamma_max)
+                logger.info(f"Updated gamma_max0: {gamma_max0:.4f} -> {state['gamma_max0']:.4f}")
+
+            logger.info(f"Post-preselection: {len(candidates)} structures selected")
+
+    # A random cap on the total
+    if 0 < max_structures < len(candidates):
+        kept = numpy.random.choice(len(candidates), size=max_structures, replace=False)
+        candidates = [candidates[i] for i in kept]
+        logger.info(f"Post-preselection max-structures: {len(candidates)}")
+
+    state["n_preselected"] = len(candidates)
+    return candidates
 
 
 def _record_state(state, n_train, active_set_size):
@@ -131,77 +191,6 @@ def forcesthr_excess(atoms, threshold):
     if atoms.calc is None or "forces" not in atoms.calc.results:
         return False
     return max_force(atoms) > threshold
-
-
-def _record_non_extreme(state, extreme_lock_after_ntimes):
-    state["consecutive_non_extreme"] = state.get("consecutive_non_extreme", 0) + 1
-    if state["consecutive_non_extreme"] >= extreme_lock_after_ntimes:
-        state["extreme_allowed"] = False
-
-
-def preselected_filter(cfgs, gamma_tolerance, gamma_max, gamma_max_cap, state, extreme_lock_after_ntimes=10):
-    gamma_max0 = state.get("gamma_max0", gamma_max_cap)
-    n_total = len(cfgs)
-
-    gammas = numpy.array([cfg.info["features"]["MV_grade"] for cfg in cfgs])
-    mask = gammas > gamma_tolerance
-    cfgs = [cfg for cfg, m in zip(cfgs, mask) if m]
-    gammas = gammas[mask]
-    logger.info(f"Preselection: {len(cfgs)}/{n_total} structures above gamma_tolerance={gamma_tolerance:.4f}")
-
-    if not cfgs:
-        state["selection_branch"] = "none"
-        return []
-
-    min_gamma = numpy.min(gammas)
-    filtred_cfgs = []
-    state["selection_branch"] = "none"
-
-    if numpy.any(gammas < gamma_max):
-        filtred_cfgs = [cfg for cfg, g in zip(cfgs, gammas) if g < gamma_max]
-        state["selection_branch"] = "normal"
-        _record_non_extreme(state, extreme_lock_after_ntimes)
-
-    elif numpy.any(gammas < gamma_max0):
-        logger.info(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
-        idx = numpy.argmin(gammas)
-        filtred_cfgs = [cfgs[idx]]
-        state["selection_branch"] = "intermediate"
-        logger.info(f"Selected structure with gamma = {gammas[idx]:.4f}")
-        _record_non_extreme(state, extreme_lock_after_ntimes)
-
-    else:
-        extreme_allowed = state.get("extreme_allowed", True)
-        consecutive_non_extreme = state.get("consecutive_non_extreme", 0)
-        state["extreme_count"] = state.get("extreme_count", 0) + 1
-        logger.warning(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, consecutive_non_extreme={consecutive_non_extreme} (lock_after={extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
-        if extreme_allowed:
-            filtred_cfgs = [cfgs[numpy.argmin(gammas)]]
-            state["consecutive_non_extreme"] = 0
-            state["selection_branch"] = "extreme"
-            logger.info(f"Selecting structure with gamma = {min_gamma:.4f}")
-        else:
-            logger.warning(f"Skipping selection: {consecutive_non_extreme} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
-
-    # gamma_max0 is the mean of the last 10 lowest gammas recorded here, and never below gamma_max.
-    if numpy.all(gammas > gamma_max) and min_gamma < gamma_max_cap:
-        history = (state.get("gamma_max0_history", []) + [float(min_gamma)])[-10:]
-        state["gamma_max0_history"] = history
-        state["gamma_max0_full_history"] = state.get("gamma_max0_full_history", []) + [float(min_gamma)]
-        state["gamma_max0"] = max(numpy.mean(history), gamma_max)
-        logger.info(f"Updated gamma_max0: {gamma_max0:.4f} -> {state['gamma_max0']:.4f}")
-
-    logger.info(f"Post-preselection: {len(filtred_cfgs)} structures selected")
-
-    return filtred_cfgs
-
-
-def max_structureselection(filtred_cfgs, max_structures=-1):
-    if max_structures > 0 and len(filtred_cfgs) > max_structures:
-        rnd_selected = numpy.random.choice(len(filtred_cfgs), size=max_structures, replace=False)
-        filtred_cfgs = [filtred_cfgs[i] for i in rnd_selected]
-        logger.info(f"Post-preselection max-structures: {len(filtred_cfgs)}")
-    return filtred_cfgs
 
 
 def load_structures(set_name, species=None):
@@ -298,29 +287,19 @@ def run_cycle(extrapolative_dumps, launcher: Launcher, *, potential="potential.a
         train_eqns = update_active_set(potential, train_structures)
         active_set_size = len(read_mvs_state(potential).selected_cfgs)
 
-        # Step 2: parse the extrapolative dumps and grade them against that active set.
-        candidate_structures = grade_extrapolative_dumps(potential, extrapolative_dumps, species=species, submit_grade=submit_grade)
+        # Step 2: grade the extrapolative dumps against that active set, and preselect the candidates.
+        candidate_structures = preselect(potential, extrapolative_dumps, state, species=species, submit_grade=submit_grade, preselection_filtering=preselection_filtering, gamma_tolerance=gamma_tolerance, gamma_max=gamma_max, gamma_max_cap=gamma_max_cap, extreme_lock_after_ntimes=extreme_lock_after_ntimes, max_structures=max_structures)
 
-        # Step 3: optionally apply preselection policy.
-        state["selection_branch"] = "none"
-        state["gammas_candidates"] = [c.info["features"]["MV_grade"] for c in candidate_structures]
-        if preselection_filtering:
-            candidate_structures = preselected_filter(candidate_structures, gamma_tolerance, gamma_max, gamma_max_cap, extreme_lock_after_ntimes=extreme_lock_after_ntimes, state=state)
-
-        # Step 4: optionally cap the surviving pool size.
-        if max_structures > 0:
-            candidate_structures = max_structureselection(candidate_structures, max_structures=max_structures)
-
-        # Step 5: run the structure-selection step.
+        # Step 3: run the structure-selection step.
         # train_eqns were built in step 1 from the same coefficients and weights.
         selected_structures, _ = select_add(potential, train_structures, candidate_structures, train_eqns=train_eqns)
 
-        # Step 6: evaluate the selected structures.
+        # Step 4: evaluate the selected structures.
         n_ok = eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=force_threshold, state=state)
         if not n_ok:
             logger.info("No configurations selected or evaluated — retraining.")
 
-        # Step 7: retrain the potential on the updated training set.
+        # Step 5: retrain the potential on the updated training set.
         train_exc = None
         try:
             if train_potential is None:
@@ -338,7 +317,6 @@ def run_cycle(extrapolative_dumps, launcher: Launcher, *, potential="potential.a
             logger.info(f"OTF-MTP update cycle complete. New potential saved to {potential}.")
 
         state["timing"] = launcher.timing.to_dict()
-        state["n_preselected"] = len(candidate_structures)
         state["training_timed_out"] = isinstance(train_exc, JobTimedOut)
         state["training_out_of_memory"] = isinstance(train_exc, JobOutOfMemory)
         _record_state(state, len(train_structures), active_set_size)

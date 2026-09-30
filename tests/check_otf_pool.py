@@ -3,8 +3,7 @@
 Under `mpirun -n R+1`, pyKMC's ManagerFactory puts the manager on rank 0 and R workers in sessions
 of --session-size ranks, with otf_pool's operations as extra_ops. On one dump of MD output and the
 first N structures of a cfg:
-  grade_dump       submitted per dump through the sessions, must give the grades of
-                   otf_mtp.grade_extrapolative_dumps on its process pool
+  grade_dump       submitted to a session, must give the grades of otf_mtp.grade_dump
   train_potential  as a global operation, must log the losses mtp_backend.train logs on R threads,
                    to --tol relatively
   run_cycle        with both, must archive a cycle as ok. Given a missing dump, it must raise on the
@@ -37,13 +36,13 @@ def worker(args):
     from pykmc.manager import ManagerFactory
     from otf_engine import NestedLauncher
     from otf_engine._mtp import MTPCalculator
-    from otf_engine.otf_mtp import grade_extrapolative_dumps, run_cycle
+    from otf_engine.otf_mtp import run_cycle
     from otf_engine.otf_pool import grade_dump, train_potential
 
     manager = ManagerFactory(obj_factory=lambda comm, mode: None, session_size=args.session_size, comm=MPI.COMM_WORLD, extra_ops={"grade_dump": grade_dump, "train_potential": train_potential}).launch()
     if manager is None: return 0    # a worker, once the manager has shut the pool down
 
-    graded = grade_extrapolative_dumps("potential.almtp", ["dump.lammps"], species=args.species, submit_grade=manager.grade_dump)
+    graded = manager.grade_dump(dump="dump.lammps", potential="potential.almtp", species=args.species).result()
     numpy.save("mpi_grades.npy", [atoms.info["features"]["MV_grade"] for atoms in graded])
     manager.global_train_potential(potential="potential.almtp", training_set="train.cfg", save_to="mpi.almtp", species=args.species, settings={"iteration_limit": args.iterations, "log": "mpi_train.log"})
 
@@ -85,7 +84,7 @@ def main():
 
     from otf_engine.io_cfg import read_cfg
     from otf_engine.mtp_backend import train
-    from otf_engine.otf_mtp import grade_extrapolative_dumps
+    from otf_engine.otf_mtp import grade_dump
 
     start = time.perf_counter()
     failures = 0
@@ -96,7 +95,7 @@ def main():
         shutil.copy(args.dump, work / "dump.lammps")
 
         # The references, in this process
-        pool_grades = numpy.array([atoms.info["features"]["MV_grade"] for atoms in grade_extrapolative_dumps(str(work / "potential.almtp"), [str(work / "dump.lammps")], species=args.species)])
+        grades = numpy.array([atoms.info["features"]["MV_grade"] for atoms in grade_dump(str(work / "dump.lammps"), str(work / "potential.almtp"), args.species)])
         with open(work / "train.cfg") as f:
             structs = read_cfg(f, args.species)
         train(str(work / "potential.almtp"), structs, str(work / "threads.almtp"), settings={"iteration_limit": args.iterations, "log": str(work / "threads_train.log")}, ranks=args.ranks)
@@ -114,9 +113,9 @@ def main():
 
         if code == 0:
             mpi_grades = numpy.load(work / "mpi_grades.npy")
-            same = len(mpi_grades) == len(pool_grades) and numpy.array_equal(mpi_grades, pool_grades)
+            same = len(mpi_grades) == len(grades) and numpy.array_equal(mpi_grades, grades)
             failures += not same
-            print(f"grade_dump       {len(mpi_grades):4d} grades against the pool's {len(pool_grades):4d} — {'identical' if same else 'DIFFER'}")
+            print(f"grade_dump       {len(mpi_grades):4d} grades against this process's {len(grades):4d} — {'identical' if same else 'DIFFER'}")
 
             losses = {arm: numpy.array([float(m.group(2)) for m in BFGS_LINE.finditer((work / f"{arm}_train.log").read_text())]) for arm in ("threads", "mpi")}
             n = min(len(losses["threads"]), len(losses["mpi"]))
