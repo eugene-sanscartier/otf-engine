@@ -66,7 +66,7 @@ def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files
     - Copies _CYCLE_ARTIFACTS_COPY from cwd into *cycle_dir* (if they exist).
     - Copies each file in *dump_files* into *cycle_dir* and truncates the
       original in place so long-lived LAMMPS dump handles keep writing to the
-      same pathname.
+      same pathname; entries that are not files are skipped.
     - Writes STATUS_FILE last, so a cycle interrupted before or during archiving
       leaves none and is never mistaken for a completed one.
     """
@@ -89,7 +89,7 @@ def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files
 
     for dump in dump_files:
         p = Path(dump)
-        if p.exists():
+        if p.is_file():
             shutil.copy2(p, cycle_dir / p.name)
             with p.open("r+b") as handle:
                 handle.truncate(0)
