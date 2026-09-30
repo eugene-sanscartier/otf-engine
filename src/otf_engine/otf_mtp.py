@@ -1,12 +1,12 @@
 import concurrent.futures
-import contextlib
 import datetime
-import functools
 import json
 import logging
 import os
 import shutil
 import traceback
+from collections.abc import Callable
+from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 
 import numpy
@@ -18,7 +18,7 @@ import ase.io.lammpsrun
 from .io_cfg import read_cfg, write_cfg
 from .mtp_backend import calculate_grade, select_add, update_active_set
 from .almtp_io import read_mvs_state
-from .cycles import current_cycle_dir, next_cycle_dir, recorded_in
+from .cycles import LOG_FILE, LOG_FORMAT, archive_cycle, current_cycle_dir, next_cycle_dir
 from .launchers import Launcher, JobTimedOut, JobOutOfMemory
 
 logger = logging.getLogger(__name__)
@@ -64,88 +64,17 @@ def grade_dump(dump, potential, species=None):
     return structures
 
 
-def preselect(potential, extrapolative_dumps, state, *, species, submit_grade, preselection_filtering, gamma_tolerance, gamma_max, gamma_max_cap, extreme_lock_after_ntimes, max_structures):
-    """Grade the extrapolative dumps, one task per dump, and reduce the graded structures to the candidates for selection.
+def grade_extrapolative_dumps(potential, extrapolative_dumps, species=None):
+    """Grade every extrapolative dump on a process pool, one dump per task and one worker per core.
 
-    state        : the OTF state; records the candidates, and carries the gamma policy's history
-    submit_grade : submit_grade(dump=, potential=, species=) runs grade_dump as a task and returns its
-                   Future; by default a process pool runs them, one worker per core. Tasks never log.
-    The other options are run_cycle's.
+    Returns the graded structures by dump, in the order the dumps finished. Workers never log.
     """
-    pool = contextlib.nullcontext()
-    if submit_grade is None:
-        n_workers = min(os.process_cpu_count(), len(extrapolative_dumps))
-        logger.info(f"Grading {len(extrapolative_dumps)} dumps on {n_workers} workers")
-        pool = concurrent.futures.ProcessPoolExecutor(n_workers)
-        submit_grade = functools.partial(pool.submit, grade_dump)
-
-    candidates = []
-    with pool:
-        futures = {submit_grade(dump=dump, potential=potential, species=species): dump for dump in extrapolative_dumps}
-        for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
-            structures = future.result()
-            logger.info(f"Graded dump {k}/{len(futures)}: {futures[future]} with {len(structures)} structures")
-            candidates += structures
-
-    gammas = numpy.array([atoms.info["features"]["MV_grade"] for atoms in candidates])
-    state["gammas_candidates"] = gammas.tolist()
-    state["selection_branch"] = "none"
-
-    # The gamma policy: of the candidates above gamma_tolerance, those below gamma_max ("normal"), or else
-    # the lowest, when it lies below gamma_max0 ("intermediate") or extremes are still allowed ("extreme").
-    if preselection_filtering:
-        above = gammas > gamma_tolerance
-        candidates, gammas = [atoms for atoms, a in zip(candidates, above) if a], gammas[above]
-        logger.info(f"Preselection: {len(candidates)}/{len(above)} structures above gamma_tolerance={gamma_tolerance:.4f}")
-
-        if candidates:
-            gamma_max0 = state.get("gamma_max0", gamma_max_cap)
-            lowest = int(numpy.argmin(gammas))
-            min_gamma = gammas[lowest]
-            if numpy.any(gammas < gamma_max):
-                candidates = [atoms for atoms, g in zip(candidates, gammas) if g < gamma_max]
-                state["selection_branch"] = "normal"
-            elif min_gamma < gamma_max0:
-                logger.info(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
-                candidates = [candidates[lowest]]
-                state["selection_branch"] = "intermediate"
-                logger.info(f"Selected structure with gamma = {min_gamma:.4f}")
-            else:
-                extreme_allowed = state.get("extreme_allowed", True)
-                consecutive_non_extreme = state.get("consecutive_non_extreme", 0)
-                state["extreme_count"] = state.get("extreme_count", 0) + 1
-                logger.warning(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, consecutive_non_extreme={consecutive_non_extreme} (lock_after={extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
-                candidates = [candidates[lowest]] if extreme_allowed else []
-                if extreme_allowed:
-                    state["consecutive_non_extreme"] = 0
-                    state["selection_branch"] = "extreme"
-                    logger.info(f"Selecting structure with gamma = {min_gamma:.4f}")
-                else:
-                    logger.warning(f"Skipping selection: {consecutive_non_extreme} consecutive non-extreme iterations reached limit of {extreme_lock_after_ntimes}")
-
-            # After extreme_lock_after_ntimes cycles in a row without an extreme one, extremes are never selected again.
-            if state["selection_branch"] in ("normal", "intermediate"):
-                state["consecutive_non_extreme"] = state.get("consecutive_non_extreme", 0) + 1
-                if state["consecutive_non_extreme"] >= extreme_lock_after_ntimes: state["extreme_allowed"] = False
-
-            # gamma_max0 is the mean of the last 10 lowest gammas recorded here, and never below gamma_max.
-            if numpy.all(gammas > gamma_max) and min_gamma < gamma_max_cap:
-                history = (state.get("gamma_max0_history", []) + [float(min_gamma)])[-10:]
-                state["gamma_max0_history"] = history
-                state["gamma_max0_full_history"] = state.get("gamma_max0_full_history", []) + [float(min_gamma)]
-                state["gamma_max0"] = max(numpy.mean(history), gamma_max)
-                logger.info(f"Updated gamma_max0: {gamma_max0:.4f} -> {state['gamma_max0']:.4f}")
-
-            logger.info(f"Post-preselection: {len(candidates)} structures selected")
-
-    # A random cap on the total
-    if 0 < max_structures < len(candidates):
-        kept = numpy.random.choice(len(candidates), size=max_structures, replace=False)
-        candidates = [candidates[i] for i in kept]
-        logger.info(f"Post-preselection max-structures: {len(candidates)}")
-
-    state["n_preselected"] = len(candidates)
-    return candidates
+    n_workers = min(os.process_cpu_count(), len(extrapolative_dumps))
+    logger.info(f"Grading {len(extrapolative_dumps)} dumps on {n_workers} workers")
+    with concurrent.futures.ProcessPoolExecutor(n_workers) as pool:
+        futures = {pool.submit(grade_dump, dump, potential, species): dump for dump in extrapolative_dumps}
+        graded = {futures[future]: future.result() for future in concurrent.futures.as_completed(futures)}
+    return graded
 
 
 def _record_state(state, n_train, active_set_size):
@@ -262,65 +191,185 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
     return n_ok
 
 
-def run_cycle(extrapolative_dumps, launcher: Launcher, *, potential="potential.almtp", training_set="train.cfg", species=None, preselection_filtering=True, gamma_tolerance=1.01, gamma_max=0.0, gamma_max_cap=10000.0, extreme_lock_after_ntimes=5, max_structures=-1, iteration_limit=300, force_threshold=None, evaluator_fn=None, mlp_command=None, submit_grade=None, train_potential=None, cycle_dir=None):
-    """Run one OTF-MTP update cycle from extrapolative dumps to a retrained model, logged and archived in cycle_dir.
+@dataclass
+class OTFCycle:
+    """One OTF-MTP update cycle, from extrapolative dumps to a retrained model, stepped through by its caller.
 
-    A failed cycle is archived as failed, then raised. extrapolative_dumps and the options up to
-    force_threshold are `python -m otf_engine`'s, under the same names.
+    Inside `with`, the caller grades each dump with grade_dump, passes the result through preselect, select
+    and evaluate, trains with `training`, and calls replace_potential. Entering logs the otf_engine package
+    into cycle_dir's LOG_FILE, and only there, loads the OTF state and brings the active set up to date;
+    leaving records the state and archives the cycle in cycle_dir, as failed, and re-raising, if the block raised.
 
-    evaluator_fn    : evaluator_fn(structure) labels one structure, for the launchers that call it
-                      in-process; SlurmLauncher runs ./evaluator.py as a job of its own instead
-    mlp_command     : the `mlp` that trains, through the launcher, when train_potential is not given
-    submit_grade    : submit_grade(dump=, potential=, species=) runs grade_dump as a task and returns its
-                      Future; by default a process pool grades the dumps
-    train_potential : train_potential(potential=, training_set=, save_to=, species=, settings=) trains the
-                      potential
-    cycle_dir       : by default the next one under otf_cycles/
+    extrapolative_dumps and the options up to force_threshold are `python -m otf_engine`'s, under the same names.
+    evaluator_fn : evaluator_fn(structure) labels one structure, for the launchers that call it in-process;
+                   SlurmLauncher runs ./evaluator.py as a job of its own instead
+    cycle_dir    : by default the next one under otf_cycles/
     """
-    with recorded_in(cycle_dir or next_cycle_dir(), potential, training_set, extrapolative_dumps):
-        state = _load_state()
-        launcher.configure_timing(state, _save_state)
-        launcher.configure_memory(state, _save_state)
 
-        # Step 1: ensure the active set is consistent with the current training set.
-        train_structures = load_structures(training_set, species)
-        train_eqns = update_active_set(potential, train_structures)
-        active_set_size = len(read_mvs_state(potential).selected_cfgs)
+    extrapolative_dumps: list
+    launcher: Launcher
+    _: KW_ONLY
+    potential: str = "potential.almtp"
+    training_set: str = "train.cfg"
+    species: list | None = None
+    preselection_filtering: bool = True
+    gamma_tolerance: float = 1.01
+    gamma_max: float = 0.0
+    gamma_max_cap: float = 10000.0
+    extreme_lock_after_ntimes: int = 5
+    max_structures: int = -1
+    iteration_limit: int = 300
+    force_threshold: float | None = None
+    evaluator_fn: Callable | None = None
+    cycle_dir: Path | None = None
 
-        # Step 2: grade the extrapolative dumps against that active set, and preselect the candidates.
-        candidate_structures = preselect(potential, extrapolative_dumps, state, species=species, submit_grade=submit_grade, preselection_filtering=preselection_filtering, gamma_tolerance=gamma_tolerance, gamma_max=gamma_max, gamma_max_cap=gamma_max_cap, extreme_lock_after_ntimes=extreme_lock_after_ntimes, max_structures=max_structures)
+    def __enter__(self):
+        self.cycle_dir = self.cycle_dir or next_cycle_dir()
+        package_logger = logging.getLogger(__package__)
+        self._logging = package_logger.level, package_logger.propagate
+        self._handler = logging.FileHandler(self.cycle_dir / LOG_FILE)
+        self._handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        package_logger.addHandler(self._handler)
+        package_logger.setLevel(logging.INFO)
+        package_logger.propagate = False
 
-        # Step 3: run the structure-selection step.
-        # train_eqns were built in step 1 from the same coefficients and weights.
-        selected_structures, _ = select_add(potential, train_structures, candidate_structures, train_eqns=train_eqns)
-
-        # Step 4: evaluate the selected structures.
-        n_ok = eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=force_threshold, state=state)
-        if not n_ok:
-            logger.info("No configurations selected or evaluated — retraining.")
-
-        # Step 5: retrain the potential on the updated training set.
-        train_exc = None
         try:
-            if train_potential is None:
-                launcher.run(f"{mlp_command} train {potential} {training_set} --save_to=tmp_{potential} --iteration_limit={iteration_limit} ", log_file="mlip_train.log", training_set_size=len(train_structures) + n_ok)
-            else:
-                train_potential(potential=potential, training_set=training_set, save_to=f"tmp_{potential}", species=species, settings={"iteration_limit": iteration_limit, "log": "mlip_train.log"})
-        except JobTimedOut as exc:
-            train_exc = exc
-            logger.error("Training exhausted retries and timed out.")
-        except JobOutOfMemory as exc:
-            train_exc = exc
-            logger.error("Training exhausted retries and ran out of memory.")
-        else:
-            os.replace(f"tmp_{potential}", potential)
-            logger.info(f"OTF-MTP update cycle complete. New potential saved to {potential}.")
+            self.state = _load_state()
+            self.launcher.configure_timing(self.state, _save_state)
+            self.launcher.configure_memory(self.state, _save_state)
+            # The dumps are graded against the active set, so it is brought up to date with the training set first.
+            self.train_structures = load_structures(self.training_set, self.species)
+            self.train_eqns = update_active_set(self.potential, self.train_structures)
+            self.active_set_size = len(read_mvs_state(self.potential).selected_cfgs)
+        except BaseException as e:
+            self.__exit__(type(e), e, e.__traceback__)
+            raise
+        return self
 
-        state["timing"] = launcher.timing.to_dict()
-        state["training_timed_out"] = isinstance(train_exc, JobTimedOut)
-        state["training_out_of_memory"] = isinstance(train_exc, JobOutOfMemory)
-        _record_state(state, len(train_structures), active_set_size)
-        _save_state(state)
+    def __exit__(self, exc_type, exc, tb):
+        package_logger = logging.getLogger(__package__)
+        try:
+            # An interrupted cycle is neither recorded nor archived, so its dumps stay as they are.
+            if exc is not None and not isinstance(exc, Exception): return False
+            if isinstance(exc, JobTimedOut): logger.error("Training exhausted retries and timed out.")
+            if isinstance(exc, JobOutOfMemory): logger.error("Training exhausted retries and ran out of memory.")
+            # A cycle that reached its training is recorded, whether training succeeded or ran out of retries.
+            if exc is None or isinstance(exc, (JobTimedOut, JobOutOfMemory)):
+                self.state["timing"] = self.launcher.timing.to_dict()
+                self.state["training_timed_out"] = isinstance(exc, JobTimedOut)
+                self.state["training_out_of_memory"] = isinstance(exc, JobOutOfMemory)
+                _record_state(self.state, len(self.train_structures), self.active_set_size)
+                _save_state(self.state)
+            if exc is not None: logger.error(f"Error during execution: {exc}", exc_info=(exc_type, exc, tb))
+            archive_cycle(self.cycle_dir, self.potential, self.training_set, self.extrapolative_dumps, ok=exc is None)
+        finally:
+            package_logger.removeHandler(self._handler)
+            self._handler.close()
+            package_logger.setLevel(self._logging[0])
+            package_logger.propagate = self._logging[1]
+        return False
 
-        if train_exc is not None:
-            raise train_exc
+    def preselect(self, graded):
+        """Reduce the graded structures to the candidates for selection: the gamma policy, then a random cap.
+
+        graded : the structures grade_dump returned, by dump
+        """
+        state = self.state
+        candidates = []
+        for k, (dump, structures) in enumerate(graded.items(), 1):
+            logger.info(f"Graded dump {k}/{len(graded)}: {dump} with {len(structures)} structures")
+            candidates += structures
+
+        gammas = numpy.array([atoms.info["features"]["MV_grade"] for atoms in candidates])
+        state["gammas_candidates"] = gammas.tolist()
+        state["selection_branch"] = "none"
+
+        # The gamma policy: of the candidates above gamma_tolerance, those below gamma_max ("normal"), or else
+        # the lowest, when it lies below gamma_max0 ("intermediate") or extremes are still allowed ("extreme").
+        if self.preselection_filtering:
+            above = gammas > self.gamma_tolerance
+            candidates, gammas = [atoms for atoms, a in zip(candidates, above) if a], gammas[above]
+            logger.info(f"Preselection: {len(candidates)}/{len(above)} structures above gamma_tolerance={self.gamma_tolerance:.4f}")
+
+            if candidates:
+                gamma_max0 = state.get("gamma_max0", self.gamma_max_cap)
+                lowest = int(numpy.argmin(gammas))
+                min_gamma = gammas[lowest]
+                if numpy.any(gammas < self.gamma_max):
+                    candidates = [atoms for atoms, g in zip(candidates, gammas) if g < self.gamma_max]
+                    state["selection_branch"] = "normal"
+                elif min_gamma < gamma_max0:
+                    logger.info(f"gamma_max0 = {gamma_max0:.4f} (history length = {len(state.get('gamma_max0_history', []))})")
+                    candidates = [candidates[lowest]]
+                    state["selection_branch"] = "intermediate"
+                    logger.info(f"Selected structure with gamma = {min_gamma:.4f}")
+                else:
+                    extreme_allowed = state.get("extreme_allowed", True)
+                    consecutive_non_extreme = state.get("consecutive_non_extreme", 0)
+                    state["extreme_count"] = state.get("extreme_count", 0) + 1
+                    logger.warning(f"Extreme Warning: all gammas > gamma_max0={gamma_max0:.4f}, min gamma = {min_gamma:.4f}, consecutive_non_extreme={consecutive_non_extreme} (lock_after={self.extreme_lock_after_ntimes}), extreme_allowed={extreme_allowed}")
+                    candidates = [candidates[lowest]] if extreme_allowed else []
+                    if extreme_allowed:
+                        state["consecutive_non_extreme"] = 0
+                        state["selection_branch"] = "extreme"
+                        logger.info(f"Selecting structure with gamma = {min_gamma:.4f}")
+                    else:
+                        logger.warning(f"Skipping selection: {consecutive_non_extreme} consecutive non-extreme iterations reached limit of {self.extreme_lock_after_ntimes}")
+
+                # After extreme_lock_after_ntimes cycles in a row without an extreme one, extremes are never selected again.
+                if state["selection_branch"] in ("normal", "intermediate"):
+                    state["consecutive_non_extreme"] = state.get("consecutive_non_extreme", 0) + 1
+                    if state["consecutive_non_extreme"] >= self.extreme_lock_after_ntimes: state["extreme_allowed"] = False
+
+                # gamma_max0 is the mean of the last 10 lowest gammas recorded here, and never below gamma_max.
+                if numpy.all(gammas > self.gamma_max) and min_gamma < self.gamma_max_cap:
+                    history = (state.get("gamma_max0_history", []) + [float(min_gamma)])[-10:]
+                    state["gamma_max0_history"] = history
+                    state["gamma_max0_full_history"] = state.get("gamma_max0_full_history", []) + [float(min_gamma)]
+                    state["gamma_max0"] = max(numpy.mean(history), self.gamma_max)
+                    logger.info(f"Updated gamma_max0: {gamma_max0:.4f} -> {state['gamma_max0']:.4f}")
+
+                logger.info(f"Post-preselection: {len(candidates)} structures selected")
+
+        # A random cap on the total
+        if 0 < self.max_structures < len(candidates):
+            kept = numpy.random.choice(len(candidates), size=self.max_structures, replace=False)
+            candidates = [candidates[i] for i in kept]
+            logger.info(f"Post-preselection max-structures: {len(candidates)}")
+
+        state["n_preselected"] = len(candidates)
+        return candidates
+
+    def select(self, candidates):
+        """Select, from the candidates, those that extend the active set, as mlip-3's select_add does."""
+        # train_eqns were built on entry, from the same coefficients and weights.
+        selected, _ = select_add(self.potential, self.train_structures, candidates, train_eqns=self.train_eqns)
+        return selected
+
+    def evaluate(self, selected):
+        """Evaluate the selected structures through the launcher, add those that succeed to the training set, and return their count."""
+        n_ok = eval_structures(selected, self.training_set, self.evaluator_fn, self.launcher, force_threshold=self.force_threshold, state=self.state)
+        if not n_ok: logger.info("No configurations selected or evaluated — retraining.")
+        return n_ok
+
+    @property
+    def training(self):
+        """The training this cycle needs, as otf_pool.train_potential's keyword arguments."""
+        return dict(potential=self.potential, training_set=self.training_set, save_to=f"tmp_{self.potential}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": "mlip_train.log"})
+
+    def replace_potential(self):
+        """Replace the potential with the one training wrote."""
+        os.replace(self.training["save_to"], self.potential)
+        logger.info(f"OTF-MTP update cycle complete. New potential saved to {self.potential}.")
+
+
+def run_cycle(extrapolative_dumps, launcher: Launcher, *, mlp_command=None, **options):
+    """Run one OTFCycle as `python -m otf_engine` does: grading on a process pool, training with mlp_command's `mlp train` through the launcher.
+
+    options : OTFCycle's
+    """
+    with OTFCycle(extrapolative_dumps, launcher, **options) as cycle:
+        candidates = cycle.preselect(grade_extrapolative_dumps(cycle.potential, extrapolative_dumps, cycle.species))
+        n_ok = cycle.evaluate(cycle.select(candidates))
+        launcher.run(f"{mlp_command} train {cycle.potential} {cycle.training_set} --save_to={cycle.training['save_to']} --iteration_limit={cycle.iteration_limit} ", log_file="mlip_train.log", training_set_size=len(cycle.train_structures) + n_ok)
+        cycle.replace_potential()

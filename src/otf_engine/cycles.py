@@ -7,13 +7,9 @@ writes its log to ./otf_cycles/cycle_N/otf.log, and records the outcome in
 """
 from __future__ import annotations
 
-import logging
 import re
 import shutil
-from contextlib import contextmanager
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 CYCLE_BASE = Path("./otf_cycles")
 CYCLE_PREFIX = "cycle_"
@@ -99,32 +95,3 @@ def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files
                 handle.truncate(0)
 
     (cycle_dir / STATUS_FILE).write_text("ok\n" if ok else "failed\n")
-
-
-@contextmanager
-def recorded_in(cycle_dir: Path, potential: str, training_set: str, dump_files: list[str]):
-    """Log the otf_engine package into cycle_dir's LOG_FILE, and only there, while the block runs; then archive the cycle in it.
-
-    A block that raises is logged, archived as failed, and re-raised.
-    """
-    package_logger = logging.getLogger(__package__)
-    level, propagate = package_logger.level, package_logger.propagate
-    handler = logging.FileHandler(cycle_dir / LOG_FILE)
-    handler.setFormatter(logging.Formatter(LOG_FORMAT))
-    package_logger.addHandler(handler)
-    package_logger.setLevel(logging.INFO)
-    package_logger.propagate = False
-
-    try:
-        yield
-    except Exception as e:
-        logger.exception(f"Error during execution: {e}")
-        archive_cycle(cycle_dir, potential, training_set, dump_files, ok=False)
-        raise
-    else:
-        archive_cycle(cycle_dir, potential, training_set, dump_files, ok=True)
-    finally:
-        package_logger.removeHandler(handler)
-        handler.close()
-        package_logger.setLevel(level)
-        package_logger.propagate = propagate

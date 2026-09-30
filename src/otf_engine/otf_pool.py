@@ -1,10 +1,9 @@
 """The operations pyKMC's workers run for an OTF-MTP cycle, registered in its extra_ops.
 
 Each is called as fn(comm, **kwargs) on every rank of the communicator it runs on, and returns its
-result on rank 0 of it. otf_mtp.run_cycle runs the cycle on the manager with
-submit_grade=manager.grade_dump, a local operation per dump on the sessions, and
-train_potential=manager.global_train_potential, a global one over every worker. The workers share
-the manager's working directory.
+result on rank 0 of it. pyKMC steps an otf_mtp.OTFCycle on its manager and runs these for it:
+grade_dump as a local operation per dump on the sessions, train_potential as a global one over every
+worker. The workers share the manager's working directory.
 """
 
 from . import otf_mtp

@@ -6,7 +6,7 @@ import re
 import sys
 import argparse
 from pathlib import Path
-from .otf_mtp import run_cycle
+from .otf_mtp import OTFCycle, run_cycle
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
 from .cycles import next_cycle_dir, LOG_FILE, LOG_FORMAT
 
@@ -25,8 +25,8 @@ def _cgroup_cpus() -> set[int]:
 def main():
 
     parser =argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
-    # The cycle's options take their defaults from run_cycle.
-    defaults = {name: parameter.default for name, parameter in inspect.signature(run_cycle).parameters.items()}
+    # The cycle's options take their defaults from OTFCycle.
+    defaults = {name: parameter.default for name, parameter in inspect.signature(OTFCycle).parameters.items()}
 
     parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
     parser.add_argument("-p", "--potential", help="input potential file name (default: %(default)s)", type=str, default=defaults["potential"])

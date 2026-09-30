@@ -6,8 +6,9 @@ first N structures of a cfg:
   grade_dump       submitted to a session, must give the grades of otf_mtp.grade_dump
   train_potential  as a global operation, must log the losses mtp_backend.train logs on R threads,
                    to --tol relatively
-  run_cycle        with both, must archive a cycle as ok. Given a missing dump, it must raise on the
-                   manager and archive the cycle as failed, and no rank may hang.
+  OTFCycle         stepped through as pyKMC steps it, grading and training with both, must archive a
+                   cycle as ok. Given a missing dump, it must raise on the manager and archive the
+                   cycle as failed, and no rank may hang.
 The references run in this process. The cycle's evaluator labels structures with the input potential.
 
     python tests/check_otf_pool.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg --dump tmp/extrapolating_dump.6.lammps --species Ni Si H
@@ -36,7 +37,7 @@ def worker(args):
     from pykmc.manager import ManagerFactory
     from otf_engine import NestedLauncher
     from otf_engine._mtp import MTPCalculator
-    from otf_engine.otf_mtp import run_cycle
+    from otf_engine.otf_mtp import OTFCycle
     from otf_engine.otf_pool import grade_dump, train_potential
 
     manager = ManagerFactory(obj_factory=lambda comm, mode: None, session_size=args.session_size, comm=MPI.COMM_WORLD, extra_ops={"grade_dump": grade_dump, "train_potential": train_potential}).launch()
@@ -53,11 +54,16 @@ def worker(args):
         atoms.calc = SinglePointCalculator(atoms, **results)
         return atoms
 
-    # cycle_0 is ok; cycle_1 is given a missing dump
+    # cycle_0 is ok; cycle_1 is given a missing dump. Each is stepped through as pyKMC's controller steps it.
     outcomes = {}
     for name, dumps in [("ok", ["dump.lammps"]), ("fail", ["dump.lammps", "missing.lammps"])]:
         try:
-            run_cycle(dumps, NestedLauncher(), potential="potential.almtp", training_set="train.cfg", species=args.species, iteration_limit=args.iterations, evaluator_fn=evaluator, submit_grade=manager.grade_dump, train_potential=manager.global_train_potential)
+            with OTFCycle(dumps, NestedLauncher(), potential="potential.almtp", training_set="train.cfg", species=args.species, iteration_limit=args.iterations, evaluator_fn=evaluator) as cycle:
+                futures = {dump: manager.grade_dump(dump=dump, potential=cycle.potential, species=cycle.species) for dump in dumps}
+                candidates = cycle.preselect({dump: future.result() for dump, future in futures.items()})
+                cycle.evaluate(cycle.select(candidates))
+                manager.global_train_potential(**cycle.training)
+                cycle.replace_potential()
             outcomes[name] = "returned"
         except Exception as e:
             outcomes[name] = f"raised {type(e).__name__}" + (" on missing.lammps" if "missing.lammps" in str(e) else "")
@@ -130,7 +136,7 @@ def main():
                 archived = status_file.read_text().strip() if status_file.exists() else "nothing"
                 ok = outcomes.get(name) == expected and archived == status
                 failures += not ok
-                print(f"run_cycle {name:<5}  {outcomes.get(name)}, archived as {archived} — {'as expected' if ok else 'UNEXPECTED'}")
+                print(f"OTFCycle {name:<5}   {outcomes.get(name)}, archived as {archived} — {'as expected' if ok else 'UNEXPECTED'}")
 
     print(f"{time.perf_counter() - start:.1f} s")
     return 1 if failures else 0

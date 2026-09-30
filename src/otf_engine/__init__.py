@@ -1,4 +1,4 @@
-from .otf_mtp import run_cycle
+from .otf_mtp import OTFCycle, grade_dump, run_cycle
 from .launchers import (
     Launcher,
     NestedLauncher,
@@ -7,6 +7,8 @@ from .launchers import (
 )
 
 __all__ = [
+    "OTFCycle",
+    "grade_dump",
     "run_cycle",
     "Launcher",
     "NestedLauncher",
