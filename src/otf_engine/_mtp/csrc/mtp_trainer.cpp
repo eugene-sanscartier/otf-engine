@@ -28,6 +28,20 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     coeffs.resize(n_radial + n_linear);
     potential.get_coeffs(coeffs.data());
     reg_vector.assign(n_linear, reg_param);
+
+    // A basic moment has degree 1, a product the sum of its factors'.
+    std::vector<int> moment_degree(potential.get_alpha_moment_count(), 0);
+    std::fill_n(moment_degree.begin(), potential.get_alpha_index_basic_count(), 1);
+    const int* times = potential.get_alpha_index_times();
+    for (int t = 0; t < potential.get_alpha_index_times_count(); t++) {
+        const int degree = moment_degree[times[4 * t]] + moment_degree[times[4 * t + 1]];
+        int& out = moment_degree[times[4 * t + 3]];
+        if (out != 0 && out != degree) scalable = false;
+        out = degree;
+    }
+    const int* mapping = potential.get_alpha_moment_mapping();
+    for (int s = 0; s < potential.get_alpha_scalar_count(); s++)
+        scalar_degree.push_back(moment_degree[mapping[s]]);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -305,14 +319,18 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 void MTPTrainer::fit_linear() {
     orthogonalize();
     potential.set_coeffs(coeffs.data());
+    assemble_linear();
+    if (rank == 0) solve_linear(structure_count);
+    broadcast_linear();
+}
 
+// Sums the upper triangle of the least-squares system over every rank's structures, into
+// lin_matrix and lin_vector on rank 0.
+void MTPTrainer::assemble_linear() {
     const int n = n_linear;
     const int width = (int) coeffs.size();
     lin_matrix.assign((size_t) n * n, 0.0);
     lin_vector.assign(n, 0.0);
-
-    // mlp logs 8 significant digits from its first linear fit on
-    if (log) log->precision(8);
 
     std::vector<double> energy_cmpnts(n), force_weights;
     for (const TrainingStructure& s : structures) {
@@ -379,11 +397,13 @@ void MTPTrainer::fit_linear() {
     if (rank == 0) {
         lin_matrix.swap(matrix_sum);
         lin_vector.swap(vector_sum);
-        solve_linear(structure_count);
     }
+}
 
+// Hands rank 0's linear coefficients and regularization to every rank.
+void MTPTrainer::broadcast_linear() {
     MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
-    MPI_Bcast(reg_vector.data(), n, MPI_DOUBLE, 0, comm);
+    MPI_Bcast(reg_vector.data(), n_linear, MPI_DOUBLE, 0, comm);
     MPI_Bcast(&reg_init, 1, MPI_C_BOOL, 0, comm);
     potential.set_coeffs(coeffs.data());
 }
@@ -395,6 +415,9 @@ void MTPTrainer::solve_linear(int ts_size) {
     double* A = lin_matrix.data();
     double* b = lin_vector.data();
     double* x = coeffs.data() + n_radial;
+
+    // mlp logs 8 significant digits from its first linear fit on
+    if (log) log->precision(8);
 
     for (int i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++)
@@ -435,12 +458,57 @@ void MTPTrainer::solve_linear(int ts_size) {
     }
 }
 
-// Picks the scaling, among 5 around the current one, with the best-conditioned linear fit.
+/* ----------------------------------------------------------------------
+   Picks the scaling, among 5 around the current one, with the best-conditioned
+   linear fit. A basis function of degree d in the radial functions scales as
+   scaling^d, so each fit rescales the system last assembled, which is
+   reassembled only when orthogonalizing moves the radial functions.
+------------------------------------------------------------------------- */
 void MTPTrainer::rescale() {
     double min_scaling = potential.get_scaling();
     double max_scaling = potential.get_scaling();
     std::vector<double> abs_linear(n_linear);
     int ind;
+
+    double assembled_scaling = 0.0;    // none assembled yet
+    std::vector<double> assembled_matrix, assembled_vector, radial(n_radial), factors(n_linear);
+
+    auto fit_at = [&](double scaling) {
+        potential.set_scaling(scaling);
+        if (!scalable) {
+            fit_linear();
+            return;
+        }
+
+        std::copy(coeffs.begin(), coeffs.begin() + n_radial, radial.begin());
+        orthogonalize();
+        double moved = 0.0, largest = 0.0;
+        for (int i = 0; i < n_radial; i++) {
+            moved = std::max(moved, std::abs(coeffs[i] - radial[i]));
+            largest = std::max(largest, std::abs(radial[i]));
+        }
+        if (assembled_scaling == 0.0 || moved > 1e-12 * largest) {
+            potential.set_coeffs(coeffs.data());
+            assemble_linear();
+            assembled_scaling = scaling;
+            assembled_matrix = lin_matrix;
+            assembled_vector = lin_vector;
+        }
+
+        if (rank == 0) {
+            const int n = n_linear;
+            const int species = n_linear - (int) scalar_degree.size();
+            for (int i = 0; i < n; i++)
+                factors[i] = i < species ? 1.0 : std::pow(scaling / assembled_scaling, scalar_degree[i - species]);
+            for (int i = 0; i < n; i++) {
+                lin_vector[i] = assembled_vector[i] * factors[i];
+                for (int j = i; j < n; j++)
+                    lin_matrix[i * n + j] = assembled_matrix[i * n + j] * factors[i] * factors[j];
+            }
+            solve_linear(structure_count);
+        }
+        broadcast_linear();
+    };
 
     do {
         double condition_number[5];
@@ -450,8 +518,7 @@ void MTPTrainer::rescale() {
 
         for (int j = 0; j < 5; j++) {
             if (log) *log << "   scaling = " << scalings[j] << ", condition number = " << std::flush;
-            potential.set_scaling(scalings[j]);
-            fit_linear();
+            fit_at(scalings[j]);
 
             double rms = 0;
             for (int i = 0; i < n_linear; i++) {
@@ -468,9 +535,8 @@ void MTPTrainer::rescale() {
         for (int j = 0; j < 5; j++)
             if (condition_number[j] < condition_number[ind]) ind = j;
 
-        potential.set_scaling(scalings[ind]);
         if (log) *log << "Rescaling to " << scalings[ind] << "... " << std::flush;
-        fit_linear();
+        fit_at(scalings[ind]);
         if (log) *log << "done" << std::endl;
 
         // stop once the choice falls strictly inside the range already visited

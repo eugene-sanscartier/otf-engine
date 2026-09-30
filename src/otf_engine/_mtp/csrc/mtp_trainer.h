@@ -74,7 +74,9 @@ class MTPTrainer {
     void update_min_dist();
     void fit_nonlinear(int max_iter);
     void fit_linear();
+    void assemble_linear();
     void solve_linear(int structure_count);
+    void broadcast_linear();
     void rescale();
 
     // Loss and dL/dc over this rank's structures, without the penalty.
@@ -105,6 +107,11 @@ class MTPTrainer {
     std::vector<double> reg_vector;    // regularization on its diagonal
     bool reg_init = true;              // whether reg_vector is rebuilt at the next solve
     const double reg_param = 1e-10;
+
+    // Degree of each basis function in the radial functions, and whether the
+    // linear system scales with it, so that rescale assembles it once.
+    std::vector<int> scalar_degree;    // [alpha_scalar_count]
+    bool scalable = true;
 
     BFGS bfgs;
 

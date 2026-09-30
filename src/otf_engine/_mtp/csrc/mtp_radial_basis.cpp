@@ -93,10 +93,12 @@ void BChebyshev::calc_radial_basis_ders(double dist) {
 }
 
 // ---------------------------------------------------------------------------
+// The scaling multiplies each power once, as mlip-3's MLMTPR multiplies the
+// values of its unscaled Basis_Taylor.
 void RBTaylor::calc_radial_basis(double dist) {
     radial_basis_vals[0] = scaling * 1;
     for (int i = 1; i < size; i++) {
-        radial_basis_vals[i] = scaling * dist * radial_basis_vals[i - 1];
+        radial_basis_vals[i] = dist * radial_basis_vals[i - 1];
     }
 }
 
@@ -105,7 +107,7 @@ void RBTaylor::calc_radial_basis_ders(double dist) {
 
     radial_basis_ders[0] = scaling * 0;
     for (int i = 1; i < size; i++) {
-        radial_basis_ders[i] = scaling * i * radial_basis_vals[i - 1];
+        radial_basis_ders[i] = i * radial_basis_vals[i - 1];
     }
 }
 
