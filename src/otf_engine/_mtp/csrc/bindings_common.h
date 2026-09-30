@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "mtp_extrapolation.h"
 #include "mtp_training.h"
 
 #include <stdexcept>
@@ -62,6 +63,10 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
     std::fill(a.mutable_data(), a.mutable_data() + a.size(), 0.0);
     return a;
 }
+
+// The results PairMTP::compute leaves in the potential, copied out:
+// "energy", "forces" (n_atoms, 3), "virials" (6) and "eatom" (n_atoms).
+py::dict potential_results(const PairMTP& self, int n_atoms);
 
 // Binds fn under two signatures: one taking a NeighList, and one taking the
 // five loose arrays the older API passes. `extra` carries the py::arg entries

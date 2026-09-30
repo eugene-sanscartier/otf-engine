@@ -55,7 +55,7 @@ def rmse(potential_path, structs):
     calc = MTPCalculator(str(potential_path))
     e_err, f_err = [], []
     for atoms in structs:
-        result = calc.potential.compute(calc.neighbors(atoms), compute_virials=False, compute_eatom=False)
+        result = calc.potential.compute(calc.neighbors(atoms))
         e_err += [(float(result["energy"]) - atoms.get_potential_energy()) / len(atoms)]
         f_err += [(numpy.asarray(result["forces"]) - atoms.get_forces()).ravel()]
     errors = (float(numpy.sqrt(numpy.mean(numpy.square(e_err)))), float(numpy.sqrt(numpy.mean(numpy.square(numpy.concatenate(f_err))))))

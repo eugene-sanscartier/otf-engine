@@ -7,6 +7,16 @@
 
 #include "bindings_common.h"
 
+static DoubleArray eval_basis(MTPTraining& self, const PyNeighbors& nb) {
+    auto out = zeros({nb.inum(), self.get_alpha_scalar_count()});
+    double* out_ptr = out.mutable_data();
+    {
+        py::gil_scoped_release unlocked;
+        self.eval_basis(nb.view(), out_ptr);
+    }
+    return out;
+}
+
 static py::object eval_grad(MTPTraining& self, const PyNeighbors& nb, bool forces, bool virial, bool radial) {
     const int width = self.coeff_count();
     auto eg = zeros({nb.inum(), width});
@@ -17,10 +27,7 @@ static py::object eval_grad(MTPTraining& self, const PyNeighbors& nb, bool force
             throw std::runtime_error("eval_grad: the virial gradient comes with the force gradient");
         {
             py::gil_scoped_release unlocked;
-            if (radial)
-                self.PairMTPExtrapolation::eval_grad(nb.view(), eg_ptr);
-            else
-                self.eval_grad(nb.view(), eg_ptr, nullptr, nullptr, false);
+            self.eval_grad(nb.view(), eg_ptr, nullptr, nullptr, radial);
         }
         return eg;
     }
@@ -69,14 +76,28 @@ static DoubleArray eval_loss_grad(MTPTraining& self, const PyNeighbors& nb, doub
 }
 
 void bind_training(py::module_& m) {
-    auto cls = py::class_<MTPTraining, PairMTPExtrapolation>(m, "MTPTraining", "An MTP potential that also differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
+    auto cls = py::class_<MTPTraining, PairMTP>(m, "MTPTraining", "An MTP potential that also gives its basis values, and differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
                    .def(py::init<const std::string&>(), py::arg("filename"));
+
+    def_neighbors(cls, "eval_basis", &eval_basis,
+                  "Basis values per central atom: ndarray float64 (inum, alpha_scalar_count).");
+
+    cls.def("eval_radial_basis",
+            [](MTPTraining& self, double dist) {
+                const int sz = self.get_radial_basis_size();
+                auto vals = zeros({sz});
+                auto ders = zeros({sz});
+                self.eval_radial_basis(dist, vals.mutable_data(), ders.mutable_data());
+                return py::make_tuple(vals, ders);
+            },
+            py::arg("dist"), "Return (vals, ders) of the radial basis at distance dist.");
 
     def_neighbors(cls, "eval_grad", &eval_grad,
                   R"doc(
 d(E_i, F, virial)/dc where c = [c_radial | c_species | beta_linear].
 
-Without forces, returns site_energy_grad (inum, cc), as PairMTPExtrapolation.eval_grad.
+Without forces, returns site_energy_grad (inum, cc); row ii is dE_i/dc for
+atom ilist[ii], the information vector extrapolation grades are taken from.
 With forces, returns (site_energy_grad (inum, cc), force_grad (n_atoms, 3, cc), virial_grad (6, cc)|None).
 With radial False, the radial columns are zero.
 )doc",

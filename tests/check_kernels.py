@@ -20,7 +20,7 @@ import numpy
 from ase import Atoms
 from numpy import float64, int32
 
-from otf_engine._mtp import MTPTraining
+from otf_engine._mtp import MTPTraining, PairMTPExtrapolation
 from otf_engine._mtp.neighbors import neighbors
 
 REFERENCE = Path(__file__).parent / "kernel_reference"
@@ -28,7 +28,6 @@ POTENTIAL = REFERENCE / "potential-16.mtp"
 GOLDEN = REFERENCE / "kernels.npz"
 TOL = 1e-12
 
-BASIS_TYPES = ["RBChebyshev", "RBChebyshev_repuls", "BChebyshev", "BChebyshev_repuls", "RBTaylor"]
 PROBE_DISTANCES = [1.0, 1.5, 2.5, 4.0, 4.99]
 
 
@@ -55,7 +54,7 @@ def structures(min_dist, max_dist):
                 types += [len(positions) % n_species]
         built += [(numpy.asarray(positions), numpy.asarray(types, dtype=int32), cell)]
 
-    # A pair exactly at min_dist, where the clamped bases diverge from the plain ones.
+    # A pair exactly at min_dist, the short-range end of the radial basis.
     positions, types, cell = built[0][0].copy(), built[0][1].copy(), built[0][2]
     positions[1] = positions[0] + numpy.array([min_dist, 0.0, 0.0])
     built += [(positions, types, cell)]
@@ -63,8 +62,11 @@ def structures(min_dist, max_dist):
     return [(Atoms(numbers=numpy.full(len(p), 26), positions=p, cell=[c, c, c], pbc=True), t) for p, t, c in built]
 
 
-def outputs(pot, cutoff):
-    """Every kernel's output on every structure, keyed for the golden file."""
+def outputs(pot, grader, cutoff):
+    """Every kernel's output on every structure, keyed for the golden file.
+
+    pot is an MTPTraining and grader a PairMTPExtrapolation, of one potential.
+    """
     out = {}
 
     out["scalars"] = numpy.array([pot.get_coeff_count(), pot.get_species_count(), pot.get_radial_func_count(),
@@ -87,7 +89,7 @@ def outputs(pot, cutoff):
     for i, (atoms, types) in enumerate(structures(pot.get_min_cutoff(), cutoff)):
         nl = neighbors(atoms, cutoff, types=types)
 
-        result = pot.compute(nl, compute_virials=True, compute_eatom=True)
+        result = pot.compute(nl)
         out[f"{i}/energy"] = numpy.asarray(result["energy"], dtype=float64)
         out[f"{i}/forces"] = numpy.asarray(result["forces"], dtype=float64)
         out[f"{i}/virials"] = numpy.asarray(result["virials"], dtype=float64)
@@ -107,45 +109,26 @@ def outputs(pot, cutoff):
         dloss_denergy, dloss_dforces, dloss_dvirial = float(weights.standard_normal()), weights.standard_normal((len(atoms), 3)), weights.standard_normal(6)
         out[f"{i}/loss_grad"] = numpy.asarray(pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial), dtype=float64)
 
-        # grade() reaches the grading branch of PairMTPExtrapolation::compute, which
-        # eval_grad leaves unrun. The active set is synthetic and seeded — the gate
-        # checks that the kernel reproduces, not that the grades mean anything.
-        n_coeffs = pot.get_coeff_count()
+        # PairMTPExtrapolation::compute is the fifth copy of the forward pass. The
+        # active set is synthetic and seeded — the gate checks that the kernel
+        # reproduces, not that the grades mean anything.
+        n_coeffs = grader.get_coeff_count()
         invA = numpy.random.default_rng(1).standard_normal((n_coeffs, n_coeffs))
         for mode, label in ((False, "nbh"), (True, "cfg")):
-            pot.set_active_set(invA, mode)
-            grades, cfg_grade = pot.grade(nl)
-            out[f"{i}/grade_{label}"] = numpy.asarray(grades, dtype=float64)
-            out[f"{i}/grade_{label}_cfg"] = numpy.asarray(cfg_grade, dtype=float64)
+            grader.set_active_set(invA, mode, 2)
+            graded = grader.compute(nl)
+            out[f"{i}/grade_{label}_max"] = numpy.asarray(graded["max_grade"], dtype=float64)
+            if not mode:
+                out[f"{i}/grade_nbh"] = numpy.asarray(graded["nbh_grades"], dtype=float64)
+                out[f"{i}/grade_nbh_forces"] = numpy.asarray(graded["forces"], dtype=float64)
+                out[f"{i}/grade_nbh_virials"] = numpy.asarray(graded["virials"], dtype=float64)
 
     return out
 
 
-def basis_outputs(tmp_dir):
-    """`eval_radial_basis` for each supported basis, over the same potential."""
-    source = POTENTIAL.read_text()
-    out = {}
-
-    for basis in BASIS_TYPES:
-        path = tmp_dir / f"{basis}.mtp"
-        path.write_text(source.replace("radial_basis_type = RBChebyshev\n", f"radial_basis_type = {basis}\n", 1))
-        pot = MTPTraining(str(path))
-        if pot.get_radial_basis_type() != basis:
-            raise RuntimeError(f"{basis} did not survive the rewrite; write_mtp or read_file has regressed")
-        min_dist = pot.get_min_cutoff()
-        for dist in PROBE_DISTANCES + [min_dist * 0.5]:
-            vals, ders = pot.eval_radial_basis(float(dist))
-            out[f"basis/{basis}/{dist:.6f}/vals"] = numpy.asarray(vals, dtype=float64)
-            out[f"basis/{basis}/{dist:.6f}/ders"] = numpy.asarray(ders, dtype=float64)
-
-    return out
-
-
-def collect(tmp_dir):
+def collect():
     pot = MTPTraining(str(POTENTIAL))
-    collected = outputs(pot, pot.get_max_cutoff())
-    collected.update(basis_outputs(tmp_dir))
-    return collected
+    return outputs(pot, PairMTPExtrapolation(str(POTENTIAL)), pot.get_max_cutoff())
 
 
 def main():
@@ -154,12 +137,7 @@ def main():
     parser.add_argument("--tol", type=float, default=TOL, help=f"relative tolerance (default {TOL:g})")
     args = parser.parse_args()
 
-    tmp_dir = REFERENCE / "_tmp"
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    collected = collect(tmp_dir)
-    for stale in tmp_dir.glob("*.mtp"):
-        stale.unlink()
-    tmp_dir.rmdir()
+    collected = collect()
 
     if args.capture:
         numpy.savez_compressed(GOLDEN, **collected)

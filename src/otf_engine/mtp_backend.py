@@ -189,7 +189,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     site_en_w = float(weights.get("site_en_weight", 1.0))
 
     # The contraction is a coeff_count-square GEMM, so numpy outruns
-    # PairMTPExtrapolation.grade(), which walks invA row by row.
+    # PairMTPExtrapolation.compute, which walks invA row by row.
     for i, atoms in enumerate(structures):
         grads = selection_equations(pot, calc.neighbors(atoms), weights).grads
 

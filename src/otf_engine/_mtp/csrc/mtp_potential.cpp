@@ -27,10 +27,14 @@ PairMTP::~PairMTP() {
 /* ----------------------------------------------------------------------
    Main Computation Function
    ---------------------------------------------------------------------- */
-double PairMTP::compute(const NeighList& list, double* forces, double* virial, double* eatom) {
+void PairMTP::compute(const NeighList& list) {
     const int stride = 1 + 2 * radial_func_count;
-    double total_energy = 0.0;
     int nbr_offset = 0;
+
+    energy = 0.0;
+    eatom.assign(list.n_atoms, 0.0);
+    forces.assign((size_t) list.n_atoms * 3, 0.0);
+    std::fill(virial, virial + 6, 0.0);
 
     // Loop over all provided neighbourhoods
     for (int ii = 0; ii < list.inum; ii++) {
@@ -116,8 +120,8 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy += linear_coeffs[k] * moment_tensor_vals[alpha_moment_mapping[k]];
 
-        total_energy += nbh_energy;
-        if (eatom) eatom[i] = nbh_energy;
+        eatom[i] = nbh_energy;
+        energy += nbh_energy;
 
         // =========== Begin Backpropagation ===========
         //------------ NBH energy derivative is the corresponding linear combination------------
@@ -188,92 +192,15 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
             forces[j * 3 + 1] -= temp_force[1];
             forces[j * 3 + 2] -= temp_force[2];
 
-            // Accumulate virial stress only if requested
-            if (virial) {
-                virial[0] -= temp_force[0] * r[0];    //xx
-                virial[1] -= temp_force[1] * r[1];    //yy
-                virial[2] -= temp_force[2] * r[2];    //zz
-
-                virial[3] -= (temp_force[0] * r[1] + temp_force[1] * r[0]) / 2;    //xy
-                virial[4] -= (temp_force[0] * r[2] + temp_force[2] * r[0]) / 2;    //xz
-                virial[5] -= (temp_force[1] * r[2] + temp_force[2] * r[1]) / 2;    //yz
-            }
+            // Accumulate virial stress as the reference's ev_tally_xyz, whose del is -r
+            virial[0] -= r[0] * temp_force[0];    //xx
+            virial[1] -= r[1] * temp_force[1];    //yy
+            virial[2] -= r[2] * temp_force[2];    //zz
+            virial[3] -= r[0] * temp_force[1];    //xy
+            virial[4] -= r[0] * temp_force[2];    //xz
+            virial[5] -= r[1] * temp_force[2];    //yz
         }
     }
-
-    return total_energy;
-}
-
-/* ----------------------------------------------------------------------
-   Basis values per central atom, before the linear coefficients are applied
-------------------------------------------------------------------------- */
-void PairMTP::eval_basis(const NeighList& list, double* basis_out) {
-    int nbr_offset = 0;
-
-    for (int ii = 0; ii < list.inum; ii++) {
-        const int i = list.ilist[ii];
-        const int itype = list.types[i];
-        const int jnum = list.numneigh[ii];
-        const int* nbrs = list.firstneigh + nbr_offset;
-        const double* dr = list.displacements + nbr_offset * 3;
-        nbr_offset += jnum;
-
-        std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
-
-        // ------------ Calculate Basic Moments ------------
-        for (int jj = 0; jj < jnum; jj++) {
-            const int j = nbrs[jj];
-            const int jtype = list.types[j];
-            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
-            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-
-            if (rsq > max_cutoff_sq) continue;
-
-            const double dist = std::sqrt(rsq);
-            const double inv_dist = 1.0 / dist;
-            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            radial_basis->calc_radial_basis(dist);
-            const double* basis_vals = radial_basis->radial_basis_vals.data();
-
-            for (int k = 1; k < angular_count; k++)
-                angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
-
-            const int pair_offset = itype * species_count + jtype;
-            for (int mu = 0; mu < radial_func_count; mu++) {
-                double val = 0;
-                const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
-
-                for (int ri = 0; ri < radial_basis_size; ri++)
-                    val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
-
-                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++)
-                    moment_tensor_vals[basic_by_mu[t]] += val * angular_vals[angular_by_mu[t]];
-            }
-        }
-
-        // ------------ Construct Composite Moment Values  ------------
-        for (int k = 0; k < alpha_index_times_count; k++) {
-            const int* term = alpha_index_times[k].data();
-            moment_tensor_vals[term[3]] +=
-                term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
-        }
-
-        double* row = basis_out + (size_t) ii * alpha_scalar_count;
-        for (int k = 0; k < alpha_scalar_count; k++)
-            row[k] = moment_tensor_vals[alpha_moment_mapping[k]];
-    }
-}
-
-/* ---------------------------------------------------------------------- */
-void PairMTP::eval_radial_basis(double dist, double* vals_out, double* ders_out) {
-    if (ders_out)
-        radial_basis->calc_radial_basis_ders(dist);
-    else
-        radial_basis->calc_radial_basis(dist);
-
-    std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), vals_out);
-    if (ders_out)
-        std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), ders_out);
 }
 
 /* ----------------------------------------------------------------------
@@ -305,6 +232,8 @@ void PairMTP::read_file(std::istream& is) {
     // and the linear coeffs; mlip-3's MLMTPR::Load gives them defaults.
     if (tfr.keyword() == "species_count") {
         tfr.rest() >> species_count;
+        if (species_count < 1)
+            throw std::runtime_error("PairMTP: MTP species count must be positive");
         tfr.advance();
     }
 
@@ -318,22 +247,11 @@ void PairMTP::read_file(std::istream& is) {
         throw std::runtime_error("PairMTP: no radial basis set type is specified");
     tfr.rest() >> radial_basis_type;
 
-    // Set the type of radial basis. Only RBChebyshev is in the reference; the
-    // rest are transcribed from mlip-3 to widen which files load.
+    // Set the type of radial basis.
     if (radial_basis_type == "RBChebyshev")
         radial_basis = new RBChebyshev(tfr);
-    else if (radial_basis_type == "RBChebyshev_repuls")
-        radial_basis = new RBChebyshevRepuls(tfr);
-    else if (radial_basis_type == "BChebyshev")
-        radial_basis = new BChebyshev(tfr);
-    else if (radial_basis_type == "BChebyshev_repuls")
-        radial_basis = new BChebyshevRepuls(tfr);
-    else if (radial_basis_type == "RBTaylor")
-        radial_basis = new RBTaylor(tfr);
-    else if (radial_basis_type == "RBShapeev")
-        throw std::runtime_error("PairMTP: RBShapeev is not implemented");
     else
-        throw std::runtime_error("PairMTP: unknown radial basis type '" + radial_basis_type + "'");
+        throw std::runtime_error("PairMTP: the radial basis type '" + radial_basis_type + "' was not found/available");
 
     radial_basis->scaling = scaling;
     radial_basis_size = radial_basis->size;
@@ -342,6 +260,8 @@ void PairMTP::read_file(std::istream& is) {
     max_cutoff_sq = max_cutoff * max_cutoff;
 
     radial_func_count = tfr.next_int("radial_funcs_count");
+    if (radial_func_count < 1)
+        throw std::runtime_error("PairMTP: MTP radial function count must be positive");
 
     tfr.advance();
     if (tfr.keyword() == "magnetic_basis_type")
@@ -375,6 +295,8 @@ void PairMTP::read_file(std::istream& is) {
         std::istringstream label(tfr.line());
         if (!(label >> type1 >> type2))
             throw std::runtime_error("PairMTP: cannot read radial_coeffs pair label");
+        if (type1 < 0 || type1 >= species_count || type2 < 0 || type2 >= species_count)
+            throw std::runtime_error("PairMTP: invalid species pair " + std::to_string(type1) + "-" + std::to_string(type2) + " in MTP radial coefficients");
 
         const int pair_offset = (type1 * species_count + type2) * radial_coeff_count_per_pair;
         for (int j = 0; j < radial_func_count; j++) {
@@ -391,10 +313,14 @@ void PairMTP::read_file(std::istream& is) {
         alpha_moment_count = tfr.next_int("alpha_moments_count");
     else if (tfr.keyword() != "alpha_moments_count" || !(tfr.rest() >> alpha_moment_count))
         throw std::runtime_error("PairMTP: cannot read radial coeffs");
+    if (alpha_moment_count < 1)
+        throw std::runtime_error("PairMTP: MTP alpha moment count must be positive");
     moment_tensor_vals.resize(alpha_moment_count);
     nbh_energy_ders_wrt_moments.resize(alpha_moment_count);
 
     alpha_index_basic_count = tfr.next_int("alpha_index_basic_count");
+    if (alpha_index_basic_count < 1 || alpha_index_basic_count > alpha_moment_count)
+        throw std::runtime_error("PairMTP: MTP alpha index basic count is out of range");
 
     // Read the basic alphas
     tfr.expect("alpha_index_basic");
@@ -406,6 +332,10 @@ void PairMTP::read_file(std::istream& is) {
             for (int j = 0; j < 4; j++)
                 if (!(ss >> alpha_index_basic[i][j]))
                     throw std::runtime_error("PairMTP: not enough values in alpha_index_basic");
+            if (alpha_index_basic[i][0] < 0 || alpha_index_basic[i][0] >= radial_func_count)
+                throw std::runtime_error("PairMTP: radial function index out of range in alpha_index_basic");
+            if (alpha_index_basic[i][1] < 0 || alpha_index_basic[i][2] < 0 || alpha_index_basic[i][3] < 0)
+                throw std::runtime_error("PairMTP: negative angular exponent in alpha_index_basic");
             radial_func_max = std::max(radial_func_max, alpha_index_basic[i][0]);
         }
         if (radial_func_max != radial_func_count - 1)    //Index validity check
@@ -419,26 +349,37 @@ void PairMTP::read_file(std::istream& is) {
     max_alpha_index_basic++;    // Add 1 to account for zeroth order indicies
 
     alpha_index_times_count = tfr.next_int("alpha_index_times_count");
+    if (alpha_index_times_count < 0)
+        throw std::runtime_error("PairMTP: MTP alpha index times count is negative");
 
     tfr.expect("alpha_index_times");
     alpha_index_times.resize(alpha_index_times_count);
     {
         std::istringstream ss = tfr.rest();
-        for (int i = 0; i < alpha_index_times_count; i++)
+        for (int i = 0; i < alpha_index_times_count; i++) {
             for (int j = 0; j < 4; j++)
                 if (!(ss >> alpha_index_times[i][j]))
                     throw std::runtime_error("PairMTP: not enough values in alpha_index_times");
+            for (int j = 0; j < 4; j++)
+                if (j != 2 && (alpha_index_times[i][j] < 0 || alpha_index_times[i][j] >= alpha_moment_count))
+                    throw std::runtime_error("PairMTP: moment index out of range in alpha_index_times");
+        }
     }
 
     alpha_scalar_count = tfr.next_int("alpha_scalar_moments");
+    if (alpha_scalar_count < 0)
+        throw std::runtime_error("PairMTP: MTP alpha scalar moment count is negative");
 
     tfr.expect("alpha_moment_mapping");
     alpha_moment_mapping.resize(alpha_scalar_count);
     {
         std::istringstream ss = tfr.rest();
-        for (int i = 0; i < alpha_scalar_count; i++)
+        for (int i = 0; i < alpha_scalar_count; i++) {
             if (!(ss >> alpha_moment_mapping[i]))
                 throw std::runtime_error("PairMTP: not enough values in alpha_moment_mapping");
+            if (alpha_moment_mapping[i] < 0 || alpha_moment_mapping[i] >= alpha_moment_count)
+                throw std::runtime_error("PairMTP: moment index out of range in alpha_moment_mapping");
+        }
     }
 
     if (!tfr.next_line() || tfr.keyword() != "species_coeffs") {

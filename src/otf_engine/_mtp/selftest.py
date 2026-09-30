@@ -13,7 +13,7 @@ from .neighbors import neighbors
 
 
 def _energy(pot, atoms, cutoff):
-    return float(pot.compute(neighbors(atoms, cutoff), compute_virials=False)["energy"])
+    return float(pot.compute(neighbors(atoms, cutoff))["energy"])
 
 
 def _rel_error(analytic_values, numeric_values):
@@ -30,7 +30,7 @@ def check_forces(pot, atoms, step=1e-5, n_atoms=4):
     energy evaluations.
     """
     cutoff = pot.get_max_cutoff()
-    analytic_forces = numpy.asarray(pot.compute(neighbors(atoms, cutoff), compute_virials=False)["forces"], dtype=float64)
+    analytic_forces = numpy.asarray(pot.compute(neighbors(atoms, cutoff))["forces"], dtype=float64)
 
     probe = atoms.copy()
     n = min(n_atoms, len(atoms))
@@ -108,10 +108,10 @@ def check_force_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=4, se
         original = coeffs[k]
         coeffs[k] = original + step
         setter(coeffs)
-        f_plus = numpy.asarray(pot.compute(nl, compute_virials=False)["forces"], dtype=float64)
+        f_plus = numpy.asarray(pot.compute(nl)["forces"], dtype=float64)
         coeffs[k] = original - step
         setter(coeffs)
-        f_minus = numpy.asarray(pot.compute(nl, compute_virials=False)["forces"], dtype=float64)
+        f_minus = numpy.asarray(pot.compute(nl)["forces"], dtype=float64)
         coeffs[k] = original
         setter(coeffs)
 
@@ -136,7 +136,7 @@ def check_loss_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
     dloss_dvirial = rng.standard_normal(6)
 
     def loss():
-        result = pot.compute(nl, compute_virials=True)
+        result = pot.compute(nl)
         return dloss_denergy * float(result["energy"]) + float((dloss_dforces * numpy.asarray(result["forces"])).sum()) + float(dloss_dvirial @ numpy.asarray(result["virials"]))
 
     coeffs, setter, offset = _coeff_block(pot, block)

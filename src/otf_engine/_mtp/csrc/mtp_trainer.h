@@ -116,6 +116,6 @@ class MTPTrainer {
     BFGS bfgs;
 
     // Per-structure scratch
-    std::vector<double> forces, dloss_dforces;
+    std::vector<double> dloss_dforces;
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };

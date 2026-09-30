@@ -51,18 +51,16 @@ class MTPCalculator(Calculator):
         if properties is None:
             properties = self.implemented_properties
 
-        want_virials = "stress" in properties
-        want_eatom = "energies" in properties
-        result = self.potential.compute(self.neighbors(atoms), compute_virials=want_virials, compute_eatom=want_eatom)
+        result = self.potential.compute(self.neighbors(atoms))
 
         energy = float(result["energy"])
         self.results["energy"] = energy
         self.results["free_energy"] = energy
         self.results["forces"] = numpy.array(result["forces"], dtype=float64)
-        if want_eatom:
+        if "energies" in properties:
             self.results["energies"] = numpy.array(result["eatom"], dtype=float64)
 
-        if want_virials:
+        if "stress" in properties:
             vol = atoms.get_volume()
             # ASE stress convention: Voigt order (xx,yy,zz,yz,xz,xy), positive = tensile
             # Our virials are (xx,yy,zz,xy,xz,yz), sign: virial = -stress * vol

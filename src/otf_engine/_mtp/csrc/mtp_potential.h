@@ -21,22 +21,17 @@ class PairMTP {
     explicit PairMTP(const std::string& filename);
     virtual ~PairMTP();
 
-    // Energy, forces and virial for every central atom in list.
-    // forces  : [n_atoms * 3], accumulated (zeroed by the caller)
-    // virial  : [6] as xx,yy,zz,xy,xz,yz — nullptr to skip
-    // eatom   : [n_atoms] — nullptr to skip
-    // Returns the total energy.
-    double compute(const NeighList& list, double* forces, double* virial, double* eatom);
+    // Energy, per-atom energies, forces and virial of the central atoms in list,
+    // left in the members below.
+    void compute(const NeighList& list);
 
-    // Scalar moment values per central atom: [inum * alpha_scalar_count].
-    // Row ii holds the basis values for ilist[ii]; dot with linear_coeffs and
-    // add species_coeffs for the site energy.
-    void eval_basis(const NeighList& list, double* basis_out);
+    double get_energy() const { return energy; }
+    const double* get_eatom() const { return eatom.data(); }      // [n_atoms]
+    const double* get_forces() const { return forces.data(); }    // [n_atoms * 3]
+    const double* get_virial() const { return virial; }           // [6] xx,yy,zz,xy,xz,yz
 
-    // Chebyshev radial basis at one distance, into arrays of radial_basis_size.
-    // Pass nullptr for ders_out to skip the derivatives.
-    void eval_radial_basis(double dist, double* vals_out, double* ders_out = nullptr);
-
+    // Length of the coefficient vector [radial | species | linear].
+    int coeff_count() const { return radial_coeff_count + species_count + alpha_scalar_count; }
     int get_species_count() const { return species_count; }
     int get_radial_func_count() const { return radial_func_count; }
     int get_radial_basis_size() const { return radial_basis_size; }
@@ -130,6 +125,12 @@ class PairMTP {
     // Graph traversal, forwards and backwards pass
     std::vector<double> moment_tensor_vals;          // the moments
     std::vector<double> nbh_energy_ders_wrt_moments; // same, for ders
+
+    // Results of compute
+    double energy = 0.0;
+    std::vector<double> eatom;   // [n_atoms] site energies
+    std::vector<double> forces;  // [n_atoms * 3]
+    double virial[6] = {};       // xx,yy,zz,xy,xz,yz
 
     // Cache values between forwards and backwards pass
     int cache_size = 0;

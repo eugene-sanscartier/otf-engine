@@ -557,9 +557,10 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
 
     for (const TrainingStructure& s : structures) {
         const NeighList list = s.list();
-        forces.assign((size_t) list.n_atoms * 3, 0.0);
-        double virial[6] = {};
-        const double energy = potential.compute(list, forces.data(), virial, nullptr);
+        potential.compute(list);
+        const double energy = potential.get_energy();
+        const double* forces = potential.get_forces();
+        const double* virial = potential.get_virial();
 
         dloss_dforces.assign((size_t) list.n_atoms * 3, 0.0);
         double dloss_dvirial[6] = {};

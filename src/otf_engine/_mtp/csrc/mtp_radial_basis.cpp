@@ -8,7 +8,6 @@
 
 #include "text_file_reader.h"
 
-#include <algorithm>
 #include <stdexcept>
 
 RadialMTPBasis::RadialMTPBasis(TextFileReader& tfr) {
@@ -34,24 +33,18 @@ void RadialMTPBasis::read_basis_properties(TextFileReader& tfr) {
     if (tfr.keyword() != "max_val" && tfr.keyword() != "max_dist")
         throw std::runtime_error("MTP radial basis: expected max_dist, got '" + tfr.keyword() + "'");
     tfr.rest() >> max_cutoff;
+    if (!(max_cutoff > min_cutoff))
+        throw std::runtime_error("MTP radial basis: maximum cutoff must exceed the minimum cutoff");
 
     size = tfr.next_int("radial_basis_size");
+    if (size < 2)
+        throw std::runtime_error("MTP radial basis: size must be at least 2");
 
     radial_basis_vals.resize(size);
     radial_basis_ders.resize(size);
 }
 
 // ---------------------------------------------------------------------------
-void RBChebyshev::calc_radial_basis(double dist) {
-    double ksi = (2 * dist - (min_cutoff + max_cutoff)) / (max_cutoff - min_cutoff);
-
-    radial_basis_vals[0] = scaling * (dist - max_cutoff) * (dist - max_cutoff);
-    radial_basis_vals[1] = scaling * (ksi * (dist - max_cutoff) * (dist - max_cutoff));
-    for (int i = 2; i < size; i++) {
-        radial_basis_vals[i] = 2 * ksi * radial_basis_vals[i - 1] - radial_basis_vals[i - 2];
-    }
-}
-
 void RBChebyshev::calc_radial_basis_ders(double dist) {
     const double delta = dist - max_cutoff;
     const double span = max_cutoff - min_cutoff;
@@ -77,69 +70,4 @@ void RBChebyshev::calc_radial_basis_ders(double dist) {
         der0 = der1;
         der1 = der;
     }
-}
-
-// ---------------------------------------------------------------------------
-void BChebyshev::calc_radial_basis(double dist) {
-    double ksi = (2 * dist - (min_cutoff + max_cutoff)) / (max_cutoff - min_cutoff);
-
-    radial_basis_vals[0] = scaling * 1;
-    radial_basis_vals[1] = scaling * ksi;
-    for (int i = 2; i < size; i++) {
-        radial_basis_vals[i] = 2 * ksi * radial_basis_vals[i - 1] - radial_basis_vals[i - 2];
-    }
-}
-
-void BChebyshev::calc_radial_basis_ders(double dist) {
-    BChebyshev::calc_radial_basis(dist);
-
-    double mult = 2.0 / (max_cutoff - min_cutoff);
-    double ksi = (2 * dist - (min_cutoff + max_cutoff)) / (max_cutoff - min_cutoff);
-
-    radial_basis_ders[0] = scaling * 0;
-    radial_basis_ders[1] = scaling * mult;
-    for (int i = 2; i < size; i++) {
-        radial_basis_ders[i] = 2 * (mult * radial_basis_vals[i - 1] + ksi * radial_basis_ders[i - 1]) -
-                               radial_basis_ders[i - 2];
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The scaling multiplies each power once, as mlip-3's MLMTPR multiplies the
-// values of its unscaled Basis_Taylor.
-void RBTaylor::calc_radial_basis(double dist) {
-    radial_basis_vals[0] = scaling * 1;
-    for (int i = 1; i < size; i++) {
-        radial_basis_vals[i] = dist * radial_basis_vals[i - 1];
-    }
-}
-
-void RBTaylor::calc_radial_basis_ders(double dist) {
-    RBTaylor::calc_radial_basis(dist);
-
-    radial_basis_ders[0] = scaling * 0;
-    for (int i = 1; i < size; i++) {
-        radial_basis_ders[i] = i * radial_basis_vals[i - 1];
-    }
-}
-
-// ---------------------------------------------------------------------------
-void RBChebyshevRepuls::calc_radial_basis(double dist) {
-    RBChebyshev::calc_radial_basis(std::max(dist, min_cutoff));
-}
-
-void RBChebyshevRepuls::calc_radial_basis_ders(double dist) {
-    RBChebyshev::calc_radial_basis_ders(std::max(dist, min_cutoff));
-    if (dist <= min_cutoff)
-        std::fill(radial_basis_ders.begin(), radial_basis_ders.end(), 0.0);
-}
-
-void BChebyshevRepuls::calc_radial_basis(double dist) {
-    BChebyshev::calc_radial_basis(std::max(dist, min_cutoff));
-}
-
-void BChebyshevRepuls::calc_radial_basis_ders(double dist) {
-    BChebyshev::calc_radial_basis_ders(std::max(dist, min_cutoff));
-    if (dist <= min_cutoff)
-        std::fill(radial_basis_ders.begin(), radial_basis_ders.end(), 0.0);
 }

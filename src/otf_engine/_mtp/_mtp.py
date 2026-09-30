@@ -6,8 +6,9 @@ suppressing diagnostics.
 
 The three classes mirror the C++ hierarchy:
     PairMTP                 energy, forces, virial
-    PairMTPExtrapolation    + information vectors and extrapolation grades
-    MTPTraining             + derivatives w.r.t. the coefficients
+    PairMTPExtrapolation    + extrapolation grades           (a PairMTP)
+    MTPTraining             + basis values and derivatives
+                              w.r.t. the coefficients        (a PairMTP)
 
 train_mtp fits an MTPTraining as mlip-3's `mlp train` does.
 """
