@@ -14,6 +14,7 @@
 #include "mtp_training.h"
 
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <pybind11/numpy.h>
@@ -68,16 +69,33 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
 // "energy", "forces" (n_atoms, 3), "virials" (6) and "eatom" (n_atoms).
 py::dict potential_results(const PairMTP& self, int n_atoms);
 
+// Raises unless every atom of nb has one of the potential's species, which the
+// kernels index their coefficients with.
+inline void check_species(const PairMTP& self, const PyNeighbors& nb) {
+    const NeighList& list = nb.view();
+    for (int i = 0; i < list.n_atoms; i++)
+        if (list.types[i] < 0 || list.types[i] >= self.get_species_count())
+            throw std::runtime_error("NeighList: atom " + std::to_string(i) + " has species " + std::to_string(list.types[i]) + ", outside the potential's " + std::to_string(self.get_species_count()) + " species");
+}
+
 // Binds fn under two signatures: one taking a NeighList, and one taking the
-// five loose arrays the older API passes. `extra` carries the py::arg entries
-// for any trailing parameters.
+// five loose arrays the older API passes, both checking the species first.
+// `extra` carries the py::arg entries for any trailing parameters.
 template <class Cls, class Self, class Ret, class... Args, class... Extra>
 void def_neighbors(Cls& cls, const char* name, Ret (*fn)(Self&, const PyNeighbors&, Args...), const char* doc, Extra... extra) {
-    cls.def(name, fn, py::arg("neighbors"), extra..., doc);
+    cls.def(
+        name,
+        [fn](Self& self, const PyNeighbors& nb, Args... args) {
+            check_species(self, nb);
+            return fn(self, nb, args...);
+        },
+        py::arg("neighbors"), extra..., doc);
     cls.def(
         name,
         [fn](Self& self, IntArray types, IntArray ilist, IntArray numneigh, IntArray firstneigh, DoubleArray displacements, Args... args) {
-            return fn(self, PyNeighbors(types, ilist, numneigh, firstneigh, displacements), args...);
+            const PyNeighbors nb(types, ilist, numneigh, firstneigh, displacements);
+            check_species(self, nb);
+            return fn(self, nb, args...);
         },
         py::arg("types"), py::arg("ilist"), py::arg("numneigh"), py::arg("firstneigh"), py::arg("displacements"), extra...);
 }

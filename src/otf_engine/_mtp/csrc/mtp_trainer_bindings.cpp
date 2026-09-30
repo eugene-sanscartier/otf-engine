@@ -1,6 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for MTPTrainer (see mtp_trainer.h), with its ranks as
-   threads (see thread_mpi.h).
+   Python bindings for MTPTrainer (see mtp_trainer.h). Built into _mtp_ext,
+   its ranks are threads (see thread_mpi.h); built with MTP_MPI, this unit is
+   the _mtp_mpi module, whose ranks are those of an mpi4py communicator.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
@@ -77,6 +78,114 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
     return o;
 }
 
+// The stream the log option names: stdout (or empty), none, or a file, opened into file.
+static std::ostream* open_log(const std::string& target, std::ofstream& file) {
+    if (target == "stdout" || target.empty()) return &std::cout;
+    if (target == "none") return nullptr;
+    file.open(target);
+    if (!file)
+        throw std::runtime_error("train_mtp: cannot open log '" + target + "'");
+    return &file;
+}
+
+#ifdef MTP_MPI
+
+// Raises error on every rank of comm, or else the error of the lowest rank that has one.
+static void raise_together(MPI_Comm comm, const std::string& error) {
+    int rank = 0, size = 1;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    const int mine = error.empty() ? size : rank;
+    int failed = size;
+    MPI_Allreduce(&mine, &failed, 1, MPI_INT, MPI_MIN, comm);
+    if (failed == size) return;
+
+    std::string message = rank == failed ? error : std::string();
+    int length = (int) message.size();
+    MPI_Bcast(&length, 1, MPI_INT, failed, comm);
+    message.resize(length);
+    MPI_Bcast(message.data(), length, MPI_CHAR, failed, comm);
+    throw std::runtime_error(message);
+}
+
+static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::object comm_object, py::object checkpoint) {
+    const MPI_Comm comm = MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>());
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+
+    // A rank failing to set up fails every rank, before the trainer's first collective.
+    std::string error;
+    TrainerOptions trainer_options;
+    std::vector<TrainingStructure> share;
+    std::ofstream log_file;
+    std::ostream* log = nullptr;
+    py::object potential;
+    try {
+        std::string log_target = "stdout";
+        trainer_options = parse_options(options, log_target);
+        for (py::handle item : structures) {
+            py::tuple t = py::reinterpret_borrow<py::tuple>(item);
+            share.push_back(make_structure(t[0].cast<const PyNeighbors&>(), t[1], t[2], t[3]));
+        }
+        if (rank == 0) log = open_log(log_target, log_file);
+        potential = py::cast(std::make_unique<MTPTraining>(filename));
+    } catch (const std::exception& e) {
+        error = e.what();
+    }
+    raise_together(comm, error);
+
+    MTPTraining& potential_ref = potential.cast<MTPTraining&>();
+    std::string checkpoint_error;    // the first failed checkpoint, which ends checkpointing
+    std::function<void()> save;
+    if (rank == 0 && !checkpoint.is_none())
+        save = [&]() {
+            if (!checkpoint_error.empty()) return;
+            py::gil_scoped_acquire gil;
+            try {
+                checkpoint(potential);
+            } catch (const std::exception& e) {
+                checkpoint_error = std::string("train_mtp: checkpoint failed: ") + e.what();
+            }
+        };
+
+    {
+        py::gil_scoped_release unlocked;
+        try {
+            MTPTrainer trainer(potential_ref, std::move(share), trainer_options, comm, log, save);
+            trainer.train();
+        } catch (const std::runtime_error& e) {
+            error = e.what();    // MTPTrainer raises its errors on every rank together
+        } catch (...) {
+            MPI_Abort(comm, 1);    // the other ranks are left waiting in a collective
+        }
+    }
+    raise_together(comm, error);
+    raise_together(comm, checkpoint_error);
+    return potential;
+}
+
+PYBIND11_MODULE(_mtp_mpi, m) {
+    m.doc() = "MTPTrainer over MPI.";
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining and NeighList
+
+    m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), R"doc(
+Train the potential in filename as mlip-3's `mlp train` does, over the ranks of comm, and return it.
+
+Every rank calls it with its own share of the structures and the same other arguments, and returns
+the fitted potential. An error on any rank is raised on every rank.
+
+structures : this rank's share, an iterable of (NeighList, energy|None, forces(n_atoms,3)|None,
+             virial(6)|None), neighbor lists at the potential's cutoff, virial as mlip-3's
+             PlusStress in eV, xx,yy,zz,xy,xz,yz
+options    : mlp train options without the leading "--", as strings; rank 0 writes the log
+comm       : an mpi4py communicator
+checkpoint : called on rank 0 with the potential being trained wherever mlp saves it during the
+             fit; a failure ends checkpointing and is raised after the fit
+)doc");
+}
+
+#else
+
 static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, int ranks, py::object checkpoint) {
     std::string log_target = "stdout";
     const TrainerOptions trainer_options = parse_options(options, log_target);
@@ -94,15 +203,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
         throw std::runtime_error("train_mtp: no training structures");
 
     std::ofstream log_file;
-    std::ostream* log = nullptr;
-    if (log_target == "stdout" || log_target.empty())
-        log = &std::cout;
-    else if (log_target != "none") {
-        log_file.open(log_target);
-        if (!log_file)
-            throw std::runtime_error("train_mtp: cannot open log '" + log_target + "'");
-        log = &log_file;
-    }
+    std::ostream* log = open_log(log_target, log_file);
 
     // Rank 0 trains the potential that is returned, and hands it to checkpoint.
     py::object potential = py::cast(std::make_unique<MTPTraining>(filename));
@@ -161,3 +262,5 @@ options    : mlp train options without the leading "--", as strings
 checkpoint : called with the potential being trained wherever mlp saves it during the fit
 )doc");
 }
+
+#endif

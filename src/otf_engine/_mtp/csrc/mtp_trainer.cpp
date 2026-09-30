@@ -109,15 +109,17 @@ void MTPTrainer::train() {
    the training set, and a species is numbered by its index.
 ------------------------------------------------------------------------- */
 void MTPTrainer::add_species() {
-    int local_count = 0;
+    // the species count, and minus the lowest species when it is negative, so that every rank raises together
+    int local[2] = {0, 0}, global[2] = {0, 0};
     for (const TrainingStructure& s : structures)
         for (int t : s.types) {
-            if (t < 0)
-                throw std::runtime_error("MTPTrainer: a training structure has species " + std::to_string(t));
-            local_count = std::max(local_count, t + 1);
+            local[0] = std::max(local[0], t + 1);
+            local[1] = std::max(local[1], -t);
         }
-    int type_count = 0;
-    MPI_Allreduce(&local_count, &type_count, 1, MPI_INT, MPI_MAX, comm);
+    MPI_Allreduce(local, global, 2, MPI_INT, MPI_MAX, comm);
+    if (global[1] > 0)
+        throw std::runtime_error("MTPTrainer: a training structure has species " + std::to_string(-global[1]));
+    const int type_count = global[0];
 
     std::vector<int> present(type_count, 0), present_anywhere(type_count, 0);
     for (const TrainingStructure& s : structures)
