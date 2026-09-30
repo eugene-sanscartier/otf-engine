@@ -1,21 +1,19 @@
-"""Pure-Python implementations of calculate_grade, select_add, and train.
+"""calculate_grade, select_add, update_active_set and train, in place of mlip-3's `mlp` commands.
 
-These replace the three launcher.run() calls for the external mlip-3 binary.
-Only structure evaluation (eval_structures) still uses launcher.run().
-
-All functions accept and return ASE Atoms objects — no intermediate files.
+All functions take ASE Atoms objects — no intermediate files.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import numpy
 from numpy import intp, float64
 
 logger = logging.getLogger(__name__)
 
-from ._mtp import MTPCalculator, MTPTraining, sample, write_mtp
-from ._mtp.neighbors import mtp_types
+from ._mtp import MTPCalculator, MTPTraining, PairMTP, train_mtp, write_mtp
+from ._mtp.neighbors import mtp_types, neighbors
 from .almtp_io import MVSState, read_mvs_header, read_mvs_state, write_mvs_state
 from .maxvol import Equations, MaxVol
 
@@ -84,7 +82,7 @@ def selection_equations(pot: MTPTraining, nl, weights: dict) -> Equations:
     indices = []
 
     if need_forces or need_stress:
-        eg_all, fg_all, vg_all = pot.eval_grad_all(nl, need_stress)
+        eg_all, fg_all, vg_all = pot.eval_grad(nl, forces=True, virial=need_stress)
         eg_all = numpy.asarray(eg_all)
     else:
         eg_all, fg_all, vg_all = numpy.asarray(pot.eval_grad(nl)), None, None
@@ -292,87 +290,37 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
 # ---------------------------------------------------------------------------
 
 
-def train(potential, training_structs: list, save_to: str, iteration_limit: int = 300, energy_weight: float = 1.0, force_weight: float = 0.01, stress_weight: float = 0.001, weight_scaling: int = 1, pre_train=None, comm=None, backend: str = "scipy", optimizer: str = "lbfgs", al_mode: str = "nbh", selection_state: MVSState | None = None, selection_weights: dict | None = None) -> None:
-    """Fit MTP coefficients using NonlinearFitter (bi-level L-BFGS-B).
+def _references(atoms) -> tuple:
+    """Energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz) of *atoms*, None where absent."""
+    results = atoms.calc.results
+    forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
+    virial = None
+    if "stress" in results:
+        # read_cfg divides PlusStress by -det(cell); ASE's Voigt order is xx yy zz yz xz xy.
+        v = -numpy.asarray(results["stress"], dtype=float64) * numpy.linalg.det(atoms.cell.array)
+        virial = v[[0, 1, 2, 5, 4, 3]]
+    return float(results["energy"]) if "energy" in results else None, forces, virial
 
-    Mirrors mlip-3's bi-level training approach:
-      outer loop: L-BFGS-B on radial basis coefficients (analytical gradient)
-      inner loop: weighted least-squares for linear / species coefficients
 
-    Parameters
-    ----------
-    potential : str or MTPCalculator
-    training_structs : list of ase.Atoms (must have energy/forces/stress calculators)
-    save_to : str  — output .almtp / .mtp path
-    iteration_limit : int  — max outer iterations
-    energy_weight / force_weight / stress_weight : float
-        Fitting weights (mlip-3 defaults: 1.0 / 0.01 / 0.001).
-    weight_scaling : int
-        Per-config size exponent (mlip-3 default 1 → divide energy/stress rows by
-        sqrt(N); forces unscaled).
-    pre_train : bool or None
-        When None (default) auto-detects: if the potential has no trained radial
-        coefficients (all zero) → True; otherwise → False.  Mirrors mlip-3's
-        `!inited` gate: a fresh potential runs 75-iteration warm-up + Rescale
-        before the main loop; a previously-trained potential skips this.
-    comm : mpi4py communicator or None  — enables MPI-parallel design matrix
+def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg") -> None:
+    """Train *potential* on *training_structs* as mlip-3's `mlp train` does, and write it with an active set to *save_to*.
+
+    settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300}
+    ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
+    al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     """
-    from ._mtp.nonlinear_fit import NonlinearFitter
-    from ._mtp.linear_fit import LinearFitter
-    from ._mtp.rescale import rescale
+    try:
+        weights = read_mvs_header(potential)[0]
+    except RuntimeError:
+        weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
 
-    calc, potential_path = _open_calculator(potential)
-    pot = calc.potential
+    cutoff = PairMTP(potential).get_max_cutoff()
+    structures = ((neighbors(atoms, cutoff), *_references(atoms)) for atoms in training_structs)
+    options = {key: str(value) for key, value in (settings or {}).items()}
+    trained = train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=lambda pot: write_mtp(pot, save_to))
+    write_mtp(trained, save_to)
 
-    dataset = [sample(atoms, calc.cutoff) for atoms in training_structs]
-
-    # --- Update min_dist — mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(distances) ---
-    min_dist = numpy.inf
-    for training_sample in dataset:
-        disps = numpy.asarray(training_sample.neighbors.displacements)
-        if len(disps):
-            min_dist = min(min_dist, float(numpy.sqrt((disps**2).sum(axis=1)).min()))
-    if numpy.isfinite(min_dist):
-        pot.set_min_cutoff(0.99 * min_dist)
-
-    # Auto-detect whether to run pre-training (mirrors mlip-3's `inited` flag).
-    if pre_train is None:
-        pre_train = not numpy.any(pot.get_radial_basis_coeffs())
-
-    lf_kwargs = dict(weight_energy=energy_weight, weight_forces=force_weight, weight_stress=stress_weight, weight_scaling=weight_scaling)
-
-    nl_kwargs = dict(**lf_kwargs, backend=backend, optimizer=optimizer)
-
-    # --- Pre-training (fresh potential only) — mirrors mtpr_trainer.cpp:756-776 ---
-    if pre_train:
-        LinearFitter(pot, **lf_kwargs).fit(dataset, comm=comm)
-        rescale(pot, dataset, lf_kwargs)
-        NonlinearFitter(pot, maxiter=75, **nl_kwargs).fit(dataset, comm=comm)
-        rescale(pot, dataset, lf_kwargs)
-
-    # --- Main training ---
-    NonlinearFitter(pot, maxiter=iteration_limit, **nl_kwargs).fit(dataset, comm=comm)
-
-    # --- Post-training: final linear re-solve + Rescale ---
-    LinearFitter(pot, **lf_kwargs).fit(dataset, comm=comm)
-    rescale(pot, dataset, lf_kwargs)
-
-    write_mtp(pot, save_to)
-
-    # Rebuild the active set from the training data using the NEW coefficients.
-    # Resolve selection weights: explicit arg > selection_state > prior file > default.
-    if selection_weights is not None:
-        sel_weights = selection_weights
-    elif selection_state is not None:
-        sel_weights = selection_state.weights
-    elif potential_path is not None:
-        try:
-            sel_weights = read_mvs_header(potential_path)[0]
-        except RuntimeError:
-            sel_weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
-    else:
-        sel_weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
-    update_active_set(save_to, training_structs, weights=sel_weights)
+    update_active_set(save_to, training_structs, weights=weights)
 
 
 def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh") -> list:

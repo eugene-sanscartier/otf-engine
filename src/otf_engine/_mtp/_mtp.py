@@ -8,6 +8,8 @@ The three classes mirror the C++ hierarchy:
     PairMTP                 energy, forces, virial
     PairMTPExtrapolation    + information vectors and extrapolation grades
     MTPTraining             + derivatives w.r.t. the coefficients
+
+train_mtp fits an MTPTraining as mlip-3's `mlp train` does.
 """
 
 from importlib import import_module as _import_module
@@ -18,5 +20,6 @@ PairMTP = _ext.PairMTP
 PairMTPExtrapolation = _ext.PairMTPExtrapolation
 MTPTraining = _ext.MTPTraining
 NeighList = _ext.NeighList
+train_mtp = _ext.train_mtp
 
-__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "NeighList"]
+__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "NeighList", "train_mtp"]

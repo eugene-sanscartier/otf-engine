@@ -7,102 +7,85 @@
 
 #include "bindings_common.h"
 
-static py::tuple grad_block(MTPTraining& self, const PyNeighbors& nb, MTPTraining::Cols cols, bool compute_virial_grad) {
-    const int width = self.cols_width(cols);
-    const int n = nb.n_atoms();
-    const bool radial = (cols == MTPTraining::RADIAL);
-    // The radial energy gradient is summed over atoms; the others are per-atom.
-    auto eg = radial ? zeros({width}) : zeros({nb.inum(), width});
-    auto fg = zeros({n, 3, width});
+static py::object eval_grad(MTPTraining& self, const PyNeighbors& nb, bool forces, bool virial, bool radial) {
+    const int width = self.coeff_count();
+    auto eg = zeros({nb.inum(), width});
+    double* eg_ptr = eg.mutable_data();
+
+    if (!forces) {
+        if (virial)
+            throw std::runtime_error("eval_grad: the virial gradient comes with the force gradient");
+        {
+            py::gil_scoped_release unlocked;
+            if (radial)
+                self.PairMTPExtrapolation::eval_grad(nb.view(), eg_ptr);
+            else
+                self.eval_grad(nb.view(), eg_ptr, nullptr, nullptr, false);
+        }
+        return eg;
+    }
+
+    auto fg = zeros({nb.n_atoms(), 3, width});
     DoubleArray vg;
     double* vg_ptr = nullptr;
-    if (compute_virial_grad) {
+    if (virial) {
         vg = zeros({6, width});
         vg_ptr = vg.mutable_data();
     }
-
-    double* eg_ptr = eg.mutable_data();
     double* fg_ptr = fg.mutable_data();
 
     {
         py::gil_scoped_release unlocked;
-        if (radial) {
-            self.eval_grad_radial(nb.view(), eg_ptr, fg_ptr, vg_ptr);
-        } else if (cols == MTPTraining::LINEAR) {
-            self.eval_grad_linear(nb.view(), eg_ptr, fg_ptr, vg_ptr);
-        } else {
-            self.eval_grad_all(nb.view(), eg_ptr, fg_ptr, vg_ptr);
-        }
+        self.eval_grad(nb.view(), eg_ptr, fg_ptr, vg_ptr, radial);
     }
 
-    return py::make_tuple(eg, fg, compute_virial_grad ? py::object(vg) : py::none());
+    return py::make_tuple(eg, fg, virial ? py::object(vg) : py::none());
 }
 
-static py::tuple eval_grad_radial(MTPTraining& self, const PyNeighbors& nb, bool compute_virial_grad) {
-    return grad_block(self, nb, MTPTraining::RADIAL, compute_virial_grad);
-}
-
-static py::tuple eval_grad_linear(MTPTraining& self, const PyNeighbors& nb, bool compute_virial_grad) {
-    return grad_block(self, nb, MTPTraining::LINEAR, compute_virial_grad);
-}
-
-static py::tuple eval_grad_all(MTPTraining& self, const PyNeighbors& nb, bool compute_virial_grad) {
-    return grad_block(self, nb, MTPTraining::ALL, compute_virial_grad);
-}
-
-static py::tuple compute_with_radial_grad(MTPTraining& self, const PyNeighbors& nb, bool compute_virial_grad) {
-    const int n = nb.n_atoms();
-    const int n_radial = self.get_radial_coeff_count();
-    auto forces = zeros({n, 3});
-    auto virials = zeros({6});
-    auto eg = zeros({n_radial});
-    auto fg = zeros({n, 3, n_radial});
-    DoubleArray vg;
-    double* vg_ptr = nullptr;
-    if (compute_virial_grad) {
-        vg = zeros({6, n_radial});
-        vg_ptr = vg.mutable_data();
+static DoubleArray eval_loss_grad(MTPTraining& self, const PyNeighbors& nb, double dloss_denergy, py::object dloss_dforces, py::object dloss_dvirial) {
+    DoubleArray dF, dW;
+    const double* dF_ptr = nullptr;
+    const double* dW_ptr = nullptr;
+    if (!dloss_dforces.is_none()) {
+        dF = dloss_dforces.cast<DoubleArray>();
+        if (dF.size() != (py::ssize_t) nb.n_atoms() * 3)
+            throw std::runtime_error("eval_loss_grad: dloss_dforces must have shape (n_atoms, 3)");
+        dF_ptr = dF.data();
+    }
+    if (!dloss_dvirial.is_none()) {
+        dW = dloss_dvirial.cast<DoubleArray>();
+        if (dW.size() != 6)
+            throw std::runtime_error("eval_loss_grad: dloss_dvirial must have 6 components");
+        dW_ptr = dW.data();
     }
 
-    double* forces_ptr = forces.mutable_data();
-    double* virials_ptr = virials.mutable_data();
-    double* eg_ptr = eg.mutable_data();
-    double* fg_ptr = fg.mutable_data();
-
-    double energy;
+    auto grad = zeros({self.coeff_count()});
+    double* grad_ptr = grad.mutable_data();
     {
         py::gil_scoped_release unlocked;
-        energy = self.compute_with_radial_grad(nb.view(), forces_ptr, virials_ptr, eg_ptr, fg_ptr, vg_ptr);
+        self.eval_loss_grad(nb.view(), dloss_denergy, dF_ptr, dW_ptr, grad_ptr);
     }
-
-    return py::make_tuple(energy, forces, virials, eg, fg, compute_virial_grad ? py::object(vg) : py::none());
+    return grad;
 }
 
 void bind_training(py::module_& m) {
-    auto cls = py::class_<MTPTraining, PairMTPExtrapolation>(m, "MTPTraining", "An MTP potential that also differentiates energy, forces and virial w.r.t. its coefficients.")
+    auto cls = py::class_<MTPTraining, PairMTPExtrapolation>(m, "MTPTraining", "An MTP potential that also differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
                    .def(py::init<const std::string&>(), py::arg("filename"));
 
-    def_neighbors(cls, "eval_grad_radial", &eval_grad_radial,
-                  "Returns (energy_grad(n_radial), force_grad(n,3,n_radial), virial_grad(6,n_radial)|None)",
-                  py::arg("compute_virial_grad") = false);
-
-    def_neighbors(cls, "eval_grad_linear", &eval_grad_linear,
-                  "Returns (site_energy_grad(inum,n_lin), force_grad(n,3,n_lin), virial_grad(6,n_lin)|None)",
-                  py::arg("compute_virial_grad") = false);
-
-    def_neighbors(cls, "eval_grad_all", &eval_grad_all,
+    def_neighbors(cls, "eval_grad", &eval_grad,
                   R"doc(
 d(E_i, F, virial)/dc where c = [c_radial | c_species | beta_linear].
 
-Returns (site_energy_grad(inum, cc), force_grad(n_atoms,3,cc), virial_grad(6,cc)|None)
+Without forces, returns site_energy_grad (inum, cc), as PairMTPExtrapolation.eval_grad.
+With forces, returns (site_energy_grad (inum, cc), force_grad (n_atoms, 3, cc), virial_grad (6, cc)|None).
+With radial False, the radial columns are zero.
 )doc",
-                  py::arg("compute_virial_grad") = false);
+                  py::arg("forces") = false, py::arg("virial") = false, py::arg("radial") = true);
 
-    def_neighbors(cls, "compute_with_radial_grad", &compute_with_radial_grad,
+    def_neighbors(cls, "eval_loss_grad", &eval_loss_grad,
                   R"doc(
-Fused compute plus energy/force/virial radial gradients in one pass.
-
-Returns (energy, forces, virials, energy_grad, force_grad, virial_grad|None).
+dL/dc (cc,) for a loss L with the given derivatives w.r.t. the energy,
+the forces (n_atoms, 3) and the virial (6, xx,yy,zz,xy,xz,yz); None is zero.
 )doc",
-                  py::arg("compute_virial_grad") = false);
+                  py::arg("dloss_denergy"), py::arg("dloss_dforces") = py::none(), py::arg("dloss_dvirial") = py::none());
 }

@@ -2,7 +2,7 @@
 
 Every entry point of `PairMTP`, `PairMTPExtrapolation` and `MTPTraining` is run
 against golden values in `kernel_reference/`, on a level-16 3-species potential.
-The forward pass exists in four hand-written copies, one per `compute`-shaped
+The forward pass exists in five hand-written copies, one per `compute`-shaped
 method; this is what catches a transcription slip between them.
 
     python tests/check_kernels.py             check against the golden values
@@ -96,11 +96,16 @@ def outputs(pot, cutoff):
         out[f"{i}/basis"] = numpy.asarray(pot.eval_basis(nl), dtype=float64)
         out[f"{i}/grad"] = numpy.asarray(pot.eval_grad(nl), dtype=float64)
 
-        for name, kernel in (("all", pot.eval_grad_all), ("rad", pot.eval_grad_radial), ("lin", pot.eval_grad_linear)):
-            eg, fg, vg = kernel(nl, True)
-            out[f"{i}/{name}_eg"] = numpy.asarray(eg, dtype=float64)
-            out[f"{i}/{name}_fg"] = numpy.asarray(fg, dtype=float64)
-            out[f"{i}/{name}_vg"] = numpy.asarray(vg, dtype=float64)
+        for radial, label in ((True, "grad"), (False, "grad_linear")):
+            eg, fg, vg = pot.eval_grad(nl, forces=True, virial=True, radial=radial)
+            out[f"{i}/{label}_site"] = numpy.asarray(eg, dtype=float64)
+            out[f"{i}/{label}_forces"] = numpy.asarray(fg, dtype=float64)
+            out[f"{i}/{label}_virial"] = numpy.asarray(vg, dtype=float64)
+
+        # Seeded loss derivatives; the gate checks the kernel, not the loss.
+        weights = numpy.random.default_rng(2)
+        dloss_denergy, dloss_dforces, dloss_dvirial = float(weights.standard_normal()), weights.standard_normal((len(atoms), 3)), weights.standard_normal(6)
+        out[f"{i}/loss_grad"] = numpy.asarray(pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial), dtype=float64)
 
         # grade() reaches the grading branch of PairMTPExtrapolation::compute, which
         # eval_grad leaves unrun. The active set is synthetic and seeded — the gate
@@ -112,14 +117,6 @@ def outputs(pot, cutoff):
             grades, cfg_grade = pot.grade(nl)
             out[f"{i}/grade_{label}"] = numpy.asarray(grades, dtype=float64)
             out[f"{i}/grade_{label}_cfg"] = numpy.asarray(cfg_grade, dtype=float64)
-
-        energy, forces, virials, eg, fg, vg = pot.compute_with_radial_grad(nl, True)
-        out[f"{i}/cwrg_energy"] = numpy.asarray(energy, dtype=float64)
-        out[f"{i}/cwrg_forces"] = numpy.asarray(forces, dtype=float64)
-        out[f"{i}/cwrg_virials"] = numpy.asarray(virials, dtype=float64)
-        out[f"{i}/cwrg_eg"] = numpy.asarray(eg, dtype=float64)
-        out[f"{i}/cwrg_fg"] = numpy.asarray(fg, dtype=float64)
-        out[f"{i}/cwrg_vg"] = numpy.asarray(vg, dtype=float64)
 
     return out
 

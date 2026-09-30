@@ -1,17 +1,11 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Derivatives of energy, forces and virial with respect to the MTP
+   Derivatives of site energies, forces and virial with respect to the MTP
    coefficients.
 ------------------------------------------------------------------------- */
 
 #include "mtp_training.h"
 
 #include <cmath>
-
-int MTPTraining::cols_width(Cols cols) const {
-    if (cols == RADIAL) return radial_coeff_count;
-    if (cols == LINEAR) return alpha_scalar_count;
-    return coeff_count();
-}
 
 // Accumulate the six virial components for one Cartesian direction.
 static inline void accumulate_virial_grad(double* virial_grad, int width, int d, int col, double contrib, const std::array<double, 3>& r) {
@@ -80,37 +74,44 @@ void MTPTraining::propagate_radial_moment_ders() {
 }
 
 /* ---------------------------------------------------------------------- */
-double MTPTraining::compute_efs_grad(const NeighList& list, Cols cols, double* forces, double* virial, double* site_e_grad, double* force_grad, double* virial_grad) {
-    const int width = cols_width(cols);
+void MTPTraining::get_coeffs(double* c) const {
+    std::copy(radial_basis_coeffs.begin(), radial_basis_coeffs.end(), c);
+    std::copy(species_coeffs.begin(), species_coeffs.end(), c + radial_coeff_count);
+    std::copy(linear_coeffs.begin(), linear_coeffs.end(), c + radial_coeff_count + species_count);
+}
+
+void MTPTraining::set_coeffs(const double* c) {
+    set_radial_basis_coeffs(c);
+    set_species_coeffs(c + radial_coeff_count);
+    set_linear_coeffs(c + radial_coeff_count + species_count);
+}
+
+/* ---------------------------------------------------------------------- */
+void MTPTraining::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool radial) {
+    const int width = coeff_count();
     const int n_radial = radial_coeff_count;
     const int n_linear = alpha_scalar_count;
 
     // Column offsets of each coefficient block within a row of width `width`.
-    const int rad_off = (cols == LINEAR) ? -1 : 0;
-    const int sp_off = (cols == ALL) ? n_radial : -1;
-    const int lin_off = (cols == RADIAL) ? -1 : ((cols == ALL) ? n_radial + species_count : 0);
-
-    const bool want_radial = (rad_off >= 0);
-    const bool want_linear = (lin_off >= 0);
+    const int rad_off = 0;
+    const int sp_off = n_radial;
+    const int lin_off = n_radial + species_count;
 
     if (site_e_grad) std::fill(site_e_grad, site_e_grad + (size_t) list.inum * width, 0.0);
     if (force_grad) std::fill(force_grad, force_grad + (size_t) list.n_atoms * 3 * width, 0.0);
     if (virial_grad) std::fill(virial_grad, virial_grad + 6 * width, 0.0);
 
-    // The forward pass fills radial_jacobian only when a radial block is wanted,
+    // The forward pass fills radial_jacobian only when a gradient is wanted,
     // and angular factors only when a force gradient is.
-    const bool need_radial_jacobian = want_radial && (site_e_grad || force_grad);
-    const bool need_angular = want_radial && force_grad;
+    const bool need_radial_jacobian = radial && (site_e_grad || force_grad);
+    const bool need_angular = radial && force_grad;
 
     if (need_radial_jacobian) {
         radial_jacobian.resize((size_t) alpha_index_basic_count * species_count * radial_coeff_count_per_pair);
         dM_dc.resize((size_t) alpha_moment_count * n_radial);
         dG.resize((size_t) alpha_moment_count * n_radial);
     }
-    if (want_linear && force_grad)
-        dG_lin.resize((size_t) alpha_moment_count * n_linear);
 
-    double total_energy = 0.0;
     int nbr_offset = 0;
 
     for (int ii = 0; ii < list.inum; ii++) {
@@ -235,11 +236,6 @@ double MTPTraining::compute_efs_grad(const NeighList& list, Cols cols, double* f
             moment_tensor_vals[alpha_index_times[k][3]] += val2 * val0 * val1;
         }
 
-        double nbh_energy = species_coeffs[itype];
-        for (int k = 0; k < alpha_scalar_count; k++)
-            nbh_energy += linear_coeffs[k] * moment_tensor_vals[alpha_moment_mapping[k]];
-        total_energy += nbh_energy;
-
         // =========== Begin Backpropogation ===========
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
@@ -258,52 +254,20 @@ double MTPTraining::compute_efs_grad(const NeighList& list, Cols cols, double* f
             nbh_energy_ders_wrt_moments[a0] += val3 * multipiler * val1;
         }
 
-        // ---- Energy, forces and virial ----
-        if (forces) {
-            for (int jj = 0; jj < valid_count; jj++) {
-                const int j = valid_j[jj];
-                double tf[3] = {0, 0, 0};
-                for (int k = 0; k < alpha_index_basic_count; k++)
-                    for (int a = 0; a < 3; a++)
-                        tf[a] += nbh_energy_ders_wrt_moments[k] * moment_jacobian[(size_t) jj * alpha_index_basic_count + k][a];
-
-                forces[i * 3 + 0] += tf[0];
-                forces[i * 3 + 1] += tf[1];
-                forces[i * 3 + 2] += tf[2];
-                forces[j * 3 + 0] -= tf[0];
-                forces[j * 3 + 1] -= tf[1];
-                forces[j * 3 + 2] -= tf[2];
-
-                if (virial) {
-                    const auto& r = valid_dr[jj];
-                    virial[0] -= tf[0] * r[0];
-                    virial[1] -= tf[1] * r[1];
-                    virial[2] -= tf[2] * r[2];
-                    virial[3] -= (tf[0] * r[1] + tf[1] * r[0]) / 2;
-                    virial[4] -= (tf[0] * r[2] + tf[2] * r[0]) / 2;
-                    virial[5] -= (tf[1] * r[2] + tf[2] * r[1]) / 2;
-                }
-            }
-        }
-
         // ---- Per-atom site energy gradient ----
         if (site_e_grad) {
             double* row = site_e_grad + (size_t) ii * width;
-            if (want_linear)
-                for (int s = 0; s < n_linear; s++)
-                    row[lin_off + s] = moment_tensor_vals[alpha_moment_mapping[s]];
-            if (sp_off >= 0)
-                row[sp_off + itype] = 1.0;
-            if (want_radial) {
-                for (int k = 0; k < alpha_index_basic_count; k++) {
-                    const double der = nbh_energy_ders_wrt_moments[k];
-                    if (der == 0.0) continue;
-                    for (int jtype = 0; jtype < species_count; jtype++) {
-                        const int offset = rad_off + (itype * species_count + jtype) * radial_coeff_count_per_pair;
-                        const double* jac = radial_jacobian.data() + ((size_t) k * species_count + jtype) * radial_coeff_count_per_pair;
-                        for (int ri = 0; ri < radial_coeff_count_per_pair; ri++)
-                            row[offset + ri] += der * jac[ri];
-                    }
+            for (int s = 0; s < n_linear; s++)
+                row[lin_off + s] = moment_tensor_vals[alpha_moment_mapping[s]];
+            row[sp_off + itype] = 1.0;
+            for (int k = 0; radial && k < alpha_index_basic_count; k++) {
+                const double der = nbh_energy_ders_wrt_moments[k];
+                if (der == 0.0) continue;
+                for (int jtype = 0; jtype < species_count; jtype++) {
+                    const int offset = rad_off + (itype * species_count + jtype) * radial_coeff_count_per_pair;
+                    const double* jac = radial_jacobian.data() + ((size_t) k * species_count + jtype) * radial_coeff_count_per_pair;
+                    for (int ri = 0; ri < radial_coeff_count_per_pair; ri++)
+                        row[offset + ri] += der * jac[ri];
                 }
             }
         }
@@ -311,143 +275,305 @@ double MTPTraining::compute_efs_grad(const NeighList& list, Cols cols, double* f
         if (!force_grad)
             continue;
 
-        // ---- Radial force / virial gradient ----
-        if (want_radial) {
-            scatter_radial_jacobian(itype);
-            propagate_radial_moment_ders();
+        // ---- Linear force / virial gradient ----
+        // dF/dbeta_s is the derivative of basis value s w.r.t. the displacements,
+        // carried forward from the basic moments' Jacobian through the products.
+        const int n_ders = valid_count * 3;
+        if (moment_ders.size() < (size_t) alpha_moment_count * n_ders)
+            moment_ders.resize((size_t) alpha_moment_count * n_ders);
+        std::fill(moment_ders.begin(), moment_ders.begin() + (size_t) alpha_moment_count * n_ders, 0.0);
+        for (int k = 0; k < alpha_index_basic_count; k++)
+            for (int jj = 0; jj < valid_count; jj++)
+                for (int d = 0; d < 3; d++)
+                    moment_ders[(size_t) k * n_ders + jj * 3 + d] = moment_jacobian[(size_t) jj * alpha_index_basic_count + k][d];
 
-            // Term 2: the radial basis itself depends on the coefficients.
-            for (int jj = 0; jj < valid_count; jj++) {
-                const int j = valid_j[jj];
-                const int jtype = list.types[j];
-                const auto& r = valid_dr[jj];
-                const double dist = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
-                radial_basis->calc_radial_basis_ders(dist);
-                const double unit_r[3] = {r[0] / dist, r[1] / dist, r[2] / dist};
-                const int pair_off = itype * species_count + jtype;
+        for (int k = 0; k < alpha_index_times_count; k++) {
+            const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
+            const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
+            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            const double* D_a0 = moment_ders.data() + (size_t) a0 * n_ders;
+            const double* D_a1 = moment_ders.data() + (size_t) a1 * n_ders;
+            double* D_a3 = moment_ders.data() + (size_t) a3 * n_ders;
+            for (int q = 0; q < n_ders; q++)
+                D_a3[q] += mul * (D_a0[q] * M_a1 + M_a0 * D_a1[q]);
+        }
 
-                for (int k = 0; k < alpha_index_basic_count; k++) {
-                    const double G_k = nbh_energy_ders_wrt_moments[k];
-                    if (G_k == 0.0) continue;
-                    const int mu = alpha_index_basic[k][0];
-                    const size_t slot = (size_t) jj * alpha_index_basic_count + k;
-                    const double angular_factor = angular_values[slot];
-                    const double* angular_jacobian = angular_jacobians.data() + slot * 3;
-                    const int coeff_offset = rad_off + (pair_off * radial_func_count + mu) * radial_basis_size;
-
-                    for (int d = 0; d < 3; d++) {
-                        for (int ri = 0; ri < radial_basis_size; ri++) {
-                            const double contrib = G_k * (radial_basis->radial_basis_ders[ri] * unit_r[d] * angular_factor + radial_basis->radial_basis_vals[ri] * angular_jacobian[d]);
-                            const int col = coeff_offset + ri;
-                            force_grad[((size_t) i * 3 + d) * width + col] += contrib;
-                            force_grad[((size_t) j * 3 + d) * width + col] -= contrib;
-                            if (virial_grad) accumulate_virial_grad(virial_grad, width, d, col, contrib, r);
-                        }
-                    }
+        for (int jj = 0; jj < valid_count; jj++) {
+            const int j = valid_j[jj];
+            const auto& r = valid_dr[jj];
+            for (int s = 0; s < n_linear; s++) {
+                const double* D = moment_ders.data() + (size_t) alpha_moment_mapping[s] * n_ders + jj * 3;
+                const int col = lin_off + s;
+                for (int d = 0; d < 3; d++) {
+                    force_grad[((size_t) i * 3 + d) * width + col] += D[d];
+                    force_grad[((size_t) j * 3 + d) * width + col] -= D[d];
+                }
+                if (virial_grad) {
+                    virial_grad[0 * width + col] -= D[0] * r[0];
+                    virial_grad[1 * width + col] -= D[1] * r[1];
+                    virial_grad[2 * width + col] -= D[2] * r[2];
+                    virial_grad[3 * width + col] -= (D[0] * r[1] + D[1] * r[0]) / 2;
+                    virial_grad[4 * width + col] -= (D[0] * r[2] + D[2] * r[0]) / 2;
+                    virial_grad[5 * width + col] -= (D[1] * r[2] + D[2] * r[1]) / 2;
                 }
             }
+        }
 
-            // Term 1: the moment Jacobian is weighted by coefficient-dependent dG.
-            for (int jj = 0; jj < valid_count; jj++) {
-                const int j = valid_j[jj];
-                const auto& r = valid_dr[jj];
-                for (int k = 0; k < alpha_index_basic_count; k++) {
-                    const double* dG_k = dG.data() + (size_t) k * n_radial;
-                    const auto& jac_k = moment_jacobian[(size_t) jj * alpha_index_basic_count + k];
-                    for (int d = 0; d < 3; d++) {
-                        const double jkd = jac_k[d];
-                        if (jkd == 0.0) continue;
-                        const size_t i_base = ((size_t) i * 3 + d) * width + rad_off;
-                        const size_t j_base = ((size_t) j * 3 + d) * width + rad_off;
-                        for (int ri = 0; ri < n_radial; ri++) {
-                            const double contrib = dG_k[ri] * jkd;
-                            force_grad[i_base + ri] += contrib;
-                            force_grad[j_base + ri] -= contrib;
-                            if (virial_grad) accumulate_virial_grad(virial_grad, width, d, rad_off + ri, contrib, r);
-                        }
+        if (!radial)
+            continue;
+
+        // ---- Radial force / virial gradient ----
+        scatter_radial_jacobian(itype);
+        propagate_radial_moment_ders();
+
+        // Term 2: the radial basis itself depends on the coefficients.
+        for (int jj = 0; jj < valid_count; jj++) {
+            const int j = valid_j[jj];
+            const int jtype = list.types[j];
+            const auto& r = valid_dr[jj];
+            const double dist = std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]);
+            radial_basis->calc_radial_basis_ders(dist);
+            const double unit_r[3] = {r[0] / dist, r[1] / dist, r[2] / dist};
+            const int pair_off = itype * species_count + jtype;
+
+            for (int k = 0; k < alpha_index_basic_count; k++) {
+                const double G_k = nbh_energy_ders_wrt_moments[k];
+                if (G_k == 0.0) continue;
+                const int mu = alpha_index_basic[k][0];
+                const size_t slot = (size_t) jj * alpha_index_basic_count + k;
+                const double angular_factor = angular_values[slot];
+                const double* angular_jacobian = angular_jacobians.data() + slot * 3;
+                const int coeff_offset = rad_off + (pair_off * radial_func_count + mu) * radial_basis_size;
+
+                for (int d = 0; d < 3; d++) {
+                    for (int ri = 0; ri < radial_basis_size; ri++) {
+                        const double contrib = G_k * (radial_basis->radial_basis_ders[ri] * unit_r[d] * angular_factor + radial_basis->radial_basis_vals[ri] * angular_jacobian[d]);
+                        const int col = coeff_offset + ri;
+                        force_grad[((size_t) i * 3 + d) * width + col] += contrib;
+                        force_grad[((size_t) j * 3 + d) * width + col] -= contrib;
+                        if (virial_grad) accumulate_virial_grad(virial_grad, width, d, col, contrib, r);
                     }
                 }
             }
         }
 
-        // ---- Linear force / virial gradient ----
-        // The moments do not depend on beta, so only the backward seed does.
-        if (want_linear) {
-            std::fill(dG_lin.begin(), dG_lin.begin() + (size_t) alpha_moment_count * n_linear, 0.0);
-            for (int s = 0; s < n_linear; s++)
-                dG_lin[(size_t) alpha_moment_mapping[s] * n_linear + s] = 1.0;
-
-            for (int k = alpha_index_times_count - 1; k >= 0; k--) {
-                const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
-                const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-                const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
-                const double* dGl_a3 = dG_lin.data() + (size_t) a3 * n_linear;
-                double* dGl_a0 = dG_lin.data() + (size_t) a0 * n_linear;
-                double* dGl_a1 = dG_lin.data() + (size_t) a1 * n_linear;
-                for (int s = 0; s < n_linear; s++) {
-                    dGl_a0[s] += dGl_a3[s] * mul * M_a1;
-                    dGl_a1[s] += dGl_a3[s] * mul * M_a0;
-                }
-            }
-
-            for (int jj = 0; jj < valid_count; jj++) {
-                const int j = valid_j[jj];
-                const auto& r = valid_dr[jj];
-                for (int k = 0; k < alpha_index_basic_count; k++) {
-                    const double* dGl_k = dG_lin.data() + (size_t) k * n_linear;
-                    const auto& jac_k = moment_jacobian[(size_t) jj * alpha_index_basic_count + k];
-                    for (int d = 0; d < 3; d++) {
-                        const double jkd = jac_k[d];
-                        if (jkd == 0.0) continue;
-                        const size_t i_base = ((size_t) i * 3 + d) * width + lin_off;
-                        const size_t j_base = ((size_t) j * 3 + d) * width + lin_off;
-                        for (int s = 0; s < n_linear; s++) {
-                            const double contrib = dGl_k[s] * jkd;
-                            force_grad[i_base + s] += contrib;
-                            force_grad[j_base + s] -= contrib;
-                            if (virial_grad) accumulate_virial_grad(virial_grad, width, d, lin_off + s, contrib, r);
-                        }
+        // Term 1: the moment Jacobian is weighted by coefficient-dependent dG.
+        for (int jj = 0; jj < valid_count; jj++) {
+            const int j = valid_j[jj];
+            const auto& r = valid_dr[jj];
+            for (int k = 0; k < alpha_index_basic_count; k++) {
+                const double* dG_k = dG.data() + (size_t) k * n_radial;
+                const auto& jac_k = moment_jacobian[(size_t) jj * alpha_index_basic_count + k];
+                for (int d = 0; d < 3; d++) {
+                    const double jkd = jac_k[d];
+                    if (jkd == 0.0) continue;
+                    const size_t i_base = ((size_t) i * 3 + d) * width + rad_off;
+                    const size_t j_base = ((size_t) j * 3 + d) * width + rad_off;
+                    for (int ri = 0; ri < n_radial; ri++) {
+                        const double contrib = dG_k[ri] * jkd;
+                        force_grad[i_base + ri] += contrib;
+                        force_grad[j_base + ri] -= contrib;
+                        if (virial_grad) accumulate_virial_grad(virial_grad, width, d, rad_off + ri, contrib, r);
                     }
                 }
             }
         }
     }
-
-    return total_energy;
 }
 
 /* ----------------------------------------------------------------------
-   Named entry points
+   Per site, the loss is a E_i + sum_j w_j . dE_i/dr_ij with a = dL/dE and
+   w_j = dL/dF_i - dL/dF_j - S r_ij, S the symmetric dL/dvirial. The forward
+   pass carries each moment's derivative along w (its tangent) beside its
+   value. Backward, the tangents' adjoints are nbh_energy_ders_wrt_moments,
+   and the values' adjoints pick up the tangents through the products.
 ------------------------------------------------------------------------- */
-void MTPTraining::eval_grad_radial(const NeighList& list, double* energy_grad, double* force_grad, double* virial_grad) {
+void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
-    site_grads.assign((size_t) list.inum * n_radial, 0.0);
-    compute_efs_grad(list, RADIAL, nullptr, nullptr, site_grads.data(), force_grad, virial_grad);
+    const int sp_off = n_radial;
+    const int lin_off = n_radial + species_count;
+    const double a = dloss_denergy;
 
-    // energy_grad is the site-energy gradient summed over atoms
-    std::fill(energy_grad, energy_grad + n_radial, 0.0);
-    for (int ii = 0; ii < list.inum; ii++)
-        for (int r = 0; r < n_radial; r++)
-            energy_grad[r] += site_grads[(size_t) ii * n_radial + r];
-}
+    // dL/dvirial as a symmetric matrix; each off-diagonal component is shared by two entries.
+    double S[3][3] = {};
+    if (dloss_dvirial) {
+        S[0][0] = dloss_dvirial[0];
+        S[1][1] = dloss_dvirial[1];
+        S[2][2] = dloss_dvirial[2];
+        S[0][1] = S[1][0] = dloss_dvirial[3] / 2;
+        S[0][2] = S[2][0] = dloss_dvirial[4] / 2;
+        S[1][2] = S[2][1] = dloss_dvirial[5] / 2;
+    }
 
-void MTPTraining::eval_grad_linear(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad) {
-    compute_efs_grad(list, LINEAR, nullptr, nullptr, site_e_grad, force_grad, virial_grad);
-}
+    moment_tangents.resize(alpha_moment_count);
+    moment_adjoints.resize(alpha_moment_count);
+    radial_adjoints.resize(2 * radial_func_count);
+    double* value_adjoints = radial_adjoints.data();                  // per radial function, of its value
+    double* der_adjoints = radial_adjoints.data() + radial_func_count;    // and of its derivative
 
-void MTPTraining::eval_grad_all(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad) {
-    compute_efs_grad(list, ALL, nullptr, nullptr, site_e_grad, force_grad, virial_grad);
-}
+    int nbr_offset = 0;
 
-double MTPTraining::compute_with_radial_grad(const NeighList& list, double* forces, double* virial, double* energy_grad, double* force_grad, double* virial_grad) {
-    const int n_radial = radial_coeff_count;
-    site_grads.assign((size_t) list.inum * n_radial, 0.0);
-    double energy = compute_efs_grad(list, RADIAL, forces, virial, site_grads.data(), force_grad, virial_grad);
+    for (int ii = 0; ii < list.inum; ii++) {
+        const int i = list.ilist[ii];
+        const int itype = list.types[i];
+        const int jnum = list.numneigh[ii];
+        const int* nbrs = list.firstneigh + nbr_offset;
+        const double* dr = list.displacements + nbr_offset * 3;
+        nbr_offset += jnum;
 
-    std::fill(energy_grad, energy_grad + n_radial, 0.0);
-    for (int ii = 0; ii < list.inum; ii++)
-        for (int r = 0; r < n_radial; r++)
-            energy_grad[r] += site_grads[(size_t) ii * n_radial + r];
+        int valid_count = 0;
 
-    return energy;
+        if (jac_size < jnum) {
+            jac_size = jnum;
+            moment_jacobian.resize((size_t) jac_size * alpha_index_basic_count);
+            valid_j.resize(jac_size);
+            valid_dr.resize(jac_size);
+        }
+        if (w_dot_unit_r.size() < (size_t) jnum) {
+            neighbor_radial_vals.resize((size_t) jnum * radial_basis_size);
+            neighbor_radial_ders.resize((size_t) jnum * radial_basis_size);
+            angular_ders_along_w.resize((size_t) jnum * alpha_index_basic_count);
+            w_dot_unit_r.resize(jnum);
+        }
+        if (angular_values.size() < (size_t) jnum * alpha_index_basic_count)
+            angular_values.resize((size_t) jnum * alpha_index_basic_count);
+
+        std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
+        std::fill(moment_tangents.begin(), moment_tangents.end(), 0.0);
+        std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
+        std::fill(moment_adjoints.begin(), moment_adjoints.end(), 0.0);
+
+        // ------------ Basic moments and their tangents ------------
+        for (int jj = 0; jj < jnum; jj++) {
+            const int j = nbrs[jj];
+            const int jtype = list.types[j];
+            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
+            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+
+            if (rsq > max_cutoff_sq) continue;
+            valid_j[valid_count] = j;
+            valid_dr[valid_count] = {r[0], r[1], r[2]};
+
+            const double dist = std::sqrt(rsq);
+            radial_basis->calc_radial_basis_ders(dist);
+            double* basis_vals = neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size;
+            double* basis_ders = neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size;
+            std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), basis_vals);
+            std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), basis_ders);
+
+            // The loss weight of this displacement
+            double w[3] = {0.0, 0.0, 0.0};
+            if (dloss_dforces)
+                for (int d = 0; d < 3; d++) w[d] = dloss_dforces[i * 3 + d] - dloss_dforces[j * 3 + d];
+            for (int d = 0; d < 3; d++) w[d] -= S[d][0] * r[0] + S[d][1] * r[1] + S[d][2] * r[2];
+            const double w_dot_r = w[0] * r[0] + w[1] * r[1] + w[2] * r[2];
+            const double w_r = w_dot_r / dist;
+            w_dot_unit_r[valid_count] = w_r;
+
+            for (int k = 1; k < max_alpha_index_basic; k++) {
+                dist_powers[k] = dist_powers[k - 1] * dist;
+                for (int d = 0; d < 3; d++) coord_powers[k][d] = coord_powers[k - 1][d] * r[d];
+            }
+
+            const int pair_offset = itype * species_count + jtype;
+            for (int mu = 0; mu < radial_func_count; mu++) {
+                double val = 0;
+                double der = 0;
+                const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
+
+                for (int ri = 0; ri < radial_basis_size; ri++) {
+                    val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
+                    der += radial_basis_coeffs[offset + ri] * basis_ders[ri];
+                }
+                radial_vals[mu] = val;
+                radial_ders[mu] = der;
+            }
+
+            for (int k = 0; k < alpha_index_basic_count; k++) {
+                const int mu = alpha_index_basic[k][0];
+                const int px = alpha_index_basic[k][1];
+                const int py = alpha_index_basic[k][2];
+                const int pz = alpha_index_basic[k][3];
+
+                const int norm_rank = px + py + pz;
+                const double norm_fac = 1.0 / dist_powers[norm_rank];
+                const double pow0 = coord_powers[px][0];
+                const double pow1 = coord_powers[py][1];
+                const double pow2 = coord_powers[pz][2];
+                const double angfac = pow0 * pow1 * pow2 * norm_fac;
+
+                // w . d(angfac)/dr
+                double ang_der = 0.0;
+                if (px != 0) ang_der += w[0] * px * coord_powers[px - 1][0] * pow1 * pow2;
+                if (py != 0) ang_der += w[1] * py * pow0 * coord_powers[py - 1][1] * pow2;
+                if (pz != 0) ang_der += w[2] * pz * pow0 * pow1 * coord_powers[pz - 1][2];
+                ang_der = ang_der * norm_fac - norm_rank * angfac * w_dot_r / rsq;
+
+                const size_t slot = (size_t) valid_count * alpha_index_basic_count + k;
+                angular_values[slot] = angfac;
+                angular_ders_along_w[slot] = ang_der;
+
+                moment_tensor_vals[k] += radial_vals[mu] * angfac;
+                moment_tangents[k] += radial_ders[mu] * w_r * angfac + radial_vals[mu] * ang_der;
+            }
+            valid_count++;
+        }
+
+        // ------------ Composite moments and their tangents ------------
+        for (int k = 0; k < alpha_index_times_count; k++) {
+            const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
+            const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
+            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            moment_tangents[a3] += mul * (moment_tangents[a0] * M_a1 + M_a0 * moment_tangents[a1]);
+            moment_tensor_vals[a3] += mul * M_a0 * M_a1;
+        }
+
+        // =========== Backpropagation of values and tangents ===========
+        for (int s = 0; s < alpha_scalar_count; s++) {
+            nbh_energy_ders_wrt_moments[alpha_moment_mapping[s]] = linear_coeffs[s];
+            moment_adjoints[alpha_moment_mapping[s]] = a * linear_coeffs[s];
+        }
+
+        for (int k = alpha_index_times_count - 1; k >= 0; k--) {
+            const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
+            const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
+            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            const double G_a3 = nbh_energy_ders_wrt_moments[a3];
+            const double A_a3 = moment_adjoints[a3];
+            moment_adjoints[a0] += mul * (A_a3 * M_a1 + G_a3 * moment_tangents[a1]);
+            moment_adjoints[a1] += mul * (A_a3 * M_a0 + G_a3 * moment_tangents[a0]);
+            nbh_energy_ders_wrt_moments[a1] += G_a3 * mul * M_a0;
+            nbh_energy_ders_wrt_moments[a0] += G_a3 * mul * M_a1;
+        }
+
+        // ---- Species and linear coefficients ----
+        loss_grad[sp_off + itype] += a;
+        for (int s = 0; s < alpha_scalar_count; s++)
+            loss_grad[lin_off + s] += a * moment_tensor_vals[alpha_moment_mapping[s]] + moment_tangents[alpha_moment_mapping[s]];
+
+        // ---- Radial coefficients ----
+        for (int jj = 0; jj < valid_count; jj++) {
+            const int jtype = list.types[valid_j[jj]];
+            std::fill(radial_adjoints.begin(), radial_adjoints.end(), 0.0);
+
+            for (int k = 0; k < alpha_index_basic_count; k++) {
+                const int mu = alpha_index_basic[k][0];
+                const size_t slot = (size_t) jj * alpha_index_basic_count + k;
+                const double G_k = nbh_energy_ders_wrt_moments[k];
+                value_adjoints[mu] += moment_adjoints[k] * angular_values[slot] + G_k * angular_ders_along_w[slot];
+                der_adjoints[mu] += G_k * angular_values[slot];
+            }
+
+            const double w_r = w_dot_unit_r[jj];
+            const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
+            const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
+            double* row = loss_grad + (size_t) (itype * species_count + jtype) * radial_coeff_count_per_pair;
+            for (int mu = 0; mu < radial_func_count; mu++) {
+                const double u = value_adjoints[mu];
+                const double v = der_adjoints[mu] * w_r;
+                for (int ri = 0; ri < radial_basis_size; ri++)
+                    row[mu * radial_basis_size + ri] += u * basis_vals[ri] + v * basis_ders[ri];
+            }
+        }
+    }
 }

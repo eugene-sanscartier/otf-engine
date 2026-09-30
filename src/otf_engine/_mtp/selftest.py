@@ -49,10 +49,13 @@ def check_forces(pot, atoms, step=1e-5, n_atoms=4):
 
 
 def _coeff_block(pot, block):
+    """The block's coefficients, their setter, and the block's first column in c = [c_radial | c_species | beta_linear]."""
     if block == "radial":
-        return numpy.asarray(pot.get_radial_basis_coeffs(), dtype=float64).ravel(), pot.set_radial_basis_coeffs
+        return numpy.asarray(pot.get_radial_basis_coeffs(), dtype=float64).ravel(), pot.set_radial_basis_coeffs, 0
+    if block == "species":
+        return numpy.asarray(pot.get_species_coeffs(), dtype=float64).copy(), pot.set_species_coeffs, pot.get_radial_coeff_count()
     if block == "linear":
-        return numpy.asarray(pot.get_linear_coeffs(), dtype=float64).copy(), pot.set_linear_coeffs
+        return numpy.asarray(pot.get_linear_coeffs(), dtype=float64).copy(), pot.set_linear_coeffs, pot.get_radial_coeff_count() + pot.get_species_count()
     raise ValueError(f"unknown coefficient block '{block}'")
 
 
@@ -65,14 +68,10 @@ def check_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
     cutoff = pot.get_max_cutoff()
     nl = neighbors(atoms, cutoff)
 
-    if block == "radial":
-        analytic_grad, _, _ = pot.eval_grad_radial(nl, False)
-        analytic_grad = numpy.asarray(analytic_grad, dtype=float64)
-    else:
-        site_grad, _, _ = pot.eval_grad_linear(nl, False)
-        analytic_grad = numpy.asarray(site_grad, dtype=float64).sum(axis=0)
+    coeffs, setter, offset = _coeff_block(pot, block)
+    site_grad, _, _ = pot.eval_grad(nl, forces=True)
+    analytic_grad = numpy.asarray(site_grad, dtype=float64).sum(axis=0)[offset:offset + len(coeffs)]
 
-    coeffs, setter = _coeff_block(pot, block)
     rng = numpy.random.default_rng(seed)
     probe_indices = rng.choice(len(coeffs), size=min(n_coeffs, len(coeffs)), replace=False)
 
@@ -97,13 +96,10 @@ def check_force_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=4, se
     cutoff = pot.get_max_cutoff()
     nl = neighbors(atoms, cutoff)
 
-    if block == "radial":
-        _, force_grad, _ = pot.eval_grad_radial(nl, False)
-    else:
-        _, force_grad, _ = pot.eval_grad_linear(nl, False)
-    force_grad = numpy.asarray(force_grad, dtype=float64)
+    coeffs, setter, offset = _coeff_block(pot, block)
+    _, force_grad, _ = pot.eval_grad(nl, forces=True)
+    force_grad = numpy.asarray(force_grad, dtype=float64)[:, :, offset:offset + len(coeffs)]
 
-    coeffs, setter = _coeff_block(pot, block)
     rng = numpy.random.default_rng(seed)
     probe_indices = rng.choice(len(coeffs), size=min(n_coeffs, len(coeffs)), replace=False)
 
@@ -125,6 +121,44 @@ def check_force_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=4, se
     return _rel_error(numpy.concatenate(analytic_grad), numpy.concatenate(numeric_grad))
 
 
+def check_loss_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
+    """Compare eval_loss_grad against central differences of a loss linear in E, F and virial.
+
+    The loss weights are random and fixed, so its derivative in the
+    coefficients is the one eval_loss_grad takes them for.
+    """
+    cutoff = pot.get_max_cutoff()
+    nl = neighbors(atoms, cutoff)
+
+    rng = numpy.random.default_rng(seed)
+    dloss_denergy = float(rng.standard_normal())
+    dloss_dforces = rng.standard_normal((len(atoms), 3))
+    dloss_dvirial = rng.standard_normal(6)
+
+    def loss():
+        result = pot.compute(nl, compute_virials=True)
+        return dloss_denergy * float(result["energy"]) + float((dloss_dforces * numpy.asarray(result["forces"])).sum()) + float(dloss_dvirial @ numpy.asarray(result["virials"]))
+
+    coeffs, setter, offset = _coeff_block(pot, block)
+    analytic_grad = numpy.asarray(pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial), dtype=float64)[offset:offset + len(coeffs)]
+    probe_indices = rng.choice(len(coeffs), size=min(n_coeffs, len(coeffs)), replace=False)
+
+    numeric_grad = numpy.zeros(len(probe_indices))
+    for slot, k in enumerate(probe_indices):
+        original = coeffs[k]
+        coeffs[k] = original + step
+        setter(coeffs)
+        l_plus = loss()
+        coeffs[k] = original - step
+        setter(coeffs)
+        l_minus = loss()
+        coeffs[k] = original
+        setter(coeffs)
+        numeric_grad[slot] = (l_plus - l_minus) / (2 * step)
+
+    return _rel_error(analytic_grad[probe_indices], numeric_grad)
+
+
 def check_gradients(pot, atoms, tol=1e-4):
     """Run every check and return {name: relative error}.
 
@@ -136,6 +170,9 @@ def check_gradients(pot, atoms, tol=1e-4):
         "linear site-energy grad": check_coeff_grad(pot, atoms, "linear"),
         "radial force grad": check_force_coeff_grad(pot, atoms, "radial"),
         "linear force grad": check_force_coeff_grad(pot, atoms, "linear"),
+        "radial loss grad": check_loss_grad(pot, atoms, "radial"),
+        "species loss grad": check_loss_grad(pot, atoms, "species"),
+        "linear loss grad": check_loss_grad(pot, atoms, "linear"),
     }
     bad = {name: err for name, err in results.items() if not (err <= tol)}
     if bad:
