@@ -7,21 +7,17 @@ train_potential=manager.global_train_potential, a global one over every worker. 
 the manager's working directory.
 """
 
-from threadpoolctl import threadpool_limits
-
 from . import otf_mtp
 from .mtp_backend import train
 
 
 def grade_dump(comm, dump, potential, species=None) -> list | None:
-    """Grade one extrapolative dump on rank 0 of comm, with one BLAS thread.
+    """Grade one extrapolative dump on rank 0 of comm.
 
     Returns the graded structures on rank 0, None on the other ranks.
     """
     if comm.Get_rank() != 0: return None
-    # One BLAS thread, or the sessions grading side by side oversubscribe the cores.
-    with threadpool_limits(1, user_api="blas"):
-        structures = otf_mtp.grade_dump(dump, potential, species)
+    structures = otf_mtp.grade_dump(dump, potential, species)
     return structures
 
 

@@ -10,6 +10,7 @@ import traceback
 from pathlib import Path
 
 import numpy
+from threadpoolctl import threadpool_limits
 
 import ase
 import ase.io.lammpsrun
@@ -46,7 +47,7 @@ MAX_STRUCTURES_PER_DUMP = 10000
 
 
 def grade_dump(dump, potential, species=None):
-    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them."""
+    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them on one BLAS thread."""
     with open(dump) as dump_file:
         structures = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
 
@@ -57,7 +58,9 @@ def grade_dump(dump, potential, species=None):
     for atoms in structures:
         atoms.arrays["type_index"] = (atoms.arrays["type"] - 1).astype(numpy.int32)
 
-    calculate_grade(potential, structures)
+    # Dumps are graded side by side, one per core; more BLAS threads would oversubscribe the cores.
+    with threadpool_limits(1, user_api="blas"):
+        calculate_grade(potential, structures)
     return structures
 
 
@@ -69,13 +72,6 @@ def grade_extrapolative_dumps(potential, extrapolative_dumps, species=None, subm
     """
     pool = contextlib.nullcontext()
     if submit_grade is None:
-        # Pin each worker's BLAS to one thread, or they oversubscribe the cores the pool already claims.
-        # This has to happen before the pool exists: a worker imports numpy while resolving the task
-        # function, and BLAS fixes its thread count then.
-        os.environ["OMP_NUM_THREADS"] = "1"
-        os.environ["OPENBLAS_NUM_THREADS"] = "1"
-        os.environ["MKL_NUM_THREADS"] = "1"
-
         n_workers = min(os.process_cpu_count(), len(extrapolative_dumps))
         logger.info(f"Grading {len(extrapolative_dumps)} dumps on {n_workers} workers")
         pool = concurrent.futures.ProcessPoolExecutor(n_workers)

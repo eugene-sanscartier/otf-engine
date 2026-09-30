@@ -25,11 +25,12 @@ dependencies = [
   "ase",
   "numpy",
   "scipy",
+  "threadpoolctl",
   "wrapt",
 ]
 
 [project.optional-dependencies]
-mpi = ["mpi4py", "threadpoolctl"]
+mpi = ["mpi4py"]
 
 [project.scripts]
 create-otf-state = "otf_engine.create_otf_state:main"
