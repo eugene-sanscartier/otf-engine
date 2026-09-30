@@ -37,8 +37,9 @@ class PairMTPExtrapolation : public PairMTP {
     // grade. In configuration mode every entry of grades_out is that one grade.
     double grade(const NeighList& list, double* grades_out);
 
-    // Grade of the information vector currently in energy_ders_wrt_coeffs.
-    double calculate_extrapolation_grade();
+    // Grade of the information vector currently in energy_ders_wrt_coeffs;
+    // given the central species, only its nonzero entries are read.
+    double calculate_extrapolation_grade(int itype = -1);
 
     // invA is [coeff_count() * coeff_count()], row-major. The #MVS_v1.1 block
     // of an .almtp holding it is read and written by almtp_io.py.
@@ -52,9 +53,9 @@ class PairMTPExtrapolation : public PairMTP {
     double max_grade = 0.0;                  // Grade of current iteration
     std::vector<double> inverse_active_set;  // [coeff_count * coeff_count]
 
-    std::vector<double> angular_factors;         // [valid neighbor * alpha_index_basic_count] pow_k(r) / r^rank_k
-    std::vector<double> neighbor_basis_vals;     // [valid neighbor * radial_basis_size] radial basis at r_ij
-    std::vector<double> energy_ders_wrt_radial_vals;  // [radial_func_count] per neighbor
+    //Working buffers
+    std::vector<double> radial_basis_cache;      // [radial_basis_cache_size * radial_basis_size] radial basis at r_ij
+    int radial_basis_cache_size = 0;
     std::vector<double> energy_ders_wrt_coeffs;  // candidate information vector
     std::vector<double> cfg_ders_wrt_coeffs;     // its sum over the configuration
 };

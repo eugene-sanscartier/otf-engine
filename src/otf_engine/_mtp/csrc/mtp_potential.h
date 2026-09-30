@@ -80,6 +80,7 @@ class PairMTP {
 
   protected:
     void read_file(std::istream& is);
+    void prepare_angular();
 
     std::string potential_name = "Untitled";
     std::string potential_tag;
@@ -114,15 +115,25 @@ class PairMTP {
     std::vector<std::array<int, 4>> alpha_index_times; // combines existing moments into new ones
     std::vector<int> alpha_moment_mapping;             // selects basis values from completed moments
 
-    // Working buffers
-    int jac_size = 0;                                // Size of the jacobian (jnum dim)
-    std::vector<double> dist_powers;                 // powers of dist (eg. d^i)
-    std::vector<std::array<double, 3>> coord_powers; // powers of rel. pos. (eg. [dx^i, dy^i, dz^i])
-    std::vector<double> radial_vals;                 // radial basis values for each mu
-    std::vector<double> radial_ders;                 // radial basis derivatives for each mu
+    // Shared angular monomials and per-neighbor scratch.
+    int angular_count = 0;
+    std::vector<int> basic_to_angular;       // [alpha_index_basic_count] monomial of each basic moment
+    std::vector<int> basic_by_mu;            // [alpha_index_basic_count] basic moments grouped by radial function
+    std::vector<int> angular_by_mu;          // [alpha_index_basic_count] their monomials
+    std::vector<int> mu_offsets;             // [radial_func_count + 1] bounds of each group
+    std::vector<int> angular_parent;         // [angular_count] monomial one power lower
+    std::vector<int> angular_axis;           // [angular_count] axis of that power
+    std::vector<double> angular_vals;        // [angular_count] monomials of the unit displacement
+    std::vector<double> angular_ders;        // [angular_count] their adjoints
+    std::vector<double> basic_ders_by_mu;    // [alpha_index_basic_count] energy ders wrt basic moments, grouped
+
+    // Graph traversal, forwards and backwards pass
     std::vector<double> moment_tensor_vals;          // the moments
     std::vector<double> nbh_energy_ders_wrt_moments; // same, for ders
-    std::vector<std::array<double, 3>> moment_jacobian; // [jac_size * alpha_index_basic_count]
-    std::vector<int> valid_j;                           // [jac_size]
-    std::vector<std::array<double, 3>> valid_dr;        // [jac_size] displacement of each valid neighbor
+
+    // Cache values between forwards and backwards pass
+    int cache_size = 0;
+    std::vector<int> cached_j;                    // [cache_size]
+    std::vector<std::array<double, 3>> valid_dr;  // [cache_size] displacement of each cached neighbor
+    std::vector<double> neighbor_cache;           // [cache_size * (1 + 2 * radial_func_count)] 1/dist, radial vals, radial ders
 };

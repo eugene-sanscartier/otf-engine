@@ -9,7 +9,10 @@
 
 class MTPTraining : public PairMTPExtrapolation {
   public:
-    explicit MTPTraining(const std::string& filename) : PairMTPExtrapolation(filename) {}
+    explicit MTPTraining(const std::string& filename)
+        : PairMTPExtrapolation(filename), dist_powers(max_alpha_index_basic), coord_powers(max_alpha_index_basic), radial_vals(radial_func_count), radial_ders(radial_func_count) {
+        dist_powers[0] = coord_powers[0][0] = coord_powers[0][1] = coord_powers[0][2] = 1;
+    }
 
     // The coefficients as one vector c = [c_radial | c_species | beta_linear], of coeff_count().
     void get_coeffs(double* c) const;
@@ -38,6 +41,14 @@ class MTPTraining : public PairMTPExtrapolation {
     // Propagates dM_dc through the composite moments, then back-propagates dG.
     void propagate_radial_moment_ders();
 
+    // Per-neighbor powers and radial functions, and the moment Jacobian
+    std::vector<double> dist_powers;                    // [max_alpha_index_basic] dist^k
+    std::vector<std::array<double, 3>> coord_powers;    // [max_alpha_index_basic] [dx^k, dy^k, dz^k]
+    std::vector<double> radial_vals;                    // [radial_func_count]
+    std::vector<double> radial_ders;                    // [radial_func_count]
+    int jac_size = 0;
+    std::vector<std::array<double, 3>> moment_jacobian; // [jac_size * alpha_index_basic_count]
+
     // Per-neighbor angular scalar factor of each basic moment, pow_k(r)/r^rank_k,
     // and its derivative w.r.t. that neighbor's displacement.
     std::vector<double> angular_values;    // [neighbor * alpha_index_basic_count]
@@ -48,14 +59,17 @@ class MTPTraining : public PairMTPExtrapolation {
     std::vector<double> dG;         // [alpha_moment_count * radial_coeff_count]
     std::vector<double> moment_ders; // [alpha_moment_count * neighbor * 3] d(moment)/d(displacement)
 
-    // eval_loss_grad: per neighbor, the radial basis and the angular factors'
-    // derivative along that neighbor's loss weight w; per moment, the
-    // derivative along w and the adjoint of the moment value.
-    std::vector<double> neighbor_radial_vals;   // [neighbor * radial_basis_size]
-    std::vector<double> neighbor_radial_ders;   // [neighbor * radial_basis_size]
-    std::vector<double> angular_ders_along_w;   // [neighbor * alpha_index_basic_count]
-    std::vector<double> w_dot_unit_r;           // [neighbor]
-    std::vector<double> moment_tangents;        // [alpha_moment_count]
-    std::vector<double> moment_adjoints;        // [alpha_moment_count]
-    std::vector<double> radial_adjoints;        // [2 * radial_func_count] per neighbor
+    // eval_loss_grad: per neighbor, the radial basis, the unit displacement u
+    // and its tangent along that neighbor's loss weight w; per angular
+    // monomial, its tangent; per moment, the tangent and the adjoint of the
+    // moment value.
+    std::vector<double> neighbor_radial_vals;               // [neighbor * radial_basis_size]
+    std::vector<double> neighbor_radial_ders;               // [neighbor * radial_basis_size]
+    std::vector<std::array<double, 3>> unit_displacements;  // [neighbor]
+    std::vector<std::array<double, 3>> unit_tangents;       // [neighbor]
+    std::vector<double> w_dot_unit_r;                       // [neighbor]
+    std::vector<double> angular_tangents;                   // [angular_count]
+    std::vector<double> moment_tangents;                    // [alpha_moment_count]
+    std::vector<double> moment_adjoints;                    // [alpha_moment_count]
+    std::vector<double> basic_adjoints_by_mu;               // [alpha_index_basic_count] moment_adjoints of the basic moments, grouped
 };

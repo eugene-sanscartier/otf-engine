@@ -5,9 +5,11 @@ with mlp on one rank and with the trainer on one rank and on one rank per struct
 
   skip_preinit  the untrained template, without pre-training
   preinit       the untrained template, with its 75-step pre-training
-  add_species   a two-species potential, fitted here to the structures with species 2 renamed 1
-  trained       the trainer's pre-trained potential, fitted further
+  add_species   a two-species potential, fitted by mlp to the structures with species 2 renamed 1
+  trained       mlp's pre-trained potential, fitted further
   init_random   the untrained template with random radial coefficients, run by the trainer only
+
+The starting potentials come from mlp, so that they do not change with the trainer under test.
 
 A run fails when its log, numbers aside, or its chosen scalings differ from mlp's, or when a logged
 loss (`BFGS iter N: f=...`) differs from mlp's by more than --tol relatively. Pre-training starts
@@ -29,7 +31,7 @@ from tempfile import TemporaryDirectory
 import numpy
 
 from bench_training import BFGS_LINE, MLP, extract_cfgs
-from otf_engine.io_cfg import read_cfg
+from otf_engine.io_cfg import read_cfg, write_cfg
 from otf_engine.mtp_backend import train
 
 TEMPLATE = MLP.parents[1] / "MTP_templates/08.almtp"
@@ -87,14 +89,14 @@ def main():
                 structs = read_cfg(f)
             ranks = sorted({1, size})
 
-            def fit(arm, path, potential, options, r=1):
+            def fit(arm, path, potential, options, r=1, data=cfg):
                 """Start one fit; returns a function that waits for it and returns its log."""
                 out = workdir / f"{path}_{arm}_{r}.almtp"
                 log = out.with_suffix(".log")
                 options = {"iteration_limit": ITERATIONS} | options
                 if arm == "mlp":
                     with open(log, "w") as stream:
-                        proc = subprocess.Popen([str(MLP), "train", str(potential), str(cfg), f"--save_to={out}"] + [f"--{k}={v}" for k, v in options.items()], stdout=stream, stderr=subprocess.STDOUT, cwd=workdir)
+                        proc = subprocess.Popen([str(MLP), "train", str(potential), str(data), f"--save_to={out}"] + [f"--{k}={v}" for k, v in options.items()], stdout=stream, stderr=subprocess.STDOUT, cwd=workdir)
                     return lambda: (proc.wait(), log.read_text())[1]
                 train(str(potential), structs, str(out), settings=options | {"log": str(log)}, ranks=r)
                 return lambda: log.read_text()
@@ -103,22 +105,27 @@ def main():
             for atoms, original in zip(renamed, structs, strict=True):
                 atoms.arrays["type_index"][atoms.arrays["type_index"] == 2] = 1
                 atoms.calc = original.calc
-            two_species = workdir / "two_species.almtp"
-            train(str(TEMPLATE), renamed, str(two_species), settings={"iteration_limit": ITERATIONS, "skip_preinit": True, "log": "none"}, ranks=1)
+            renamed_cfg = workdir / "renamed.cfg"
+            with open(renamed_cfg, "w") as f:
+                write_cfg(f, renamed)
 
-            paths = {"skip_preinit": (TEMPLATE, {"skip_preinit": "true"}), "preinit": (TEMPLATE, {"iteration_limit": PREINIT_ITERATIONS}), "add_species": (two_species, {})}
+            # mlp's starting potentials and untrained fits first, then each dependent fit once its start exists
             logs = {}
+            two_species = fit("mlp", "two_species", TEMPLATE, {"skip_preinit": "true"}, data=renamed_cfg)
+            paths = {"skip_preinit": (TEMPLATE, {"skip_preinit": "true"}), "preinit": (TEMPLATE, {"iteration_limit": PREINIT_ITERATIONS})}
             for path, (potential, options) in paths.items():
                 logs[path, "mlp", 1] = fit("mlp", path, potential, options)
             for path, (potential, options) in paths.items():
                 for r in ranks:
                     logs[path, "port", r] = fit("port", path, potential, options, r)
-            trained = workdir / "preinit_port_1.almtp"
-            logs["trained", "mlp", 1] = fit("mlp", "trained", trained, {})
-            for r in ranks:
-                logs["trained", "port", r] = fit("port", "trained", trained, {}, r)
 
-            for path in [*paths, "trained"]:
+            for path, start, wait in [("add_species", workdir / "two_species_mlp_1.almtp", two_species), ("trained", workdir / "preinit_mlp_1.almtp", logs["preinit", "mlp", 1])]:
+                wait()
+                logs[path, "mlp", 1] = fit("mlp", path, start, {})
+                for r in ranks:
+                    logs[path, "port", r] = fit("port", path, start, {}, r)
+
+            for path in [*paths, "add_species", "trained"]:
                 mlp_log = logs[path, "mlp", 1]()
                 for r in ranks:
                     ok, account = compare(mlp_log, logs[path, "port", r](), args.tol, args.preinit_steps if path == "preinit" else None)

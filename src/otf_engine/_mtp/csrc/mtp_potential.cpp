@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <stdexcept>
 
 PairMTP::PairMTP(const std::string& filename) {
@@ -24,9 +25,10 @@ PairMTP::~PairMTP() {
 }
 
 /* ----------------------------------------------------------------------
-   Straightfoward MTP implementation based on MLIP3
+   Main Computation Function
    ---------------------------------------------------------------------- */
 double PairMTP::compute(const NeighList& list, double* forces, double* virial, double* eatom) {
+    const int stride = 1 + 2 * radial_func_count;
     double total_energy = 0.0;
     int nbr_offset = 0;
 
@@ -42,11 +44,11 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
         nbr_offset += jnum;
 
         // Resize per neighbor arrays
-        if (jac_size < jnum) {
-            jac_size = jnum;
-            moment_jacobian.resize((size_t) jac_size * alpha_index_basic_count);
-            valid_j.resize(jac_size);
-            valid_dr.resize(jac_size);
+        if (cache_size < jnum) {
+            neighbor_cache.resize((size_t) jnum * stride);
+            cached_j.resize(jnum);
+            valid_dr.resize(jnum);
+            cache_size = jnum;
         }
 
         // Clear moment and derivative arrays
@@ -61,17 +63,23 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
             const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
             if (rsq > max_cutoff_sq) continue;
-            valid_j[valid_count] = j;
+            cached_j[valid_count] = j;
             valid_dr[valid_count] = {r[0], r[1], r[2]};
 
             const double dist = std::sqrt(rsq);
+            const double inv_dist = 1.0 / dist;
+            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+            double* cache = neighbor_cache.data() + (size_t) valid_count * stride;
+            cache[0] = inv_dist;
+            double* vals = cache + 1;
+            double* ders = vals + radial_func_count;
             radial_basis->calc_radial_basis_ders(dist);
+            const double* basis_vals = radial_basis->radial_basis_vals.data();
+            const double* basis_ders = radial_basis->radial_basis_ders.data();
 
-            // Precompute the coord and distance powers
-            for (int k = 1; k < max_alpha_index_basic; k++) {
-                dist_powers[k] = dist_powers[k - 1] * dist;
-                for (int a = 0; a < 3; a++) coord_powers[k][a] = coord_powers[k - 1][a] * r[a];
-            }
+            // Evaluate each shared angular monomial once.
+            for (int k = 1; k < angular_count; k++)
+                angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
 
             // Compute the radial basis values and derivatives
             const int pair_offset = itype * species_count + jtype;
@@ -81,59 +89,26 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
                 const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
 
                 for (int ri = 0; ri < radial_basis_size; ri++) {
-                    val += radial_basis_coeffs[offset + ri] * radial_basis->radial_basis_vals[ri];
-                    der += radial_basis_coeffs[offset + ri] * radial_basis->radial_basis_ders[ri];
+                    val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
+                    der += radial_basis_coeffs[offset + ri] * basis_ders[ri];
                 }
-                radial_vals[mu] = val;
-                radial_ders[mu] = der;
-            }
+                vals[mu] = val;
+                ders[mu] = der;
 
-            // Accumulate into the basic moment elements
-            for (int k = 0; k < alpha_index_basic_count; k++) {
-                int mu = alpha_index_basic[k][0];
-
-                double val = radial_vals[mu];
-                double der = radial_ders[mu];
-
-                // Normalize by the rank of alpha's coresponding tensor
-                int norm_rank = alpha_index_basic[k][1] + alpha_index_basic[k][2] + alpha_index_basic[k][3];
-                double norm_fac = 1.0 / dist_powers[norm_rank];
-                val *= norm_fac;
-                der = der * norm_fac - norm_rank * val / dist;
-                double pow0 = coord_powers[alpha_index_basic[k][1]][0];
-                double pow1 = coord_powers[alpha_index_basic[k][2]][1];
-                double pow2 = coord_powers[alpha_index_basic[k][3]][2];
-                double pow = pow0 * pow1 * pow2;
-                moment_tensor_vals[k] += val * pow;
-
-                // Calculate the Jacobian from derivatives
-                const size_t jac = (size_t) valid_count * alpha_index_basic_count + k;
-                pow *= der / dist;
-                moment_jacobian[jac][0] = pow * r[0];
-                moment_jacobian[jac][1] = pow * r[1];
-                moment_jacobian[jac][2] = pow * r[2];
-                if (alpha_index_basic[k][1] != 0) {
-                    moment_jacobian[jac][0] += val * alpha_index_basic[k][1] *
-                        coord_powers[alpha_index_basic[k][1] - 1][0] * pow1 * pow2;
-                }    //Chain rule for nonzero rank
-                if (alpha_index_basic[k][2] != 0) {
-                    moment_jacobian[jac][1] += val * alpha_index_basic[k][2] * pow0 *
-                        coord_powers[alpha_index_basic[k][2] - 1][1] * pow2;
-                }    //Chain rule for nonzero rank
-                if (alpha_index_basic[k][3] != 0) {
-                    moment_jacobian[jac][2] += val * alpha_index_basic[k][3] * pow0 * pow1 *
-                        coord_powers[alpha_index_basic[k][3] - 1][2];
-                }    //Chain rule for nonzero rank
+                // Accumulate into the basic moment elements
+                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
+                    const int k = basic_by_mu[t];
+                    moment_tensor_vals[k] += val * angular_vals[angular_by_mu[t]];
+                }
             }
             valid_count++;
         }
 
-        // ------------ Contruct Composite Moment Values  ------------
+        // ------------ Construct Composite Moment Values  ------------
         for (int k = 0; k < alpha_index_times_count; k++) {
-            double val0 = moment_tensor_vals[alpha_index_times[k][0]];
-            double val1 = moment_tensor_vals[alpha_index_times[k][1]];
-            int val2 = alpha_index_times[k][2];
-            moment_tensor_vals[alpha_index_times[k][3]] += val2 * val0 * val1;
+            const int* term = alpha_index_times[k].data();
+            moment_tensor_vals[term[3]] +=
+                term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
         }
 
         // ------------ Compute Basis Set From Alpha Map ------------
@@ -144,34 +119,66 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
         total_energy += nbh_energy;
         if (eatom) eatom[i] = nbh_energy;
 
-        // =========== Begin Backpropogation ===========
+        // =========== Begin Backpropagation ===========
         //------------ NBH energy derivative is the corresponding linear combination------------
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
 
-        //------------ Propogate chain rule through the composite moment elements times to the basics ------------
+        //------------ Propagate chain rule through the composite moment elements times to the basics ------------
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
-            int a0 = alpha_index_times[k][0];
-            int a1 = alpha_index_times[k][1];
-            int multipiler = alpha_index_times[k][2];
-            int a3 = alpha_index_times[k][3];
+            const int* term = alpha_index_times[k].data();
+            const int a0 = term[0];
+            const int a1 = term[1];
 
-            double val0 = moment_tensor_vals[a0];
-            double val1 = moment_tensor_vals[a1];
-            double val3 = nbh_energy_ders_wrt_moments[a3];
+            const double w = term[2] * nbh_energy_ders_wrt_moments[term[3]];
 
-            nbh_energy_ders_wrt_moments[a1] += val3 * multipiler * val0;
-            nbh_energy_ders_wrt_moments[a0] += val3 * multipiler * val1;
+            nbh_energy_ders_wrt_moments[a1] += w * moment_tensor_vals[a0];
+            nbh_energy_ders_wrt_moments[a0] += w * moment_tensor_vals[a1];
         }
 
-        //------------  Multiply energy ders wrt basic moments by the Jacobian to get forces ------------
+        for (int t = 0; t < alpha_index_basic_count; t++)
+            basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]];
+
+        //------------ Compute forces from basic moment derivatives ------------
         for (int jj = 0; jj < valid_count; jj++) {
-            int j = valid_j[jj];
+            const int j = cached_j[jj];
+            const auto& r = valid_dr[jj];
+            const double* cache = neighbor_cache.data() + (size_t) jj * stride;
+            const double inv_dist = cache[0];
+            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+            const double* vals = cache + 1;
+            const double* ders = vals + radial_func_count;
+            for (int k = 1; k < angular_count; k++)
+                angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
+            std::fill(angular_ders.begin(), angular_ders.end(), 0.0);
 
             double temp_force[3] = {0, 0, 0};
-            for (int k = 0; k < alpha_index_basic_count; k++)
-                for (int a = 0; a < 3; a++)
-                    temp_force[a] += nbh_energy_ders_wrt_moments[k] * moment_jacobian[(size_t) jj * alpha_index_basic_count + k][a];
+            double radial_force = 0;
+            for (int mu = 0; mu < radial_func_count; mu++) {
+                const int end = mu_offsets[mu + 1];
+                if (mu_offsets[mu] == end) continue;
+                const double val = vals[mu];
+                double radial_sum = 0;
+                for (int t = mu_offsets[mu]; t < end; t++) {
+                    const int angular = angular_by_mu[t];
+                    const double adj = basic_ders_by_mu[t];
+                    radial_sum += adj * angular_vals[angular];
+                    angular_ders[angular] += val * adj;
+                }
+                radial_force += ders[mu] * radial_sum;
+            }
+
+            // Reverse the shared angular products
+            for (int k = angular_count - 1; k > 0; k--) {
+                const int parent = angular_parent[k];
+                const int axis = angular_axis[k];
+                const double adj = angular_ders[k];
+                temp_force[axis] += adj * angular_vals[parent];
+                angular_ders[parent] += adj * u[axis];
+            }
+            radial_force -=
+                inv_dist * (temp_force[0] * u[0] + temp_force[1] * u[1] + temp_force[2] * u[2]);
+            for (int a = 0; a < 3; a++) temp_force[a] = inv_dist * temp_force[a] + radial_force * u[a];
 
             forces[i * 3 + 0] += temp_force[0];
             forces[i * 3 + 1] += temp_force[1];
@@ -183,7 +190,6 @@ double PairMTP::compute(const NeighList& list, double* forces, double* virial, d
 
             // Accumulate virial stress only if requested
             if (virial) {
-                const auto& r = valid_dr[jj];
                 virial[0] -= temp_force[0] * r[0];    //xx
                 virial[1] -= temp_force[1] * r[1];    //yy
                 virial[2] -= temp_force[2] * r[2];    //zz
@@ -205,20 +211,12 @@ void PairMTP::eval_basis(const NeighList& list, double* basis_out) {
     int nbr_offset = 0;
 
     for (int ii = 0; ii < list.inum; ii++) {
-        int valid_count = 0;
         const int i = list.ilist[ii];
         const int itype = list.types[i];
         const int jnum = list.numneigh[ii];
         const int* nbrs = list.firstneigh + nbr_offset;
         const double* dr = list.displacements + nbr_offset * 3;
         nbr_offset += jnum;
-
-        if (jac_size < jnum) {
-            jac_size = jnum;
-            moment_jacobian.resize((size_t) jac_size * alpha_index_basic_count);
-            valid_j.resize(jac_size);
-            valid_dr.resize(jac_size);
-        }
 
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
 
@@ -230,74 +228,34 @@ void PairMTP::eval_basis(const NeighList& list, double* basis_out) {
             const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
             if (rsq > max_cutoff_sq) continue;
-            valid_j[valid_count] = j;
-            valid_dr[valid_count] = {r[0], r[1], r[2]};
 
             const double dist = std::sqrt(rsq);
-            radial_basis->calc_radial_basis_ders(dist);
+            const double inv_dist = 1.0 / dist;
+            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+            radial_basis->calc_radial_basis(dist);
+            const double* basis_vals = radial_basis->radial_basis_vals.data();
 
-            for (int k = 1; k < max_alpha_index_basic; k++) {
-                dist_powers[k] = dist_powers[k - 1] * dist;
-                for (int a = 0; a < 3; a++) coord_powers[k][a] = coord_powers[k - 1][a] * r[a];
-            }
+            for (int k = 1; k < angular_count; k++)
+                angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
 
             const int pair_offset = itype * species_count + jtype;
             for (int mu = 0; mu < radial_func_count; mu++) {
                 double val = 0;
-                double der = 0;
                 const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
 
-                for (int ri = 0; ri < radial_basis_size; ri++) {
-                    val += radial_basis_coeffs[offset + ri] * radial_basis->radial_basis_vals[ri];
-                    der += radial_basis_coeffs[offset + ri] * radial_basis->radial_basis_ders[ri];
-                }
-                radial_vals[mu] = val;
-                radial_ders[mu] = der;
+                for (int ri = 0; ri < radial_basis_size; ri++)
+                    val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
+
+                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++)
+                    moment_tensor_vals[basic_by_mu[t]] += val * angular_vals[angular_by_mu[t]];
             }
-
-            for (int k = 0; k < alpha_index_basic_count; k++) {
-                int mu = alpha_index_basic[k][0];
-
-                double val = radial_vals[mu];
-                double der = radial_ders[mu];
-
-                int norm_rank = alpha_index_basic[k][1] + alpha_index_basic[k][2] + alpha_index_basic[k][3];
-                double norm_fac = 1.0 / dist_powers[norm_rank];
-                val *= norm_fac;
-                der = der * norm_fac - norm_rank * val / dist;
-                double pow0 = coord_powers[alpha_index_basic[k][1]][0];
-                double pow1 = coord_powers[alpha_index_basic[k][2]][1];
-                double pow2 = coord_powers[alpha_index_basic[k][3]][2];
-                double pow = pow0 * pow1 * pow2;
-                moment_tensor_vals[k] += val * pow;
-
-                const size_t jac = (size_t) valid_count * alpha_index_basic_count + k;
-                pow *= der / dist;
-                moment_jacobian[jac][0] = pow * r[0];
-                moment_jacobian[jac][1] = pow * r[1];
-                moment_jacobian[jac][2] = pow * r[2];
-                if (alpha_index_basic[k][1] != 0) {
-                    moment_jacobian[jac][0] += val * alpha_index_basic[k][1] *
-                        coord_powers[alpha_index_basic[k][1] - 1][0] * pow1 * pow2;
-                }
-                if (alpha_index_basic[k][2] != 0) {
-                    moment_jacobian[jac][1] += val * alpha_index_basic[k][2] * pow0 *
-                        coord_powers[alpha_index_basic[k][2] - 1][1] * pow2;
-                }
-                if (alpha_index_basic[k][3] != 0) {
-                    moment_jacobian[jac][2] += val * alpha_index_basic[k][3] * pow0 * pow1 *
-                        coord_powers[alpha_index_basic[k][3] - 1][2];
-                }
-            }
-            valid_count++;
         }
 
-        // ------------ Contruct Composite Moment Values  ------------
+        // ------------ Construct Composite Moment Values  ------------
         for (int k = 0; k < alpha_index_times_count; k++) {
-            double val0 = moment_tensor_vals[alpha_index_times[k][0]];
-            double val1 = moment_tensor_vals[alpha_index_times[k][1]];
-            int val2 = alpha_index_times[k][2];
-            moment_tensor_vals[alpha_index_times[k][3]] += val2 * val0 * val1;
+            const int* term = alpha_index_times[k].data();
+            moment_tensor_vals[term[3]] +=
+                term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
         }
 
         double* row = basis_out + (size_t) ii * alpha_scalar_count;
@@ -502,12 +460,72 @@ void PairMTP::read_file(std::istream& is) {
                 throw std::runtime_error("PairMTP: not enough moment coefficients");
     }
 
-    //Working buffers
-    dist_powers.resize(max_alpha_index_basic);
-    coord_powers.resize(max_alpha_index_basic);
-    radial_vals.resize(radial_func_count);
-    radial_ders.resize(radial_func_count);
-
     // Set working buffers
-    dist_powers[0] = coord_powers[0][0] = coord_powers[0][1] = coord_powers[0][2] = 1;
+    prepare_angular();
+    mu_offsets.assign(radial_func_count + 1, 0);
+    basic_by_mu.resize(alpha_index_basic_count);
+    angular_by_mu.resize(alpha_index_basic_count);
+    basic_ders_by_mu.resize(alpha_index_basic_count);
+    for (int k = 0; k < alpha_index_basic_count; k++) mu_offsets[alpha_index_basic[k][0] + 1]++;
+    for (int mu = 0; mu < radial_func_count; mu++) mu_offsets[mu + 1] += mu_offsets[mu];
+    std::vector<int> radial_next(mu_offsets.begin(), mu_offsets.begin() + radial_func_count);
+    for (int k = 0; k < alpha_index_basic_count; k++)
+        basic_by_mu[radial_next[alpha_index_basic[k][0]]++] = k;
+    for (int t = 0; t < alpha_index_basic_count; t++)
+        angular_by_mu[t] = basic_to_angular[basic_by_mu[t]];
+
+    // Check the contraction graph: basic moments own [0, alpha_index_basic_count)
+    // and no term may read a moment that has not been produced yet.
+    std::vector<char> produced(alpha_moment_count, 0);
+    std::fill(produced.begin(), produced.begin() + alpha_index_basic_count, 1);
+    for (int k = 0; k < alpha_index_times_count; k++) {
+        if (alpha_index_times[k][3] < alpha_index_basic_count)
+            throw std::runtime_error("PairMTP: MTP contraction " + std::to_string(k) + " overwrites a basic moment");
+        if (!produced[alpha_index_times[k][0]] || !produced[alpha_index_times[k][1]])
+            throw std::runtime_error("PairMTP: MTP contraction " + std::to_string(k) + " reads a moment that is not yet computed");
+        produced[alpha_index_times[k][3]] = 1;
+    }
+}
+
+/* ----------------------------------------------------------------------
+   Share angular monomials across radial channels. Lexicographic exponent
+   order puts every parent before its child.
+------------------------------------------------------------------------- */
+void PairMTP::prepare_angular() {
+    using Powers = std::array<int, 3>;
+    std::map<Powers, int> indices;
+    indices.emplace(Powers{{0, 0, 0}}, 0);
+
+    for (int k = 0; k < alpha_index_basic_count; k++) {
+        Powers powers{{alpha_index_basic[k][1], alpha_index_basic[k][2], alpha_index_basic[k][3]}};
+        if (powers[0] < 0 || powers[1] < 0 || powers[2] < 0)
+            throw std::runtime_error("PairMTP: invalid negative MTP angular exponent");
+        while (indices.emplace(powers, 0).second) {
+            const int axis = powers[2] ? 2 : (powers[1] ? 1 : 0);
+            --powers[axis];
+        }
+    }
+
+    angular_count = 0;
+    for (auto& entry : indices) entry.second = angular_count++;
+    basic_to_angular.resize(alpha_index_basic_count);
+    angular_parent.resize(angular_count);
+    angular_axis.resize(angular_count);
+    angular_vals.resize(angular_count);
+    angular_ders.resize(angular_count);
+    angular_parent[0] = angular_axis[0] = 0;
+    angular_vals[0] = 1.0;
+
+    for (const auto& entry : indices) {
+        const int index = entry.second;
+        if (index == 0) continue;
+        Powers parent = entry.first;
+        const int axis = parent[2] ? 2 : (parent[1] ? 1 : 0);
+        --parent[axis];
+        angular_parent[index] = indices.at(parent);
+        angular_axis[index] = axis;
+    }
+    for (int k = 0; k < alpha_index_basic_count; k++)
+        basic_to_angular[k] = indices.at(
+            Powers{{alpha_index_basic[k][1], alpha_index_basic[k][2], alpha_index_basic[k][3]}});
 }
