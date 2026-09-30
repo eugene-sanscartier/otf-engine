@@ -1,22 +1,16 @@
+import importlib.util
+import inspect
 import logging
 import os
 import re
 import sys
 import argparse
 from pathlib import Path
-from .otf_mtp import main as _main
+from .otf_mtp import run_cycle
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
-from .cycles import next_cycle_dir, archive_cycle, LOG_FILE
+from .cycles import next_cycle_dir, LOG_FILE, LOG_FORMAT
 
 logger = logging.getLogger(__name__)
-
-
-def _load_evaluator():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("evaluator", "evaluator.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.evaluator
 
 
 def _cgroup_cpus() -> set[int]:
@@ -31,22 +25,24 @@ def _cgroup_cpus() -> set[int]:
 def main():
 
     parser =argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
+    # The cycle's options take their defaults from run_cycle.
+    defaults = {name: parameter.default for name, parameter in inspect.signature(run_cycle).parameters.items()}
 
     parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
-    parser.add_argument("-p", "--potential", help="input potential file name, will override input file 'potential' section", type=str, default="potential.almtp")
-    parser.add_argument("-t", "--training_set", help="Training dataset file name, ex.: train.cfg", type=str, default="train.cfg")
+    parser.add_argument("-p", "--potential", help="input potential file name (default: %(default)s)", type=str, default=defaults["potential"])
+    parser.add_argument("-t", "--training_set", help="Training dataset file name (default: %(default)s)", type=str, default=defaults["training_set"])
 
-    parser.add_argument("-P", "--no_preselection_filtering", help="Preselection filtering", dest='preselection_filtering', action='store_false')
+    parser.add_argument("-P", "--no_preselection_filtering", help="Preselection filtering", dest='preselection_filtering', action='store_false', default=defaults["preselection_filtering"])
 
-    parser.add_argument("-g", "--gamma_tolerance", help="Gamma tolerance", default=1.010, type=float)
-    parser.add_argument("-G", "--gamma_max", help="Gamma max", default=0, type=float)
-    parser.add_argument("-D", "--gamma_max_cap", help="Gamma max_0 cap (initial value; rolling update never fires above this)", default=10000, type=float)
-    parser.add_argument("-X", "--extreme_lock_after_ntimes", help="After n cycle without extreme extrapolation configuration only, no more extreme extrapolation configuration are selected.", default=5, type=int)
+    parser.add_argument("-g", "--gamma_tolerance", help="Gamma tolerance (default: %(default)s)", default=defaults["gamma_tolerance"], type=float)
+    parser.add_argument("-G", "--gamma_max", help="Gamma max (default: %(default)s)", default=defaults["gamma_max"], type=float)
+    parser.add_argument("-D", "--gamma_max_cap", help="Gamma max_0 cap (initial value; rolling update never fires above this) (default: %(default)s)", default=defaults["gamma_max_cap"], type=float)
+    parser.add_argument("-X", "--extreme_lock_after_ntimes", help="After n cycle without extreme extrapolation configuration only, no more extreme extrapolation configuration are selected (default: %(default)s).", default=defaults["extreme_lock_after_ntimes"], type=int)
 
-    parser.add_argument("-m", "--max_structures", help="Max structures selection", default=-1, type=int)
-    parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm", default=300, type=int)
-    parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=None, type=float)
-    parser.add_argument("-s", "--species", nargs='+', type=str, default=None, metavar="SYMBOLS", help="Ordered element symbols matching MTP type indices. Must cover ALL types defined in the potential and training set, not just those present in the current simulation. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
+    parser.add_argument("-m", "--max_structures", help="Max structures selection (default: %(default)s, no cap)", default=defaults["max_structures"], type=int)
+    parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm (default: %(default)s)", default=defaults["iteration_limit"], type=int)
+    parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=defaults["force_threshold"], type=float)
+    parser.add_argument("-s", "--species", nargs='+', type=str, default=defaults["species"], metavar="SYMBOLS", help="Ordered element symbols matching MTP type indices. Must cover ALL types defined in the potential and training set, not just those present in the current simulation. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
 
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "
@@ -75,13 +71,16 @@ def main():
         case "slurm":
             launcher = SlurmLauncher(batch_args=args.batch_args, concurrent_eval=args.concurrent_eval, runner_args=args.runner_args)
 
-    evaluator_fn = _load_evaluator()
+    spec = importlib.util.spec_from_file_location("evaluator", "evaluator.py")
+    evaluator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(evaluator)
     os.environ["COMMAND_PREFIX"] = launcher.command_prefix()
 
     cycle_dir = next_cycle_dir()
     log_path = cycle_dir / LOG_FILE
 
-    logging.basicConfig(level=logging.INFO, filename=log_path, filemode="a", format="%(levelname)s %(module)s:%(funcName)s: %(message)s")
+    # For records from outside the package: the cycle logs the package's there itself.
+    logging.basicConfig(level=logging.INFO, filename=log_path, filemode="a", format=LOG_FORMAT)
     print(f"{cycle_dir.name} running — {log_path}")
 
     # The engine is often started by one MPI rank (pyKMC) and would inherit its binding to one core.
@@ -90,14 +89,12 @@ def main():
     except Exception as e:
         logger.warning(f"Inherited {os.process_cpu_count()} CPUs, cgroup cpuset unreadable: {e!r}")
 
+    options = vars(args)
+    for name in ("launcher", "batch_args", "runner_args", "concurrent_eval"): del options[name]
     try:
-        _main(args, launcher=launcher, mlp_command=mlp_command, evaluator_fn=evaluator_fn)
-    except Exception as e:
-        logger.exception(f"Error during execution: {e}")
-        archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps, ok=False)
+        run_cycle(launcher=launcher, evaluator_fn=evaluator.evaluator, mlp_command=mlp_command, cycle_dir=cycle_dir, **options)
+    except Exception:
         sys.exit(67)
-
-    archive_cycle(cycle_dir, args.potential, args.training_set, dump_files=args.extrapolative_dumps, ok=True)
     sys.exit(0)
 
 

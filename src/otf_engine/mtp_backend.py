@@ -302,7 +302,7 @@ def _references(atoms) -> tuple:
     return float(results["energy"]) if "energy" in results else None, forces, virial
 
 
-def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg") -> None:
+def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg", comm=None) -> None:
     """Train *potential* on *training_structs* as mlip-3's `mlp train` does, and write it with an active set to *save_to*.
 
     *potential* may be untrained, and gains the species of *training_structs* it lacks.
@@ -310,6 +310,8 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300, "init_random": True}
     ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
+    comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
+               same *training_structs*, and rank 0 writes *save_to*.
     """
     try:
         weights = read_mvs_header(potential)[0]
@@ -317,9 +319,17 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
         weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
 
     cutoff = PairMTP(potential).get_max_cutoff()
-    structures = ((neighbors(atoms, cutoff), *_references(atoms)) for atoms in training_structs)
+    # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
+    share = training_structs if comm is None else training_structs[comm.Get_rank()::comm.Get_size()]
+    structures = ((neighbors(atoms, cutoff), *_references(atoms)) for atoms in share)
     options = {key: str(value) for key, value in (settings or {}).items()}
-    pot = train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=lambda pot: write_mtp(pot, save_to))
+    if comm is None:
+        pot = train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=lambda pot: write_mtp(pot, save_to))
+    else:
+        from ._mtp import _mtp_mpi
+        pot = _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=lambda pot: write_mtp(pot, save_to))
+        if comm.Get_rank() != 0: return
+
     write_mtp(pot, save_to)
 
     # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with

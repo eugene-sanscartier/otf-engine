@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mpi = ["mpi4py"]
+mpi = ["mpi4py", "threadpoolctl"]
 
 [project.scripts]
 create-otf-state = "otf_engine.create_otf_state:main"

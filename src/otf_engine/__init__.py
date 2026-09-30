@@ -1,4 +1,4 @@
-from .otf_mtp import main
+from .otf_mtp import run_cycle
 from .launchers import (
     Launcher,
     NestedLauncher,
@@ -7,7 +7,7 @@ from .launchers import (
 )
 
 __all__ = [
-    "main",
+    "run_cycle",
     "Launcher",
     "NestedLauncher",
     "ForkLauncher",
