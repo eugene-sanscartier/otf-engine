@@ -305,7 +305,9 @@ def _references(atoms) -> tuple:
 def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg") -> None:
     """Train *potential* on *training_structs* as mlip-3's `mlp train` does, and write it with an active set to *save_to*.
 
-    settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300}
+    *potential* may be untrained, and gains the species of *training_structs* it lacks.
+
+    settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300, "init_random": True}
     ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     """
@@ -317,10 +319,11 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     cutoff = PairMTP(potential).get_max_cutoff()
     structures = ((neighbors(atoms, cutoff), *_references(atoms)) for atoms in training_structs)
     options = {key: str(value) for key, value in (settings or {}).items()}
-    trained = train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=lambda pot: write_mtp(pot, save_to))
-    write_mtp(trained, save_to)
+    pot = train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=lambda pot: write_mtp(pot, save_to))
+    write_mtp(pot, save_to)
 
-    update_active_set(save_to, training_structs, weights=weights)
+    # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with
+    if pot.is_trained(): update_active_set(save_to, training_structs, weights=weights)
 
 
 def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh") -> list:

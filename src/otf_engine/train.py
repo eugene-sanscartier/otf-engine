@@ -2,10 +2,11 @@
 
     python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=cfg|nbh] [mlp train options]
 
-Takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, ...). --ranks sets the
-thread count, by default the CPUs this process may run on. The trained potential is written to
---save_to, by default over the input, with an active set built on the training set. The
-potential must already be trained, with coefficients for every species in the training set.
+Takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random, --skip_preinit,
+...). --ranks sets the thread count, by default the CPUs this process may run on. The potential may
+be untrained, such as an mlip-3 template, and gains the species of the training set it lacks. The
+trained potential is written to --save_to, by default over the input, with an active set built on
+the training set.
 """
 
 import logging

@@ -55,6 +55,8 @@ struct TrainerOptions {
     int iteration_limit = 1000;
     double tolerance = 1e-3;        // stop when 50 BFGS steps decrease the loss by less than this, relatively
     bool no_mindist_update = false; // keep min_dist rather than setting it to 0.99 of the shortest training distance
+    bool init_random = false;       // randomize the radial coefficients of an untrained potential
+    bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
 };
 
 class MTPTrainer {
@@ -63,11 +65,12 @@ class MTPTrainer {
     // on rank 0 wherever mlp saves the potential during the fit.
     MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const TrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
-    // Leaves the fitted coefficients in the potential, on every rank.
+    // Leaves the fitted coefficients in the potential, on every rank, with the
+    // species of the training set it lacked added.
     void train();
 
   private:
-    void check_species();
+    void add_species();
     void update_min_dist();
     void fit_nonlinear(int max_iter);
     void fit_linear();

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <stdexcept>
 #include <string>
 
@@ -34,8 +35,39 @@ void MTPTrainer::train() {
     MPI_Barrier(comm);
     if (log) *log << structure_count << " configurations found in the training set" << std::endl;
 
-    check_species();
+    add_species();
     update_min_dist();
+
+    if (options.init_random && !potential.is_trained()) {
+        if (rank == 0) {
+            std::random_device rand_device;
+            std::default_random_engine generator(rand_device());
+            std::uniform_real_distribution<> uniform(-1.0, 1.0);
+
+            if (log) *log << "Random initialization of radial coefficients" << std::endl;
+            const int C = potential.get_species_count();
+            const int K = potential.get_radial_func_count();
+            const int R = potential.get_radial_basis_size();
+            for (int p = 0; p < C * C; p++)
+                for (int k = 0; k < K; k++) {
+                    double* c = coeffs.data() + (p * K + k) * R;
+                    for (int l = 0; l < R; l++)
+                        c[l] = 5e-7 * uniform(generator);
+                    c[std::min(k, R - 1)] = 1e-7 * (1 + uniform(generator));
+                }
+        }
+        MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
+    }
+
+    // pre-training, for the initial scaling
+    if (!potential.is_trained() && options.iteration_limit > 0 && !options.skip_preinit) {
+        fit_linear();
+        rescale();
+        if (log) *log << "Pre-training started" << std::endl;
+        fit_nonlinear(75);
+        rescale();
+        if (log) *log << "Pre-training ended" << std::endl;
+    }
 
     if (options.iteration_limit > 0) {
         if (log) {
@@ -57,22 +89,84 @@ void MTPTrainer::train() {
     MPI_Barrier(comm);
 }
 
-// Every species of the potential must occur in the training set, and no other.
-void MTPTrainer::check_species() {
-    const int n_species = potential.get_species_count();
-    std::vector<int> present(n_species, 0), present_anywhere(n_species, 0);
-
+/* ----------------------------------------------------------------------
+   Appends the species of the training set that the potential lacks, all of
+   them when it is untrained. Every species of the potential must occur in
+   the training set, and a species is numbered by its index.
+------------------------------------------------------------------------- */
+void MTPTrainer::add_species() {
+    int local_count = 0;
     for (const TrainingStructure& s : structures)
         for (int t : s.types) {
-            if (t < 0 || t >= n_species)
-                throw std::runtime_error("MTPTrainer: a training structure has species " + std::to_string(t) + ", and the potential has " + std::to_string(n_species));
+            if (t < 0)
+                throw std::runtime_error("MTPTrainer: a training structure has species " + std::to_string(t));
+            local_count = std::max(local_count, t + 1);
+        }
+    int type_count = 0;
+    MPI_Allreduce(&local_count, &type_count, 1, MPI_INT, MPI_MAX, comm);
+
+    std::vector<int> present(type_count, 0), present_anywhere(type_count, 0);
+    for (const TrainingStructure& s : structures)
+        for (int t : s.types)
             present[t] = 1;
+    MPI_Allreduce(present.data(), present_anywhere.data(), type_count, MPI_INT, MPI_MAX, comm);
+
+    const int old_spec = potential.is_trained() ? potential.get_species_count() : 0;
+    const int new_spec = type_count;
+    for (int t = 0; t < std::max(old_spec, new_spec); t++)
+        if (t >= new_spec || !present_anywhere[t])
+            throw std::runtime_error(t < old_spec ? "MTPTrainer: species " + std::to_string(t) + " of the potential is not present in the training set" : "MTPTrainer: the training set has species " + std::to_string(new_spec - 1) + " but not species " + std::to_string(t));
+
+    if (old_spec < new_spec) {
+        if (log) {
+            *log << "Following atomic numbers will be added to the MTP potential: ";
+            for (int t = old_spec; t < new_spec; t++)
+                *log << t << (t != new_spec - 1 ? ", " : "");
+            *log << std::endl;
         }
 
-    MPI_Allreduce(present.data(), present_anywhere.data(), n_species, MPI_INT, MPI_MAX, comm);
-    for (int t = 0; t < n_species; t++)
-        if (!present_anywhere[t])
-            throw std::runtime_error("MTPTrainer: species " + std::to_string(t) + " of the potential is not present in the training set");
+        const int K = potential.get_radial_func_count();
+        const int R = potential.get_radial_basis_size();
+        const int KR = K * R;
+
+        // mlip-3's steps on its coefficient vector: the linear coefficients
+        // are shifted, then the radial block grows over them.
+        if (!potential.is_trained()) coeffs.resize(potential.get_alpha_scalar_count());
+        const int old_radial_count = old_spec * old_spec * KR;
+        const std::vector<double> old_radial(coeffs.begin(), coeffs.begin() + old_radial_count);
+
+        const int nlin_old = (int) coeffs.size() - old_radial_count;
+        coeffs.resize(old_radial_count + nlin_old + new_spec - old_spec);
+        double* lin = coeffs.data() + old_radial_count;
+        for (int i = nlin_old + new_spec - old_spec - 1; i >= new_spec; i--)
+            lin[i] = lin[i - new_spec + old_spec];
+        for (int i = 0; i < new_spec - old_spec; i++)
+            lin[i + old_spec] = 0;
+
+        coeffs.resize(new_spec * new_spec * KR + nlin_old + new_spec - old_spec);
+        int pair = 0, old_pair = 0;
+        for (int p1 = 0; p1 < new_spec; p1++)
+            for (int p2 = 0; p2 < new_spec; p2++) {
+                double* c = coeffs.data() + pair * KR;
+                if (p1 < old_spec && p2 < old_spec) {
+                    std::copy(old_radial.begin() + old_pair * KR, old_radial.begin() + (old_pair + 1) * KR, c);
+                    old_pair++;
+                } else
+                    for (int k = 0; k < K; k++) {
+                        for (int l = 0; l < R; l++)
+                            c[k * R + l] = 1e-6;
+                        c[k * R + std::min(k, R)] = 1e-3 * (pair + 1);
+                    }
+                pair++;
+            }
+
+        potential.set_species_count(new_spec);
+        potential.set_coeffs(coeffs.data());
+        n_radial = potential.get_radial_coeff_count();
+        n_linear = new_spec + potential.get_alpha_scalar_count();
+    }
+
+    reg_vector.resize(n_linear);
 }
 
 void MTPTrainer::update_min_dist() {
@@ -196,6 +290,8 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
         MPI_Bcast(&num_step, 1, MPI_INT, 0, comm);
     }
 
+    // the potential counts as trained from its first fit on
+    potential.set_trained(true);
     // the next linear fit rebuilds the regularization
     reg_init = true;
 

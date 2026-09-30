@@ -55,7 +55,7 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
         {"tolerance", &o.tolerance}};
     const std::map<std::string, int*> ints = {
         {"weight_scaling", &o.weight_scaling}, {"weight_scaling_forces", &o.weight_scaling_forces}, {"iteration_limit", &o.iteration_limit}};
-    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}};
+    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}};
 
     for (const auto& [key, value] : options) {
         if (key == "log")

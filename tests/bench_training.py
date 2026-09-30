@@ -15,6 +15,9 @@ divide N; the port's does not, so mlp at other R is timed but not compared. Keep
 less: rounding differences grow through the BFGS, and past about 45 steps they separate even
 mlp on 1 rank from mlp on 4 ranks, which fit the same loss.
 
+An untrained potential (an mlip-3 template) logs 75 pre-training steps first, over which
+rounding separates even mlp's runs; tests/check_training.py gates the untrained paths.
+
     python tests/bench_training.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
 """
 
@@ -28,7 +31,7 @@ from tempfile import TemporaryDirectory
 
 import numpy
 
-from otf_engine._mtp import MTPCalculator
+from otf_engine._mtp import MTPCalculator, PairMTP
 from otf_engine.io_cfg import read_cfg
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
@@ -86,6 +89,7 @@ def main():
     parser.add_argument("--ranks", type=int, nargs="+", default=[1])
     parser.add_argument("--arms", nargs="+", default=["mlp", "port"], choices=["mlp", "port"])
     parser.add_argument("--tol", type=float, default=1e-5, help="relative tolerance on logged losses (default 1e-5)")
+    parser.add_argument("--options", nargs="+", default=[], help="further mlp train options for both arms, without the leading --, e.g. skip_preinit=true")
     args = parser.parse_args()
     potential = args.potential.resolve()
 
@@ -95,17 +99,18 @@ def main():
         extract_cfgs(args.cfg, args.n_structures, train_cfg)
         with open(train_cfg) as f:
             structs = read_cfg(f)
-        e0, f0 = rmse(potential, structs)
-        print(f"{len(structs)} structures, {sum(len(a) for a in structs)} atoms, {args.iterations} iterations; starting RMSE E {e0:.6e} eV/atom, F {f0:.6e} eV/A")
+        start = "untrained" if not PairMTP(str(potential)).is_trained() else "starting RMSE E {:.6e} eV/atom, F {:.6e} eV/A".format(*rmse(potential, structs))
+        print(f"{len(structs)} structures, {sum(len(a) for a in structs)} atoms, {args.iterations} iterations; {start}")
 
         runs = {}
         for arm in args.arms:
             for ranks in args.ranks:
                 out = workdir / f"{arm}_{ranks}.almtp"
+                options = [f"--save_to={out}", f"--iteration_limit={args.iterations}"] + [f"--{option}" for option in args.options]
                 if arm == "mlp":
-                    cmd = ([] if ranks == 1 else ["mpirun", "-np", str(ranks)]) + [str(MLP), "train", str(potential), str(train_cfg), f"--save_to={out}", f"--iteration_limit={args.iterations}"]
+                    cmd = ([] if ranks == 1 else ["mpirun", "-np", str(ranks)]) + [str(MLP), "train", str(potential), str(train_cfg)] + options
                 else:
-                    cmd = [sys.executable, "-m", "otf_engine.train", str(potential), str(train_cfg), f"--save_to={out}", f"--iteration_limit={args.iterations}", f"--ranks={ranks}"]
+                    cmd = [sys.executable, "-m", "otf_engine.train", str(potential), str(train_cfg), f"--ranks={ranks}"] + options
                 r = runs[arm, ranks] = run_logged(cmd, workdir)
                 steps = len(r["times"]) - 1
                 per_iter = (r["times"][-1] - r["times"][0]) / steps if steps > 0 else float("nan")

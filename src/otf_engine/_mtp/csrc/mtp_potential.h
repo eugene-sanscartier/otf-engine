@@ -48,6 +48,8 @@ class PairMTP {
     double get_min_cutoff() const { return min_cutoff; }
     double get_max_cutoff() const { return max_cutoff; }
     double get_scaling() const { return scaling; }
+    // False for a file without coefficients, which holds mlip-3's defaults.
+    bool is_trained() const { return trained; }
     const std::string& get_potential_name() const { return potential_name; }
     const std::string& get_radial_basis_type() const { return radial_basis_type; }
 
@@ -67,6 +69,14 @@ class PairMTP {
     void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
     // Mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(training distances).
     void set_min_cutoff(double d) { min_cutoff = d; radial_basis->min_cutoff = d; }
+    void set_trained(bool t) { trained = t; }
+    // Sizes the coefficients for n species; set them afterwards.
+    void set_species_count(int n) {
+        species_count = n;
+        radial_coeff_count = n * n * radial_coeff_count_per_pair;
+        radial_basis_coeffs.resize(radial_coeff_count);
+        species_coeffs.resize(n);
+    }
 
   protected:
     void read_file(std::istream& is);
@@ -77,6 +87,7 @@ class PairMTP {
 
     int species_count = 0;
     double scaling = 1.0;
+    bool trained = true;
 
     // Radial basis
     RadialMTPBasis* radial_basis = nullptr;

@@ -343,11 +343,12 @@ void PairMTP::read_file(std::istream& is) {
         tfr.advance();
     }
 
-    if (tfr.keyword() != "species_count")
-        throw std::runtime_error("PairMTP: species count not found");
-    tfr.rest() >> species_count;
-
-    tfr.advance();
+    // An untrained potential may omit the species count, the radial coeffs
+    // and the linear coeffs; mlip-3's MLMTPR::Load gives them defaults.
+    if (tfr.keyword() == "species_count") {
+        tfr.rest() >> species_count;
+        tfr.advance();
+    }
 
     // Read the potential tag (also optional field)
     if (tfr.keyword() == "potential_tag") {
@@ -387,8 +388,6 @@ void PairMTP::read_file(std::istream& is) {
     tfr.advance();
     if (tfr.keyword() == "magnetic_basis_type")
         throw std::runtime_error("PairMTP: magnetic basis is currently not supported");
-    if (tfr.keyword() != "radial_coeffs")
-        throw std::runtime_error("PairMTP: cannot read radial coeffs");
 
     // Allocate memory for radial basis
     const int pairs_count = species_count * species_count;
@@ -396,8 +395,20 @@ void PairMTP::read_file(std::istream& is) {
     radial_coeff_count = pairs_count * radial_coeff_count_per_pair;
     radial_basis_coeffs.resize(radial_coeff_count);
 
+    const bool has_radial_coeffs = tfr.keyword() == "radial_coeffs";
+    if (!has_radial_coeffs) {
+        trained = false;
+        for (int p = 0; p < pairs_count; p++)
+            for (int i = 0; i < radial_func_count; i++) {
+                double* c = radial_basis_coeffs.data() + p * radial_coeff_count_per_pair + i * radial_basis_size;
+                for (int j = 0; j < radial_basis_size; j++)
+                    c[j] = 1e-6 + i * 1e-7 + j * 1e-7;
+                c[std::min(i, radial_basis_size)] = 1e-3 * (p + 1) + i * 1e-4;
+            }
+    }
+
     // Read the radial basis coeffs
-    for (int i = 0; i < pairs_count; i++) {
+    for (int i = 0; has_radial_coeffs && i < pairs_count; i++) {
         // pair-type label "0-1"; '-' is a separator only on this line, since
         // the coefficient lines below carry negative numbers
         if (!tfr.next_line("-"))
@@ -418,7 +429,10 @@ void PairMTP::read_file(std::istream& is) {
         }
     }
 
-    alpha_moment_count = tfr.next_int("alpha_moments_count");
+    if (has_radial_coeffs)
+        alpha_moment_count = tfr.next_int("alpha_moments_count");
+    else if (tfr.keyword() != "alpha_moments_count" || !(tfr.rest() >> alpha_moment_count))
+        throw std::runtime_error("PairMTP: cannot read radial coeffs");
     moment_tensor_vals.resize(alpha_moment_count);
     nbh_energy_ders_wrt_moments.resize(alpha_moment_count);
 
@@ -469,18 +483,19 @@ void PairMTP::read_file(std::istream& is) {
                 throw std::runtime_error("PairMTP: not enough values in alpha_moment_mapping");
     }
 
-    tfr.expect("species_coeffs");
-    species_coeffs.resize(species_count);
-    {
-        std::istringstream ss = tfr.rest();
+    if (!tfr.next_line() || tfr.keyword() != "species_coeffs") {
+        trained = false;
+        species_coeffs.assign(species_count, 1e-3);
+        linear_coeffs.assign(alpha_scalar_count, 1e-3);
+    } else {
+        species_coeffs.resize(species_count);
+        std::istringstream species_ss = tfr.rest();
         for (int i = 0; i < species_count; i++)
-            if (!(ss >> species_coeffs[i]))
+            if (!(species_ss >> species_coeffs[i]))
                 throw std::runtime_error("PairMTP: not enough species coefficients");
-    }
 
-    tfr.expect("moment_coeffs");
-    linear_coeffs.resize(alpha_scalar_count);
-    {
+        tfr.expect("moment_coeffs");
+        linear_coeffs.resize(alpha_scalar_count);
         std::istringstream ss = tfr.rest();
         for (int i = 0; i < alpha_scalar_count; i++)
             if (!(ss >> linear_coeffs[i]))

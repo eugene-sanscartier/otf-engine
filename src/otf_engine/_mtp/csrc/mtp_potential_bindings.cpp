@@ -87,6 +87,7 @@ xx,yy,zz,xy,xz,yz, and "eatom" (n_atoms) when compute_eatom is True.
              "Update radial basis minimum distance. Mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(training distances).")
         .def("get_scaling", &PairMTP::get_scaling)
         .def("set_scaling", &PairMTP::set_scaling, py::arg("scaling"), "Set the global scaling parameter.")
+        .def("is_trained", &PairMTP::is_trained, "False for a file without coefficients, which holds mlip-3's defaults.")
         .def("get_potential_name", &PairMTP::get_potential_name)
         .def("get_radial_basis_type", &PairMTP::get_radial_basis_type)
 

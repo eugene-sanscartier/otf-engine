@@ -19,7 +19,8 @@ def write_mtp(potential, filename, template_filename=None):
 
     The current implementation writes the canonical file structure expected by
     PairMTP::read_file(). If template_filename is provided, it is accepted
-    for API compatibility but not required.
+    for API compatibility but not required. An untrained potential is written
+    without its species count and coefficients, as mlip-3 writes it.
     """
     path = Path(filename)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,13 +35,15 @@ def write_mtp(potential, filename, template_filename=None):
     species_count = potential.get_species_count()
     radial_func_count = potential.get_radial_func_count()
     radial_basis_size = potential.get_radial_basis_size()
+    trained = potential.is_trained()
 
     with path.open("w", encoding="utf-8") as stream:
         stream.write("MTP\n")
         stream.write("version = 1.1.0\n")
         stream.write(f"potential_name = {potential.get_potential_name()}\n")
         stream.write(f"scaling = {potential.get_scaling():.17g}\n")
-        stream.write(f"species_count = {species_count}\n")
+        if trained:
+            stream.write(f"species_count = {species_count}\n")
         stream.write("potential_tag = \n")
         stream.write(f"radial_basis_type = {potential.get_radial_basis_type()}\n")
         stream.write(f"\tmin_dist = {potential.get_min_cutoff():.17g}\n")
@@ -49,7 +52,7 @@ def write_mtp(potential, filename, template_filename=None):
         stream.write(f"\tradial_funcs_count = {radial_func_count}\n")
         stream.write("\tradial_coeffs\n")
 
-        pair_count = species_count * species_count
+        pair_count = species_count * species_count if trained else 0
         for pair_index in range(pair_count):
             i = pair_index // species_count
             j = pair_index % species_count
@@ -66,5 +69,6 @@ def write_mtp(potential, filename, template_filename=None):
         stream.write("alpha_index_times = {" + ", ".join("{" + _format_ints(row) + "}" for row in alpha_index_times) + "}\n")
         stream.write(f"alpha_scalar_moments = {potential.get_alpha_scalar_count()}\n")
         stream.write("alpha_moment_mapping = {" + _format_ints(alpha_moment_mapping) + "}\n")
-        stream.write("species_coeffs = {" + _format_floats(species_coeffs) + "}\n")
-        stream.write("moment_coeffs = {" + _format_floats(linear_coeffs) + "}\n")
+        if trained:
+            stream.write("species_coeffs = {" + _format_floats(species_coeffs) + "}\n")
+            stream.write("moment_coeffs = {" + _format_floats(linear_coeffs) + "}\n")
