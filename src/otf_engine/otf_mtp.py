@@ -170,7 +170,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
     deferred = []
     gammas_evaluated = []
     max_forces_evaluated = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=None if parallel else 1) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=n if parallel else 1) as executor:
         futures = {executor.submit(_eval_one, i, s, evaluator_fn, launcher, force_threshold): i for i, s in enumerate(selected_structures)}
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
             i = futures[future]
