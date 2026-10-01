@@ -16,11 +16,10 @@ CYCLE_PREFIX = "cycle_"
 STATUS_FILE = "status"
 LOG_FILE = "otf.log"
 LOG_FORMAT = "%(levelname)s %(module)s:%(funcName)s: %(message)s"
+TRAIN_LOG = "mlip_train.log"
 
-_CYCLE_ARTIFACTS_MOVE = ("mlip_train.log", )
+_CYCLE_ARTIFACTS_MOVE = (TRAIN_LOG, )
 _CYCLE_ARTIFACTS_COPY = ("otf_state.json", )
-
-_current: Path | None = None
 
 
 def _cycle_indices(base_dir: Path = CYCLE_BASE) -> list[int]:
@@ -44,17 +43,11 @@ def last_successful_cycle_dir(base_dir: Path = CYCLE_BASE) -> Path | None:
     return None
 
 
-def current_cycle_dir() -> Path | None:
-    """Return the active cycle directory, or None if next_cycle_dir() has not been called."""
-    return _current
-
-
 def next_cycle_dir(base_dir: Path = CYCLE_BASE) -> Path:
-    """Create the next cycle directory, register it as current, and return it."""
-    global _current
-    _current = base_dir / f"{CYCLE_PREFIX}{_last_cycle_number(base_dir) + 1}"
-    _current.mkdir(parents=True, exist_ok=True)
-    return _current
+    """Create the next cycle directory and return it."""
+    cycle_dir = base_dir / f"{CYCLE_PREFIX}{_last_cycle_number(base_dir) + 1}"
+    cycle_dir.mkdir(parents=True, exist_ok=True)
+    return cycle_dir
 
 
 def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files: list[str], ok: bool) -> None:

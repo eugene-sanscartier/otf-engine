@@ -148,7 +148,7 @@ def _join(parts: list[str]) -> str:
     return " ".join(parts)
 
 
-# Used to strip task/node parallelism options from batch_args when parallel_eval=False for slurm sbatch.
+# Used to strip task/node parallelism options from batch_args for a single_rank slurm job.
 _sbatch_parser = argparse.ArgumentParser(add_help=False)
 _sbatch_parser.add_argument("--ntasks", "-n")
 _sbatch_parser.add_argument("--ntasks-per-node")
@@ -170,20 +170,14 @@ def _seconds_to_hms(s: float) -> str:
 
 
 def _hms_to_seconds(t: str) -> float | None:
-    """Parse a Slurm time string (MM, MM:SS, HH:MM:SS, D-HH:MM:SS) into seconds."""
+    """Parse a Slurm time string (M, M:S, H:M:S, D-H, D-H:M, D-H:M:S) into seconds; None for any other."""
     try:
-        t = t.strip()
-        days = 0
-        if "-" in t:
-            d, t = t.split("-", 1)
-            days = int(d)
-        parts = t.split(":")
-        if len(parts) == 1:
-            return float(days * 86400 + int(parts[0]) * 60)
-        elif len(parts) == 2:
-            return float(days * 86400 + int(parts[0]) * 3600 + int(parts[1]) * 60)
-        else:
-            return float(days * 86400 + int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2]))
+        days, _, clock = t.strip().rpartition("-")
+        parts = [int(p) for p in clock.split(":")]
+        if days: parts += [0] * (3 - len(parts))
+        elif len(parts) < 3: parts = [0] + parts + [0] * (2 - len(parts))
+        h, m, s = parts
+        return float(int(days or 0) * 86400 + h * 3600 + m * 60 + s)
     except (ValueError, TypeError):
         return None
 
@@ -301,7 +295,8 @@ class TimingState:
 
     @classmethod
     def load(cls, data: dict, initial_time_s: float | None = None, on_record=None) -> TimingState:
-        return cls(dict(data), initial_time_s=initial_time_s, on_record=on_record)
+        """Load the observations in *data*; cycle_times() covers only what the new instance records."""
+        return cls({kind: data[kind] for kind in ("eval", "train") if kind in data}, initial_time_s=initial_time_s, on_record=on_record)
 
     @synchronized
     def record_eval(self, elapsed_s: float, timed_out: bool, allocated_s: float | None):
@@ -348,7 +343,12 @@ class TimingState:
 
     @synchronized
     def to_dict(self) -> dict:
-        return {**self._d, **self._last_eval, **self._last_train}
+        return dict(self._d)
+
+    @synchronized
+    def cycle_times(self) -> dict:
+        """The longest evaluation and the last training recorded since loading, with the limits they were given."""
+        return {"eval_time_s": None, "eval_time_alloc_s": None, "train_time_s": None, "train_time_alloc_s": None, **self._last_eval, **self._last_train}
 
     def _compute_estimates(self):
         obs = self._d.get("eval", {}).get("observations", [])
@@ -433,7 +433,7 @@ class MemoryState:
 class Launcher(ABC):
     """Abstract execution backend.
 
-    Subclasses implement ``_run_impl()`` and optionally ``_call_evaluator_impl()``.
+    Subclasses implement ``_run_impl()`` and optionally ``_child_env()`` and ``_run_evaluator()``.
     The public ``run()`` and ``call_evaluator()`` are concrete template methods that
     handle timing instrumentation via an optional ``TimingState``.
     """
@@ -460,14 +460,14 @@ class Launcher(ABC):
 
         self.memory = MemoryState.load(state.get("memory", {}), ceiling_mb=getattr(self, "_mem_ceiling_mb", None), on_record=_on_record)
 
-    def run(self, command: str, log_file: str, parallel_eval: bool = True, training_set_size: int | None = None, _backoff: int | None = None) -> None:
+    def run(self, command: str, log_file: str, single_rank: bool = False, training_set_size: int | None = None, _backoff: int | None = None) -> None:
         """Execute *command* with optional timing instrumentation and retry on timeout or OOM.
 
         Parameters
         ----------
         command:            mlp binary + subcommand + args (no runner prefix).
         log_file:           Append combined stdout/stderr here.
-        parallel_eval:      When True, use full parallelism; False restricts to one process.
+        single_rank:        Run the command as one rank (one MPI process, one Slurm task) instead of the launcher's full parallelism.
         training_set_size:  Number of training structures — used for time estimation.
         """
         if _backoff is None: _backoff = self.max_retries
@@ -476,41 +476,49 @@ class Launcher(ABC):
             logger.info(f"Training time estimate: {_seconds_to_hms(time_s)} for {training_set_size} structures")
         t0 = time.monotonic()
         try:
-            self._run_impl(command, log_file, parallel_eval, time_limit_s=time_s)
+            self._run_impl(command, log_file, single_rank, time_limit_s=time_s)
         except JobTimedOut:
             elapsed = time.monotonic() - t0
-            logger.warning(f"Training timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s)} allocated)")
+            # Without a --time of its own the job died at the partition's limit, which elapsed bounds from above.
+            limit_s = time_s or elapsed
+            logger.warning(f"Training timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s) if time_s else 'the partition default'} allocated)")
             if self.timing:
-                self.timing.record_train(elapsed, training_set_size, True, time_s)
+                self.timing.record_train(elapsed, training_set_size, True, limit_s)
             if _backoff > 0:
                 logger.info(f"Retrying training with new estimate ({_backoff} left)...")
-                return self.run(command, log_file, parallel_eval, training_set_size, _backoff=_backoff - 1)
+                return self.run(command, log_file, single_rank, training_set_size, _backoff=_backoff - 1)
             raise
         except JobOutOfMemory:
             if _backoff > 0:
                 logger.info(f"Retrying training with a larger memory request ({_backoff} left)...")
-                return self.run(command, log_file, parallel_eval, training_set_size, _backoff=_backoff - 1)
+                return self.run(command, log_file, single_rank, training_set_size, _backoff=_backoff - 1)
             raise
         elapsed = time.monotonic() - t0
         if self.timing:
             self.timing.record_train(elapsed, training_set_size, False, time_s)
 
     @abstractmethod
-    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
+    def _run_impl(self, command: str, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
         """Backend-specific command execution."""
 
-    def command_prefix(self, _parallel_eval: bool = True) -> str:
+    def command_prefix(self, _single_rank: bool = False) -> str:
         """Full command prefix injected as ``COMMAND_PREFIX`` before calling the evaluator."""
         return ""
 
-    def batch_prefix(self, _chdir: str, _log_file: str, _parallel_eval: bool = True) -> str:
+    def batch_prefix(self, _chdir: str, _log_file: str, _single_rank: bool = False, _time_limit_s: float | None = None, _mem_mb: float | None = None) -> str:
         """Batch submission prefix: everything before ``--wrap="cmd"``."""
         return ""
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, timed_out_at_s: float | None = None):
+    def _child_env(self, _single_rank: bool = False) -> dict:
+        """Environment of a process this launcher starts."""
+        return dict(os.environ)
+
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, timed_out_at_s: float | None = None, single_rank: bool = False):
         """Evaluate *structure* inside *eval_dir* with optional timing instrumentation, once; a timeout or OOM raises.
 
+        evaluator_fn   : called in-process when given; without it ./evaluator.py runs on the structure
         timed_out_at_s : the limit this structure last timed out at; it is given at least ``timeout_f`` times that
+        single_rank    : run the evaluator's program as one rank
         """
         time_s = self.timing.estimate_eval() if self.timing else None
         if timed_out_at_s: time_s = max(time_s or 0.0, TimingState.timeout_f * timed_out_at_s)
@@ -518,29 +526,49 @@ class Launcher(ABC):
             logger.info(f"Eval time estimate: {_seconds_to_hms(time_s)} per structure")
         t0 = time.monotonic()
         try:
-            result = self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
+            result = self._call_evaluator_impl(evaluator_fn, structure, eval_dir, single_rank, time_limit_s=time_s)
         except JobTimedOut as e:
             elapsed = time.monotonic() - t0
-            logger.warning(f"Eval timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s)} allocated)")
+            # Without a --time of its own the job died at the partition's limit, which elapsed bounds from above.
+            limit_s = time_s or elapsed
+            logger.warning(f"Eval timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s) if time_s else 'the partition default'} allocated)")
             if self.timing:
-                self.timing.record_eval(elapsed, True, time_s)
-            e.time_limit_s = time_s
+                self.timing.record_eval(elapsed, True, limit_s)
+            e.time_limit_s = limit_s
             raise
         elapsed = time.monotonic() - t0
         if self.timing:
             self.timing.record_eval(elapsed, False, time_s)
         return result
 
-    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
-        """Default evaluator dispatch: cd into eval_dir, call evaluator_fn directly."""
+    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None):
+        """Call evaluator_fn on structure inside eval_dir, or without one run ./evaluator.py on it there, with ``COMMAND_PREFIX`` set."""
+        import ase.io.extxyz
         eval_dir.mkdir(parents=True, exist_ok=True)
+        if evaluator_fn is None:
+            ase.io.extxyz.write_extxyz(eval_dir / "input_structure.extxyz", [structure])
+            self._run_evaluator(_join([sys.executable, os.path.relpath("evaluator.py", eval_dir), "input_structure.extxyz", "output_structure.extxyz"]), eval_dir, single_rank, time_limit_s)
+            with open(eval_dir / "output_structure.extxyz") as f:
+                return next(ase.io.extxyz.read_extxyz(f))
+
         prev = os.getcwd()
         os.chdir(eval_dir)
+        saved = dict(os.environ)
+        os.environ.clear()
+        os.environ.update(self._child_env(single_rank), COMMAND_PREFIX=self.command_prefix(single_rank))
 
         try:
             return evaluator_fn(structure)
         finally:
             os.chdir(prev)
+            os.environ.clear()
+            os.environ.update(saved)
+
+    def _run_evaluator(self, command: str, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None) -> None:
+        """Run the evaluator script's *command* inside eval_dir, appending its output to eval.log."""
+        env = {**self._child_env(single_rank), "COMMAND_PREFIX": self.command_prefix(single_rank)}
+        with open(eval_dir / "eval.log", "a") as log_f:
+            subprocess.run(command, shell=True, cwd=eval_dir, env=env, text=True, stdout=log_f, stderr=subprocess.STDOUT, check=True)
 
     @property
     def concurrent_eval(self) -> bool:
@@ -554,7 +582,7 @@ class Launcher(ABC):
 
 
 class NestedLauncher(Launcher):
-    """Wrap mlp calls with ``mpirun``; passes ``-n 1`` when ``parallel_eval=False``."""
+    """Wrap mlp calls with ``mpirun``; passes ``-n 1`` for a ``single_rank`` call."""
 
     def __init__(self, runner_exec: str = "mpirun", runner_args: str = ""):
         if any(t in ("-n", "-np") for t in runner_args.split()):
@@ -563,36 +591,22 @@ class NestedLauncher(Launcher):
         self._runner_exec = runner_exec
         self.runner_args = runner_args
 
-    def command_prefix(self, parallel_eval: bool = True) -> str:
+    def command_prefix(self, single_rank: bool = False) -> str:
         command_parts = [self._runner_exec]
-        if not parallel_eval: command_parts += ["-n 1"]
+        if single_rank: command_parts += ["-n 1"]
         if self.runner_args: command_parts += [self.runner_args]
 
         return _join(command_parts)
 
-    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
-        cmd = f"{self.command_prefix(parallel_eval)} {command}"
+    def _child_env(self, single_rank: bool = False) -> dict:
+        return _env_for_nested(os.environ)
+
+    def _run_impl(self, command: str, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
+        cmd = f"{self.command_prefix(single_rank)} {command}"
         logger.info(f"running: {cmd}")
 
         with open(log_file, "a") as file_obj:
-            subprocess.run(cmd, shell=True, text=True, env=_env_for_nested(os.environ), stdout=file_obj, stderr=subprocess.STDOUT, check=True)
-
-    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
-        eval_dir.mkdir(parents=True, exist_ok=True)
-        prev = os.getcwd()
-        os.chdir(eval_dir)
-        saved = dict(os.environ)
-        new_env = _env_for_nested(os.environ)
-        new_env["COMMAND_PREFIX"] = self.command_prefix()
-        os.environ.clear()
-        os.environ.update(new_env)
-
-        try:
-            return evaluator_fn(structure)
-        finally:
-            os.chdir(prev)
-            os.environ.clear()
-            os.environ.update(saved)
+            subprocess.run(cmd, shell=True, text=True, env=self._child_env(single_rank), stdout=file_obj, stderr=subprocess.STDOUT, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -608,11 +622,11 @@ class ForkLauncher(Launcher):
     when available, otherwise from ``os.cpu_count()``.
     """
 
-    def __init__(self, parallel_eval: bool = True):
-        self._parallel_eval = parallel_eval
+    def _child_env(self, single_rank: bool = False) -> dict:
+        return _env_for_fork(1 if single_rank else _default_n_procs(), os.environ)
 
-    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
-        n_procs = _default_n_procs() if parallel_eval else 1
+    def _run_impl(self, command: str, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
+        n_procs = 1 if single_rank else _default_n_procs()
         child_env = _env_for_fork(n_procs, os.environ)
 
         with open(log_file, "a") as log_f:
@@ -621,23 +635,6 @@ class ForkLauncher(Launcher):
                 ret = p.wait()
                 if ret != 0:
                     raise subprocess.CalledProcessError(ret, command)
-
-    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
-        eval_dir.mkdir(parents=True, exist_ok=True)
-        prev = os.getcwd()
-        os.chdir(eval_dir)
-        saved = dict(os.environ)
-        new_env = _env_for_fork(_default_n_procs() if self._parallel_eval else 1, os.environ)
-        new_env["COMMAND_PREFIX"] = self.command_prefix()
-        os.environ.clear()
-        os.environ.update(new_env)
-
-        try:
-            return evaluator_fn(structure)
-        finally:
-            os.chdir(prev)
-            os.environ.clear()
-            os.environ.update(saved)
 
 
 # ---------------------------------------------------------------------------
@@ -649,18 +646,17 @@ class SlurmLauncher(Launcher):
     """Submit mlp calls and evaluator jobs via ``sbatch --wait --wrap="cmd"``.
 
     Each ``launcher.run()`` call submits one Slurm batch job and blocks until
-    it finishes (``--wait``).  Structure evaluations invoke ``evaluator.py``
+    it finishes (``--wait``).  Structure evaluations always invoke ``evaluator.py``
     directly as a script (requires an ``if __name__ == "__main__":`` block
-    with argparse in ``evaluator.py``).
+    with argparse in ``evaluator.py``); an ``evaluator_fn`` is not called.
 
     Structure evaluations are submitted concurrently by default
     (``concurrent_eval=True``): all sbatch jobs are submitted simultaneously
     from separate threads, each blocking on ``--wait``.  MPI parallelism is
     controlled by the job's resource allocation via ``batch_args``.
 
-    ``COMMAND_PREFIX`` (``runner_exec``, default ``"srun"``) is set in the parent
-    environment before submission and inherited by child jobs — ``evaluator.py``
-    reads it via ``build_command()``.
+    ``COMMAND_PREFIX`` (``runner_exec``, default ``"srun"``) is set on each
+    evaluation job's command line — ``evaluator.py`` reads it via ``build_command()``.
 
     **Python environment requirement**: ``sys.executable`` must be on a shared
     filesystem accessible from all compute nodes (NFS/Lustre, /home, /project).
@@ -702,16 +698,16 @@ class SlurmLauncher(Launcher):
     def concurrent_eval(self) -> bool:
         return self._concurrent_eval
 
-    def command_prefix(self, parallel_eval: bool = True) -> str:
+    def command_prefix(self, single_rank: bool = False) -> str:
         command_parts = [self._runner_exec]
-        if not parallel_eval: command_parts += ["-n 1"]
+        if single_rank: command_parts += ["-n 1"]
         if self.runner_args: command_parts += [self.runner_args]
         return _join(command_parts)
 
-    def batch_prefix(self, chdir: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None, mem_mb: float | None = None) -> str:
+    def batch_prefix(self, chdir: str, log_file: str, single_rank: bool = False, time_limit_s: float | None = None, mem_mb: float | None = None) -> str:
         batch_parts = [self.batch_exec, "--wait", f"--chdir={chdir}", f"--output={log_file}"]
         batch_args = shlex.split(self.batch_args)
-        if not parallel_eval:
+        if single_rank:
             _, batch_args = _sbatch_parser.parse_known_args(batch_args)
             batch_args += ["--ntasks=1", "--nodes=1"]
 
@@ -753,41 +749,32 @@ class SlurmLauncher(Launcher):
         else: logger.error(f"{kind} job ran out of memory at --mem={math.ceil(next_mb)}M, the ceiling set by --mem in batch_args — raise it to continue")
         return False
 
-    def _run_impl(self, command: str, log_file: str, parallel_eval: bool = True, time_limit_s: float | None = None) -> None:
-        mem_mb = self.memory.estimate("train") if self.memory else None
-        cmd = f"{self.command_prefix(parallel_eval)} {command}"
-        submit_cmd = f'{self.batch_prefix(os.getcwd(), log_file, parallel_eval, time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{cmd}"'
-        logger.info(f"running: {submit_cmd}")
+    def _submit(self, kind: str, command: str, chdir, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
+        """Submit *command* as one job of *kind* ("train" or "eval") and wait for it, recording its memory use.
+
+        A timeout raises JobTimedOut, an OOM that a larger ``--mem`` can still fix JobOutOfMemory, any other failure CalledProcessError.
+        """
+        mem_mb = self.memory.estimate(kind) if self.memory else None
+        submit_cmd = f'{self.batch_prefix(chdir, log_file, single_rank, time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{command}"'
+        logger.info(f"running ({kind}): {submit_cmd}")
         proc, job_id = self._submit_and_wait(submit_cmd)
 
         oom, used_mb = _sacct_job(job_id) if job_id else (False, None)
-        if self.memory and used_mb: self.memory.record("train", used_mb)
+        if self.memory and used_mb: self.memory.record(kind, used_mb)
 
         if proc.returncode != 0:
             exc = subprocess.CalledProcessError(proc.returncode, submit_cmd)
-            if _is_slurm_timeout(log_file): raise JobTimedOut(exc.returncode, exc.cmd) from exc
-            if (oom or _is_slurm_oom(log_file)) and self._escalate_mem("train", mem_mb, used_mb): raise JobOutOfMemory(exc.returncode, exc.cmd) from exc
+            log_path = Path(chdir) / log_file
+            if _is_slurm_timeout(log_path): raise JobTimedOut(exc.returncode, exc.cmd) from exc
+            if (oom or _is_slurm_oom(log_path)) and self._escalate_mem(kind, mem_mb, used_mb): raise JobOutOfMemory(exc.returncode, exc.cmd) from exc
             raise exc
 
-    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, time_limit_s: float | None = None):
-        import ase.io.extxyz
-        eval_dir.mkdir(parents=True, exist_ok=True)
-        ase.io.extxyz.write_extxyz(os.path.join(eval_dir, "input_structure.extxyz"), [structure])
-        os.environ["COMMAND_PREFIX"] = self.command_prefix()
-        evaluator_py = os.path.relpath("evaluator.py", eval_dir)
-        eval_cmd = _join([sys.executable, evaluator_py, "input_structure.extxyz", "output_structure.extxyz"])
-        mem_mb = self.memory.estimate("eval") if self.memory else None
-        submit_cmd = f'{self.batch_prefix(eval_dir, "eval.log", time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{eval_cmd}"'
-        logger.info(f"running (eval): {submit_cmd}")
-        proc, job_id = self._submit_and_wait(submit_cmd)
+    def _run_impl(self, command: str, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
+        self._submit("train", f"{self.command_prefix(single_rank)} {command}", os.getcwd(), log_file, single_rank, time_limit_s)
 
-        oom, used_mb = _sacct_job(job_id) if job_id else (False, None)
-        if self.memory and used_mb: self.memory.record("eval", used_mb)
+    def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None):
+        """Run ./evaluator.py as a job of its own; evaluator_fn is not called."""
+        return super()._call_evaluator_impl(None, structure, eval_dir, single_rank, time_limit_s)
 
-        if proc.returncode != 0:
-            exc = subprocess.CalledProcessError(proc.returncode, submit_cmd)
-            if _is_slurm_timeout(eval_dir / "eval.log"): raise JobTimedOut(exc.returncode, exc.cmd) from exc
-            if (oom or _is_slurm_oom(eval_dir / "eval.log")) and self._escalate_mem("eval", mem_mb, used_mb): raise JobOutOfMemory(exc.returncode, exc.cmd) from exc
-            raise exc
-        with open(os.path.join(eval_dir, "output_structure.extxyz")) as f:
-            return next(ase.io.extxyz.read_extxyz(f))
+    def _run_evaluator(self, command: str, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None) -> None:
+        self._submit("eval", f"COMMAND_PREFIX={shlex.quote(self.command_prefix(single_rank))} {command}", eval_dir, "eval.log", single_rank, time_limit_s)

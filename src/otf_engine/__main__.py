@@ -74,7 +74,6 @@ def main():
     spec = importlib.util.spec_from_file_location("evaluator", "evaluator.py")
     evaluator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(evaluator)
-    os.environ["COMMAND_PREFIX"] = launcher.command_prefix()
 
     cycle_dir = next_cycle_dir()
     log_path = cycle_dir / LOG_FILE
