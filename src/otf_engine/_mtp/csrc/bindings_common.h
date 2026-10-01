@@ -6,6 +6,7 @@
      mtp_extrapolation_bindings.cpp <- mtp_extrapolation.{h,cpp}
      mtp_training_bindings.cpp      <- mtp_training.{h,cpp}
      mtp_trainer_bindings.cpp       <- mtp_trainer.{h,cpp}
+     maxvol_bindings.cpp            <- maxvol.{h,cpp}
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -105,3 +106,4 @@ void bind_potential(py::module_& m);
 void bind_extrapolation(py::module_& m);
 void bind_training(py::module_& m);
 void bind_trainer(py::module_& m);
+void bind_maxvol(py::module_& m);

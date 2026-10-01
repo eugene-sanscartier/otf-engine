@@ -10,7 +10,6 @@ from dataclasses import KW_ONLY, dataclass
 from pathlib import Path
 
 import numpy
-from threadpoolctl import threadpool_limits
 
 import ase
 import ase.io.lammpsrun
@@ -47,7 +46,7 @@ MAX_STRUCTURES_PER_DUMP = 10000
 
 
 def grade_dump(dump, potential, species=None):
-    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them on one BLAS thread."""
+    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them on one thread."""
     with open(dump) as dump_file:
         structures = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
 
@@ -58,9 +57,7 @@ def grade_dump(dump, potential, species=None):
     for atoms in structures:
         atoms.arrays["type_index"] = (atoms.arrays["type"] - 1).astype(numpy.int32)
 
-    # Dumps are graded side by side, one per core; more BLAS threads would oversubscribe the cores.
-    with threadpool_limits(1, user_api="blas"):
-        calculate_grade(potential, structures)
+    calculate_grade(potential, structures)
     return structures
 
 

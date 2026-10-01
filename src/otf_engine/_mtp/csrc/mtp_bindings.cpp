@@ -31,4 +31,5 @@ PYBIND11_MODULE(_mtp_ext, m) {
     bind_extrapolation(m);
     bind_training(m);
     bind_trainer(m);
+    bind_maxvol(m);
 }

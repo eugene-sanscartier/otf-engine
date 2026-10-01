@@ -17,9 +17,29 @@ add_library(mtp_core STATIC
     ${MTP_CSRC}/mtp_potential.cpp
     ${MTP_CSRC}/mtp_extrapolation.cpp
     ${MTP_CSRC}/mtp_training.cpp
+    ${MTP_CSRC}/maxvol.cpp
 )
 target_include_directories(mtp_core PUBLIC ${MTP_CSRC})
 set_target_properties(mtp_core PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+
+# MaxVol's sweep through Eigen, built portable and, on x86-64, for x86-64-v3 as well; each build
+# names the Eigen namespace its own, so the two share no instantiation.
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+add_library(maxvol_sweep_portable OBJECT ${MTP_CSRC}/maxvol_sweep.cpp)
+target_compile_definitions(maxvol_sweep_portable PRIVATE SWEEP_GRADES=sweep_grades_portable Eigen=Eigen_sweep_portable)
+set(MAXVOL_SWEEPS maxvol_sweep_portable)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_library(maxvol_sweep_v3 OBJECT ${MTP_CSRC}/maxvol_sweep.cpp)
+    target_compile_definitions(maxvol_sweep_v3 PRIVATE SWEEP_GRADES=sweep_grades_v3 Eigen=Eigen_sweep_v3)
+    target_compile_options(maxvol_sweep_v3 PRIVATE -march=x86-64-v3)
+    target_compile_definitions(mtp_core PUBLIC MTP_SWEEP_V3)
+    list(APPEND MAXVOL_SWEEPS maxvol_sweep_v3)
+endif()
+foreach(sweep ${MAXVOL_SWEEPS})
+    target_link_libraries(${sweep} PRIVATE Eigen3::Eigen)
+    set_target_properties(${sweep} PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+    target_sources(mtp_core PRIVATE $<TARGET_OBJECTS:${sweep}>)
+endforeach()
 
 pybind11_add_module(_mtp_ext
     ${MTP_CSRC}/thread_mpi.cpp
@@ -30,6 +50,7 @@ pybind11_add_module(_mtp_ext
     ${MTP_CSRC}/mtp_extrapolation_bindings.cpp
     ${MTP_CSRC}/mtp_training_bindings.cpp
     ${MTP_CSRC}/mtp_trainer_bindings.cpp
+    ${MTP_CSRC}/maxvol_bindings.cpp
 )
 target_link_libraries(_mtp_ext PRIVATE mtp_core Threads::Threads)
 install(TARGETS _mtp_ext DESTINATION otf_engine/_mtp)
