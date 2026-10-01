@@ -166,7 +166,8 @@ static py::object train(const std::string& filename, py::iterable structures, co
 
 PYBIND11_MODULE(_mtp_mpi, m) {
     m.doc() = "MTPTrainer over MPI.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining and NeighList
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining, NeighList, Equations and MaxVol
+    bind_maxvol(m);
 
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), R"doc(
 Train the potential in filename as mlip-3's `mlp train` does, over the ranks of comm, and return it.

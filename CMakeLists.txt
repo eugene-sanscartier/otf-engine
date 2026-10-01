@@ -61,6 +61,7 @@ if(MPI_CXX_FOUND)
         ${MTP_CSRC}/bfgs.cpp
         ${MTP_CSRC}/mtp_trainer.cpp
         ${MTP_CSRC}/mtp_trainer_bindings.cpp
+        ${MTP_CSRC}/maxvol_bindings.cpp
     )
     target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
     target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX)

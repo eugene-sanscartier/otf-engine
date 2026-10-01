@@ -41,11 +41,14 @@ _POOL_TRAIN = 1
 _POOL_CAND = 2
 
 
-def selection_equations(calc: MTPCalculator, structures: list, weights: dict) -> Equations:
-    """The MaxVol equations of *structures* under the calculator's coefficients and the selection *weights*."""
+def selection_equations(calc: MTPCalculator, structures: list, weights: dict, numbers=None) -> Equations:
+    """The MaxVol equations of *structures* under the calculator's coefficients and the selection *weights*.
+
+    numbers : each structure's number in the pool, by default its index
+    """
     eqns = Equations(calc.potential.get_coeff_count(), **weights)
-    for atoms in structures:
-        eqns.add(calc.potential, calc.neighbors(atoms))
+    for number, atoms in zip(numbers or range(len(structures)), structures, strict=True):
+        eqns.add(calc.potential, calc.neighbors(atoms), number)
     return eqns
 
 
@@ -252,19 +255,35 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     else:
         from ._mtp import _mtp_mpi
         pot = _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=lambda pot: write_mtp(pot, save_to))
-        if comm.Get_rank() != 0: return
 
-    write_mtp(pot, save_to)
+    error = None
+    if comm is None or comm.Get_rank() == 0:
+        try:
+            write_mtp(pot, save_to)
+        except Exception as e:
+            error = e
+    _raise_together(comm, error)
 
     # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with
-    if pot.is_trained(): update_active_set(save_to, training_structs, weights=weights)
+    if pot.is_trained(): update_active_set(save_to, training_structs, weights=weights, comm=comm)
 
 
-def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh") -> Equations:
+def _raise_together(comm, error: Exception | None) -> None:
+    """Raise *error* on this rank, and on every other rank of *comm* when any rank has one, so that none is left in a collective."""
+    if comm is not None and comm.allreduce(error is not None) and error is None:
+        raise RuntimeError("another rank failed; its error is raised there")
+    if error is not None: raise error
+
+
+def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh", comm=None) -> Equations:
     """Converge the #MVS_v1.1 active set in *potential* over *training_structs*, seeded from the one saved there.
 
-    Returns the selection equations of *training_structs*, for select_add to reuse.
+    comm : an mpi4py communicator to search over its ranks, each holding the equations of its share of
+           *training_structs*, dealt round-robin. Every rank passes the same arguments, and rank 0 writes *potential*.
+
+    Returns the selection equations of *training_structs*, or under *comm* of this rank's share, for select_add to reuse.
     """
+    rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
     calc = MTPCalculator(potential)
     pot = calc.potential
     try:
@@ -274,7 +293,13 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     if weights is None:
         weights = saved.weights if saved is not None else dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
 
-    train_eqns = selection_equations(calc, training_structs, weights)
+    share = range(rank, len(training_structs), size)
+    error = None
+    try:
+        train_eqns = selection_equations(calc, [training_structs[i] for i in share], weights, share)
+    except Exception as e:
+        error = e
+    _raise_together(comm, error)
 
     # The seed is the saved active equations of structures still in the training set, taken from train_eqns
     # rather than the stored A: stored rows may predate the coefficients, and the search never re-grades an active row.
@@ -287,10 +312,14 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
     mv = MaxVol(pot.get_coeff_count(), threshold=threshold)
-    mv.maximize_volume(seed, pool_id=_POOL_TRAIN)
-    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN)
+    if comm is not None: from ._mtp import _mtp_mpi
+    for pool in (seed, train_eqns):
+        if comm is None: mv.maximize_volume(pool, pool_id=_POOL_TRAIN)
+        else: _mtp_mpi.maximize_volume(mv, pool, _POOL_TRAIN, comm)
 
-    state = _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN)
-    logger.info(f"Active set: {len(state.selected_cfgs)}/{len(training_structs)} active structures, seeded with {len(seed)} equations.")
-    write_mvs_state(potential, state)
+    seeded = len(seed) if comm is None else comm.allreduce(len(seed))
+    if rank == 0:
+        state = _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN)
+        logger.info(f"Active set: {len(state.selected_cfgs)}/{len(training_structs)} active structures, seeded with {seeded} equations.")
+        write_mvs_state(potential, state)
     return train_eqns

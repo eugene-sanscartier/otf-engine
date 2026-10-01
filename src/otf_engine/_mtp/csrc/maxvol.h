@@ -29,7 +29,8 @@ class Equations {
     //   with forces or stress : the raw total energy (with energy_weight), the forces times
     //                           force_weight, the 9 stress components times stress_weight / n_atoms^(weight_scaling/2)
     //   site_en_weight > 0    : the raw site energies, last
-    void add(MTPTraining& pot, const NeighList& list);
+    // structure numbers it; by default the next after the highest so far.
+    void add(MTPTraining& pot, const NeighList& list, int structure = -1);
 
     // The equations whose keep entry is true [size()], under the same structure numbering.
     Equations subset(const bool* keep) const;
@@ -51,6 +52,19 @@ class Equations {
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };
 
+// The ranks a pool of equations is spread over, each holding a share of it and the same active set.
+// The base class is one rank.
+class PoolRanks {
+  public:
+    virtual ~PoolRanks() = default;
+    virtual int rank() const { return 0; }
+    // On entry this rank's best grade and that equation's position, on return the best of every rank,
+    // the lowest position among equal grades, and the rank holding it.
+    virtual void reduce_best(double& grade, double& position, int& owner) {}
+    // Sends row [n] and provenance [3] from owner to every rank.
+    virtual void broadcast(double* row, int n, int* provenance, int owner) {}
+};
+
 class MaxVol {
   public:
     // A = init_scale * I, mlip-3's INIT_VALUE 1e-6; threshold is mlip-3's SELECT_THRESHOLD.
@@ -65,7 +79,9 @@ class MaxVol {
     // max_swaps are made. Each swap puts the equation it displaces from A into pool in its place, with its
     // provenance, so later sweeps grade the displaced one; pool is restored when the search ends.
     // pool_id is recorded as the pool of each of pool's equations that enters A.
-    void maximize_volume(Equations& pool, int pool_id, int max_swaps = 99999);
+    // Over ranks, pool is this rank's share; the swaps, and so A and its provenance, are those of the
+    // whole pool searched on one rank, with its structures added in order.
+    void maximize_volume(Equations& pool, int pool_id, int max_swaps = 99999, PoolRanks* ranks = nullptr);
 
     // Provenance of each active equation, from indices saved beside A.
     void restore_active(const int* cfg_indices, const int* eqn_indices, int pool_id);

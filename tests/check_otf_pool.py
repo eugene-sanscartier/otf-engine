@@ -5,7 +5,8 @@ of --session-size ranks, with otf_pool's operations as extra_ops. On one dump of
 first N structures of a cfg:
   grade_dump       submitted to a session, must give the grades of otf_mtp.grade_dump
   train_potential  as a global operation, must log the losses mtp_backend.train logs on R threads,
-                   to --tol relatively
+                   to --tol relatively, and leave the active set update_active_set finds on one
+                   rank from the same fit: the same active equations, and A to 1e-12 relatively
   OTFCycle         stepped through as pyKMC steps it, grading and training with both, must archive a
                    cycle as ok. Given a missing dump, it must raise on the manager and archive the
                    cycle as failed, and no rank may hang.
@@ -88,8 +89,10 @@ def main():
     args = parser.parse_args()
     if args.worker: return worker(args)
 
+    from otf_engine._mtp import MTPTraining, write_mtp
+    from otf_engine.almtp_io import read_mvs_header, read_mvs_state
     from otf_engine.io_cfg import read_cfg
-    from otf_engine.mtp_backend import train
+    from otf_engine.mtp_backend import train, update_active_set
     from otf_engine.otf_mtp import grade_dump
 
     start = time.perf_counter()
@@ -129,6 +132,16 @@ def main():
             ok = n > 0 and len(losses["threads"]) == len(losses["mpi"]) and rel.max() <= args.tol
             failures += not ok
             print(f"train_potential  {n:4d} logged losses against {args.ranks} threads', max relative difference {rel.max() if n else float('nan'):.1e} — {'match' if ok else 'MISMATCH'}")
+
+            # The fits differ in their linear coefficients (6e-6 relatively), so the reference searches the MPI fit on one rank.
+            write_mtp(MTPTraining(str(work / "mpi.almtp")), str(work / "serial.almtp"))
+            update_active_set(str(work / "serial.almtp"), structs, weights=read_mvs_header(str(work / "potential.almtp"))[0])
+            mpi_set, serial_set = (read_mvs_state(str(work / f"{arm}.almtp")) for arm in ("mpi", "serial"))
+            dA = float(numpy.abs(mpi_set.A - serial_set.A).max() / numpy.abs(serial_set.A).max())
+            same = numpy.array_equal(mpi_set.active_cfg_indices, serial_set.active_cfg_indices) and numpy.array_equal(mpi_set.active_eqn_indices, serial_set.active_eqn_indices)
+            ok = same and dA <= 1e-12
+            failures += not ok
+            print(f"active set       {len(mpi_set.selected_cfgs):4d} active structures against {len(serial_set.selected_cfgs)} on one rank, equations {'the same' if same else 'DIFFER'}, A {dA:.1e} apart — {'match' if ok else 'MISMATCH'}")
 
             outcomes = json.loads((work / "outcomes.json").read_text())
             for index, (name, expected, status) in enumerate([("ok", "returned", "ok"), ("fail", "raised RuntimeError on missing.lammps", "failed")]):

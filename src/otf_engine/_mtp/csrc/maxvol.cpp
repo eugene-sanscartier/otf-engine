@@ -23,7 +23,7 @@ void Equations::append(const double* grad, double factor, int structure, int equ
     equation_indices.push_back(equation);
 }
 
-void Equations::add(MTPTraining& pot, const NeighList& list) {
+void Equations::add(MTPTraining& pot, const NeighList& list, int structure) {
     const int n_atoms = list.n_atoms, cc = coeff_count;
     const double scale = std::max(std::pow((double) n_atoms, weight_scaling / 2.0), 1e-30);
     const bool forces = force_weight != 0.0, stress = stress_weight != 0.0;
@@ -33,7 +33,8 @@ void Equations::add(MTPTraining& pot, const NeighList& list) {
     if (stress) virial_grad.resize(6 * cc);
     pot.eval_grad(list, site_energy_grad.data(), forces || stress ? force_grad.data() : nullptr, stress ? virial_grad.data() : nullptr);
 
-    const int s = structure_count++;
+    const int s = structure < 0 ? structure_count : structure;
+    structure_count = std::max(structure_count, s + 1);
     if (energy_weight != 0.0) {
         std::vector<double> total(cc, 0.0);
         for (int ii = 0; ii < list.inum; ii++)
@@ -83,10 +84,19 @@ void MaxVol::grade(const double* rows, int count, double* grades) {
     sweep_grades_portable(rows, count, invA.data(), n, block.data(), grades);
 }
 
-void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps) {
+void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps, PoolRanks* ranks) {
+    PoolRanks one_rank;
+    if (!ranks) ranks = &one_rank;
     const int count = pool.size();
-    if (count == 0) return;
     sweep_grades.resize(count);
+
+    // An equation's position in the whole pool, its structure then its place among that structure's
+    // equations, breaks ties between equal grades as the first in pool order wins on one rank.
+    std::vector<double> positions(count);
+    for (int r = 0, k = 0; r < count; r++) {
+        k = r > 0 && pool.structure_indices[r] == pool.structure_indices[r - 1] ? k + 1 : 0;
+        positions[r] = pool.structure_indices[r] * 1e7 + k;
+    }
 
     // The pool rows each swap overwrote, to put back when the search ends
     struct Replaced {
@@ -94,19 +104,39 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps) {
         std::vector<double> grad;
     };
     std::vector<Replaced> replaced;
-    std::vector<double> displaced(n);
+    std::vector<double> v(n), displaced(n);
+    int provenance[3];    // the entering equation's pool, structure and equation
     // A displaced equation keeps its own pool, as mlip-3 swaps an equation's link to its configuration with it
     std::vector<int> pool_ids(count, pool_id);
 
     for (int swaps = 0; swaps < max_swaps; swaps++) {
-        grade(pool.grads.data(), count, sweep_grades.data());
-        const int best = (int) (std::max_element(sweep_grades.begin(), sweep_grades.end()) - sweep_grades.begin());
-        if (sweep_grades[best] <= threshold) break;
+        if (count > 0) grade(pool.grads.data(), count, sweep_grades.data());
+        double best_grade = -1.0, best_position = HUGE_VAL;
+        int best = -1;
+        for (int r = 0; r < count; r++)
+            if (sweep_grades[r] > best_grade || (sweep_grades[r] == best_grade && positions[r] < best_position)) {
+                best_grade = sweep_grades[r];
+                best_position = positions[r];
+                best = r;
+            }
+        int owner = ranks->rank();
+        ranks->reduce_best(best_grade, best_position, owner);
+        if (best_grade <= threshold) break;
+
+        const bool mine = owner == ranks->rank();
+        if (mine) {
+            std::copy_n(&pool.grads[(size_t) best * n], n, v.begin());
+            provenance[0] = pool_ids[best];
+            provenance[1] = pool.structure_indices[best];
+            provenance[2] = pool.equation_indices[best];
+        }
+        ranks->broadcast(v.data(), n, provenance, owner);
+
+        int displaced_pool_id, displaced_struct_index, displaced_eqn_index;
+        if (!try_swap(v.data(), provenance[0], provenance[1], provenance[2], displaced.data(), displaced_pool_id, displaced_struct_index, displaced_eqn_index)) break;
+        if (!mine) continue;
 
         double* row = &pool.grads[(size_t) best * n];
-        int displaced_pool_id, displaced_struct_index, displaced_eqn_index;
-        if (!try_swap(row, pool_ids[best], pool.structure_indices[best], pool.equation_indices[best], displaced.data(), displaced_pool_id, displaced_struct_index, displaced_eqn_index)) break;
-
         replaced.push_back({best, pool.structure_indices[best], pool.equation_indices[best], std::vector<double>(row, row + n)});
         std::copy(displaced.begin(), displaced.end(), row);
         pool_ids[best] = displaced_pool_id;
