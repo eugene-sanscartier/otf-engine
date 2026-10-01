@@ -7,8 +7,11 @@
 #include "mtp_trainer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -46,10 +49,20 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
 
 /* ---------------------------------------------------------------------- */
 void MTPTrainer::train() {
+    const auto start = std::chrono::steady_clock::now();
     MPI_Barrier(comm);
     if (log) *log << structure_count << " configurations found in the training set" << std::endl;
 
+    auto log_errors = [&](const std::string& title) {
+        if (!potential.is_trained()) return;
+        potential.set_coeffs(coeffs.data());
+        const std::string table = error_table(potential, structures, options.species, comm, title);
+        if (log) *log << table;
+    };
+
     add_species();
+    if (log) *log << coeffs.size() << " coefficients (" << n_radial << " radial, " << n_linear << " linear)" << std::endl;
+    log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
 
     if (options.init_random && !potential.is_trained()) {
@@ -100,7 +113,118 @@ void MTPTrainer::train() {
     }
 
     potential.set_coeffs(coeffs.data());
+    log_errors("Training set errors:");
+    if (log) *log << "Trained in " << std::round(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 10) / 10 << " s" << std::endl;
     MPI_Barrier(comm);
+}
+
+/* ----------------------------------------------------------------------
+   Errors as mlip-3's ErrorMonitor measures them: energies, energies per
+   atom, forces per atom, and the virial as the Frobenius norm of the 3x3.
+   Relative to the reference, as the ErrorMonitor's Max(diff)/Max(value)
+   and RMS(diff)/RMS(value), except for energies, whose max |diff| is
+   relative to the reference's range and RMSE to its standard deviation.
+------------------------------------------------------------------------- */
+std::string error_table(PairMTP& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title) {
+    enum { ENE, EPA, FRC, VIR, KINDS };    // then the forces of each species
+    const int species_count = potential.get_species_count();
+    const int rows = KINDS + species_count;
+    // per row: the count, and the sums of |diff|, diff^2, value^2 and value; the maxima of |diff|, value and -value,
+    // where the value is the reference energy, or the norm of the reference force or virial; and where the max |diff|
+    // is, as structure number * 1e6 + atom number
+    std::vector<double> sums(rows * 5, 0.0), maxima(rows * 3, -1e300), at(rows, 0.0);
+    auto add = [&](int row, double dltsq, double value, double where) {
+        double* sum = &sums[row * 5];
+        double* max = &maxima[row * 3];
+        const double delta = std::sqrt(dltsq);
+        sum[0] += 1.0;
+        sum[1] += delta;
+        sum[2] += dltsq;
+        sum[3] += value * value;
+        sum[4] += value;
+        if (delta > max[0]) at[row] = where;
+        max[0] = std::max(max[0], delta);
+        max[1] = std::max(max[1], value);
+        max[2] = std::max(max[2], -value);
+    };
+
+    for (const TrainingStructure& s : structures) {
+        const NeighList list = s.list();
+        potential.compute(list);
+        const double* forces = potential.get_forces();
+        const double* virial = potential.get_virial();
+
+        if (s.has_energy) {
+            const double diff = potential.get_energy() - s.energy;
+            add(ENE, diff * diff, s.energy, s.number * 1e6);
+            add(EPA, diff * diff / ((double) s.n_atoms() * s.n_atoms()), s.energy / s.n_atoms(), s.number * 1e6);
+        }
+        if (s.has_forces)
+            for (int ii = 0; ii < list.inum; ii++) {
+                const int i = list.ilist[ii];
+                double dltsq = 0.0, valsq = 0.0;
+                for (int a = 0; a < 3; a++) {
+                    dltsq += (forces[i * 3 + a] - s.forces[i * 3 + a]) * (forces[i * 3 + a] - s.forces[i * 3 + a]);
+                    valsq += s.forces[i * 3 + a] * s.forces[i * 3 + a];
+                }
+                add(FRC, dltsq, std::sqrt(valsq), s.number * 1e6 + i + 1);
+                if (s.types[i] < species_count) add(KINDS + s.types[i], dltsq, std::sqrt(valsq), s.number * 1e6 + i + 1);
+            }
+        if (s.has_virial) {
+            double dltsq = 0.0, valsq = 0.0;
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++) {
+                    const int k = VIRIAL_INDEX[a][b];
+                    dltsq += (virial[k] - s.virial[k]) * (virial[k] - s.virial[k]);
+                    valsq += s.virial[k] * s.virial[k];
+                }
+            add(VIR, dltsq, std::sqrt(valsq), s.number * 1e6);
+        }
+    }
+
+    int rank = 0;
+    MPI_Comm_rank(comm, &rank);
+    std::vector<double> total_sums(rows * 5), total_maxima(rows * 3), total_at(rows);
+    MPI_Reduce(sums.data(), total_sums.data(), rows * 5, MPI_DOUBLE, MPI_SUM, 0, comm);
+    MPI_Allreduce(maxima.data(), total_maxima.data(), rows * 3, MPI_DOUBLE, MPI_MAX, comm);
+    // the max |diff|'s place, the first in number among the ranks holding it
+    for (int r = 0; r < rows; r++)
+        if (maxima[r * 3] != total_maxima[r * 3]) at[r] = 1e300;
+    MPI_Reduce(at.data(), total_at.data(), rows, MPI_DOUBLE, MPI_MIN, 0, comm);
+    if (rank != 0) return "";
+
+    char line[160];
+    std::ostringstream out;
+    out << title << "\n";
+    std::snprintf(line, sizeof line, "%-12s %7s %9s %9s %9s %9s %9s\n", "", "n", "MAE", "RMSE", "max", "rel max", "rel RMSE");
+    out << line;
+    auto row = [&](int r, const std::string& name, const char* unit) {
+        const double* sum = &total_sums[r * 5];
+        const double* max = &total_maxima[r * 3];
+        if (sum[0] == 0) return;
+        const double rmse = std::sqrt(sum[2] / sum[0]);
+        const bool energy = r == ENE || r == EPA;
+        const double mean = sum[4] / sum[0];
+        const double rel_max = max[0] / ((energy ? max[1] + max[2] : max[1]) + 1e-300);
+        const double rel_rmse = energy ? rmse / (std::sqrt(std::max(sum[3] / sum[0] - mean * mean, 0.0)) + 1e-300) : std::sqrt(sum[2] / (sum[3] + 1e-300));
+        std::snprintf(line, sizeof line, "%-12s %7ld %9.2e %9.2e %9.2e %9.3g %9.3g  %s\n", name.c_str(), (long) sum[0], sum[1] / sum[0], rmse, max[0], rel_max, rel_rmse, unit);
+        out << line;
+    };
+    row(ENE, "energy", "eV");
+    row(EPA, "energy/atom", "eV/atom");
+    row(FRC, "force", "eV/A");
+    for (int t = 0; t < species_count; t++)
+        row(KINDS + t, "  " + (t < (int) species.size() ? species[t] : "type " + std::to_string(t)), "eV/A");
+    row(VIR, "virial", "eV");
+    if (total_sums[EPA * 5]) {
+        std::snprintf(line, sizeof line, "max energy/atom error: %.2e eV/atom (structure %ld)\n", total_maxima[EPA * 3], (long) (total_at[EPA] / 1e6));
+        out << line;
+    }
+    if (total_sums[FRC * 5]) {
+        std::snprintf(line, sizeof line, "max force error: %.2e eV/A (structure %ld, atom %ld)\n", total_maxima[FRC * 3], (long) (total_at[FRC] / 1e6), (long) std::fmod(total_at[FRC], 1e6));
+        out << line;
+    }
+    return out.str();
 }
 
 /* ----------------------------------------------------------------------
@@ -197,7 +321,7 @@ void MTPTrainer::update_min_dist() {
     MPI_Allreduce(&min_dist, &total_min_dist, 1, MPI_DOUBLE, MPI_MIN, comm);
 
     if (!options.no_mindist_update) {
-        if (log) *log << "Minimal interatomic distance in the training set is " << total_min_dist << ". MTP's mindist will be updated" << std::endl;
+        if (log) *log << "min_dist = " << total_min_dist << ", mindist updated" << std::endl;
         potential.set_min_cutoff(0.99 * total_min_dist);
     }
 }
@@ -207,12 +331,13 @@ void MTPTrainer::update_min_dist() {
    share at the coefficients it broadcasts.
 ------------------------------------------------------------------------- */
 void MTPTrainer::fit_nonlinear(int max_iter) {
+    const auto start = std::chrono::steady_clock::now();
     MPI_Barrier(comm);
     if (log) *log << "MTPR training started on " << size << " core(s)" << std::endl;
 
     const int n = (int) coeffs.size();
     std::vector<double> grad(n), bfgs_g(n);
-    double bfgs_f = 0.0;
+    double bfgs_f = 0.0, bfgs_terms[4] = {};
 
     if (rank == 0) {
         bfgs.set_x(coeffs.data(), n);
@@ -253,10 +378,14 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
         double loss = loss_grad(grad) / structure_count;
         for (double& g : grad) g /= structure_count;
+        // the energy, force, stress and penalty terms, for the log
+        double terms[4] = {loss_terms[0] / structure_count, loss_terms[1] / structure_count, loss_terms[2] / structure_count, loss};
         if (rank == 0) add_penalty(loss, grad);
+        terms[3] = loss - terms[3];
 
         MPI_Barrier(comm);
         MPI_Reduce(&loss, &bfgs_f, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
+        MPI_Reduce(terms, bfgs_terms, 4, MPI_DOUBLE, MPI_SUM, 0, comm);
         MPI_Reduce(grad.data(), bfgs_g.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
 
         if (rank == 0) {
@@ -277,7 +406,12 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
                 }
 
                 loss_prev = bfgs_f;
-                if (log) *log << "BFGS iter " << num_step << ": f=" << bfgs_f << std::endl;
+                if (log) {
+                    // mlp's line in columns, with the share of each term in the loss
+                    char line[128];
+                    std::snprintf(line, sizeof line, "BFGS iter %4d: f=%.7e  (E %3.0f%%  F %3.0f%%  S %3.0f%%  P %3.0f%%)", num_step, bfgs_f, 100 * bfgs_terms[0] / bfgs_f, 100 * bfgs_terms[1] / bfgs_f, 100 * bfgs_terms[2] / bfgs_f, 100 * bfgs_terms[3] / bfgs_f);
+                    *log << line << std::endl;
+                }
                 num_step++;
 
                 if (num_step % 50 == 0 && num_step > 100) {
@@ -311,7 +445,13 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
     // the next linear fit rebuilds the regularization
     reg_init = true;
 
-    if (log) *log << "MTPR training ended" << std::endl;
+    if (log) {
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        char line[96];
+        std::snprintf(line, sizeof line, "%d iterations in %.1f s @ %.2g s/iteration", num_step, seconds, seconds / std::max(num_step, 1));
+        *log << line << std::endl;
+        *log << "MTPR training ended" << std::endl;
+    }
 }
 
 /* ----------------------------------------------------------------------
@@ -556,6 +696,7 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
     potential.set_coeffs(coeffs.data());
     std::fill(grad.begin(), grad.end(), 0.0);
     double loss = 0.0;
+    std::fill_n(loss_terms, 3, 0.0);
 
     for (const TrainingStructure& s : structures) {
         const NeighList list = s.list();
@@ -576,6 +717,7 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
                 for (int a = 0; a < 3; a++) {
                     const double diff = forces[i * 3 + a] - s.forces[i * 3 + a];
                     loss += wgt * diff * diff;
+                    loss_terms[1] += wgt * diff * diff;
                     dloss_dforces[i * 3 + a] = 2.0 * wgt * diff;
                 }
             }
@@ -587,6 +729,7 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
                     const int k = VIRIAL_INDEX[a][b];
                     const double diff = virial[k] - s.virial[k];
                     loss += wgt * diff * diff;
+                    loss_terms[2] += wgt * diff * diff;
                     dloss_dvirial[k] += 2.0 * wgt * diff;
                 }
         }
@@ -595,6 +738,7 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
             const double wgt = energy_weight(s);
             const double diff = energy - s.energy;
             loss += wgt * diff * diff;
+            loss_terms[0] += wgt * diff * diff;
             dloss_denergy = 2.0 * wgt * diff;
         }
 

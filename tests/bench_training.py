@@ -35,7 +35,7 @@ from otf_engine._mtp import MTPCalculator, PairMTP
 from otf_engine.io_cfg import read_cfg
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
-BFGS_LINE = re.compile(r"BFGS iter (\d+): f=(\S+)")
+BFGS_LINE = re.compile(r"BFGS iter +(\d+): f=(\S+)")
 
 
 def extract_cfgs(cfg_path, n_structures, out_path):

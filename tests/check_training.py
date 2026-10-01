@@ -36,13 +36,17 @@ from otf_engine.mtp_backend import train
 
 TEMPLATE = MLP.parents[1] / "MTP_templates/08.almtp"
 NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
+# the trainer's lines, not mlp's: its own, and its error tables
+TRAINER_LINE = re.compile(r"^\d+ coefficients \(|^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: ")
+MIN_DIST_LINE = re.compile(r"^Minimal interatomic distance |^min_dist = ")    # mlp's line and the trainer's for the same update
+LOSS_TERMS = re.compile(r" +\(E +\d+% +F +\d+% +S +\d+% +P +\d+%\)$")    # the trainer's share of each term, after mlp's loss
 ITERATIONS = 30
 PREINIT_ITERATIONS = 5
 
 
 def fit_log(text):
-    """The trainer's lines of a log, from the training-set count to the last rescaling."""
-    lines = [line.strip() for line in text.splitlines()]
+    """The lines of a log that mlp writes too, from the training-set count to the last rescaling, with single spaces."""
+    lines = [" ".join(LOSS_TERMS.sub("", line).split()) for line in text.splitlines() if not TRAINER_LINE.search(line) and not MIN_DIST_LINE.search(line)]
     start = next(i for i, line in enumerate(lines) if "configurations found" in line)
     end = max(i for i, line in enumerate(lines) if line.startswith("Rescaling to"))
     return lines[start:end + 1]
@@ -58,9 +62,12 @@ def compare(mlp_text, port_text, tol, steps=None):
     scalings_a, scalings_b = [line for line in a if line.startswith("Rescaling to")], [line for line in b if line.startswith("Rescaling to")]
     same_scalings = sum(x == y for x, y in zip(scalings_a, scalings_b))
 
-    fa = numpy.array([float(m.group(2)) for line in a if (m := BFGS_LINE.search(line))])
+    sa = [m.group(2) for line in a if (m := BFGS_LINE.search(line))]
+    fa = numpy.array([float(s) for s in sa])
     fb = numpy.array([float(m.group(2)) for line in b if (m := BFGS_LINE.search(line))])
     n = min(len(fa), len(fb))
+    # the trainer logs 8 significant digits throughout; mlp 6 until its first linear fit
+    fb[:n] = [float(f"{f:.{len(s.split('e')[0].lstrip('-0.').replace('.', '')) - 1}e}") for f, s in zip(fb[:n], sa)]
     rel = numpy.abs(fb[:n] - fa[:n]) / numpy.abs(fa[:n])
     first = int(numpy.argmax(rel > tol)) if (rel > tol).any() else None
 

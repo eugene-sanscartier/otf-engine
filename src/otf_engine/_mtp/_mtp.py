@@ -10,7 +10,8 @@ The three classes mirror the C++ hierarchy:
     MTPTraining             + basis values and derivatives
                               w.r.t. the coefficients        (a PairMTP)
 
-train_mtp fits an MTPTraining as mlip-3's `mlp train` does. Equations and
+train_mtp fits an MTPTraining as mlip-3's `mlp train` does, and error_table
+tabulates a potential's errors as it logs them. Equations and
 MaxVol select and grade against an active set as mlip-3's MaxVol does.
 """
 
@@ -23,7 +24,8 @@ PairMTPExtrapolation = _ext.PairMTPExtrapolation
 MTPTraining = _ext.MTPTraining
 NeighList = _ext.NeighList
 train_mtp = _ext.train_mtp
+error_table = _ext.error_table
 Equations = _ext.Equations
 MaxVol = _ext.MaxVol
 
-__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "NeighList", "train_mtp", "Equations", "MaxVol"]
+__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "NeighList", "train_mtp", "error_table", "Equations", "MaxVol"]

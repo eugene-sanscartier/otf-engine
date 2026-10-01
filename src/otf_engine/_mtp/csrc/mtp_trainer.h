@@ -24,6 +24,7 @@
 
 #include <functional>
 #include <ostream>
+#include <string>
 #include <vector>
 
 // A structure to fit: its neighbor list at the potential's cutoff and its reference values.
@@ -35,12 +36,18 @@ struct TrainingStructure {
     double energy = 0.0;
     std::vector<double> forces;    // [n_atoms * 3]
     double virial[6] = {};         // xx,yy,zz,xy,xz,yz in eV, mlip-3's PlusStress
+    int number = 0;                // the caller's number for it, which the error table names
 
     int n_atoms() const { return (int) types.size(); }
     NeighList list() const {
         return NeighList{n_atoms(), types.data(), (int) ilist.size(), ilist.data(), numneigh.data(), firstneigh.data(), displacements.data()};
     }
 };
+
+// The errors of potential on the structures of every rank of comm, as a table under title, with a
+// force row per species (named by species, or by index past its end) and the structures with the
+// largest energy and force errors; on rank 0, and empty on the others.
+std::string error_table(PairMTP& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title);
 
 // `mlp train`'s options, under its names and with its defaults.
 struct TrainerOptions {
@@ -57,6 +64,7 @@ struct TrainerOptions {
     bool no_mindist_update = false; // keep min_dist rather than setting it to 0.99 of the shortest training distance
     bool init_random = false;       // randomize the radial coefficients of an untrained potential
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
+    std::vector<std::string> species;    // the species' names in the error tables
 };
 
 class MTPTrainer {
@@ -66,7 +74,8 @@ class MTPTrainer {
     MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const TrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, with the
-    // species of the training set it lacked added.
+    // species of the training set it lacked added, and logs the errors on the
+    // training set before and after.
     void train();
 
   private:
@@ -98,6 +107,7 @@ class MTPTrainer {
     int structure_count = 0;    // over all ranks
     std::ostream* log;
     std::function<void()> checkpoint;
+    double loss_terms[3] = {};    // the energy, force and stress terms of the last loss_grad
 
     int n_radial, n_linear;       // coefficients before the species block, and from it on
     std::vector<double> coeffs;   // [n_radial | species | linear], what potential holds

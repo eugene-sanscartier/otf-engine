@@ -12,7 +12,7 @@ from numpy import intp, float64
 
 logger = logging.getLogger(__name__)
 
-from ._mtp import Equations, MaxVol, MTPCalculator, PairMTP, train_mtp, write_mtp
+from ._mtp import Equations, MaxVol, MTPCalculator, PairMTP, error_table, train_mtp, write_mtp
 from ._mtp.neighbors import mtp_types, neighbors
 from .almtp_io import MVSState, read_mvs_header, read_mvs_state, write_mvs_state
 
@@ -229,8 +229,8 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
 # ---------------------------------------------------------------------------
 
 
-def _references(atoms) -> tuple:
-    """Energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz) of *atoms*, None where absent."""
+def _labelled(atoms, cutoff: float, number: int) -> tuple:
+    """*atoms* as train_mtp and error_table take a structure: its neighbor list, its energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz), None where absent, and *number*."""
     results = atoms.calc.results
     forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
     virial = None
@@ -238,7 +238,15 @@ def _references(atoms) -> tuple:
         # read_cfg divides PlusStress by -det(cell); ASE's Voigt order is xx yy zz yz xz xy.
         v = -numpy.asarray(results["stress"], dtype=float64) * numpy.linalg.det(atoms.cell.array)
         virial = v[[0, 1, 2, 5, 4, 3]]
-    return float(results["energy"]) if "energy" in results else None, forces, virial
+    return neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number
+
+
+def errors(potential: str, structures: list, title: str, first: int = 1, species: list | None = None) -> str:
+    """The errors of *potential* on the labelled *structures*, numbered from *first*, as the table training logs, under *title*."""
+    pot = PairMTP(potential)
+    cutoff = pot.get_max_cutoff()
+    table = error_table(pot, [_labelled(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
+    return table
 
 
 def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None):
@@ -253,7 +261,8 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
 
     *potential* may be untrained, and gains the species of *training_structs* it lacks.
 
-    settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300, "init_random": True}
+    settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300, "init_random": True},
+               and "species", the species' names for the log's error tables, comma-separated
     ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
@@ -267,7 +276,7 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     cutoff = PairMTP(potential).get_max_cutoff()
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
-    structures = ((neighbors(atoms, cutoff), *_references(atoms)) for atoms in training_structs[rank::size])
+    structures = (_labelled(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
     options = {key: str(value) for key, value in (settings or {}).items()}
     pot = fit(potential, structures, options, checkpoint=lambda pot: write_mtp(pot, save_to), ranks=ranks, comm=comm)
 

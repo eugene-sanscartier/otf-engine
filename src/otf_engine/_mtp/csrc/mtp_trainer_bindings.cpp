@@ -13,10 +13,15 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <sstream>
 #include <thread>
 
-static TrainingStructure make_structure(const PyNeighbors& nb, py::object energy, py::object forces, py::object virial) {
-    const NeighList& list = nb.view();
+static TrainingStructure make_structure(py::handle item) {
+    py::tuple t = py::reinterpret_borrow<py::tuple>(item);
+    if (t.size() != 5)
+        throw std::runtime_error("train_mtp: a structure is (NeighList, energy, forces, virial, number)");
+    const NeighList& list = t[0].cast<const PyNeighbors&>().view();
+    py::object energy = t[1], forces = t[2], virial = t[3];
     const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
 
     TrainingStructure s;
@@ -44,6 +49,7 @@ static TrainingStructure make_structure(const PyNeighbors& nb, py::object energy
         std::copy(v.data(), v.data() + 6, s.virial);
         s.has_virial = true;
     }
+    s.number = t[4].cast<int>();
     return s;
 }
 
@@ -61,7 +67,11 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
     for (const auto& [key, value] : options) {
         if (key == "log")
             log = value;
-        else if (doubles.count(key))
+        else if (key == "species") {
+            std::stringstream names(value);
+            for (std::string name; std::getline(names, name, ',');)
+                o.species.push_back(name);
+        } else if (doubles.count(key))
             *doubles.at(key) = std::stod(value);
         else if (ints.count(key))
             *ints.at(key) = std::stoi(value);
@@ -123,10 +133,8 @@ static py::object train(const std::string& filename, py::iterable structures, co
     try {
         std::string log_target = "stdout";
         trainer_options = parse_options(options, log_target);
-        for (py::handle item : structures) {
-            py::tuple t = py::reinterpret_borrow<py::tuple>(item);
-            share.push_back(make_structure(t[0].cast<const PyNeighbors&>(), t[1], t[2], t[3]));
-        }
+        for (py::handle item : structures)
+            share.push_back(make_structure(item));
         if (rank == 0) log = open_log(log_target, log_file);
         potential = py::cast(std::make_unique<MTPTraining>(filename));
     } catch (const std::exception& e) {
@@ -176,9 +184,10 @@ Every rank calls it with its own share of the structures and the same other argu
 the fitted potential. An error on any rank is raised on every rank.
 
 structures : this rank's share, an iterable of (NeighList, energy|None, forces(n_atoms,3)|None,
-             virial(6)|None), neighbor lists at the potential's cutoff, virial as mlip-3's
-             PlusStress in eV, xx,yy,zz,xy,xz,yz
-options    : mlp train options without the leading "--", as strings; rank 0 writes the log
+             virial(6)|None, number), neighbor lists at the potential's cutoff, virial as mlip-3's
+             PlusStress in eV, xx,yy,zz,xy,xz,yz, and the number the error tables name it by
+options    : mlp train options without the leading "--", as strings, and species, the species'
+             names for the error tables, comma-separated; rank 0 writes the log
 comm       : an mpi4py communicator
 checkpoint : called on rank 0 with the potential being trained wherever mlp saves it during the
              fit; a failure ends checkpointing and is raised after the fit
@@ -196,10 +205,8 @@ static py::object train(const std::string& filename, py::iterable structures, co
     // Dealt round-robin, as mlp's MPI_LoadCfgs deals a file
     std::vector<std::vector<TrainingStructure>> shares(ranks);
     int count = 0;
-    for (py::handle item : structures) {
-        py::tuple t = py::reinterpret_borrow<py::tuple>(item);
-        shares[count++ % ranks].push_back(make_structure(t[0].cast<const PyNeighbors&>(), t[1], t[2], t[3]));
-    }
+    for (py::handle item : structures)
+        shares[count++ % ranks].push_back(make_structure(item));
     if (count == 0)
         throw std::runtime_error("train_mtp: no training structures");
 
@@ -256,11 +263,27 @@ void bind_trainer(py::module_& m) {
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), R"doc(
 Train the potential in filename as mlip-3's `mlp train` does, on `ranks` threads, and return it.
 
-structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None),
+structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None, number),
              neighbor lists at the potential's cutoff, virial as mlip-3's PlusStress in eV,
-             xx,yy,zz,xy,xz,yz
-options    : mlp train options without the leading "--", as strings
+             xx,yy,zz,xy,xz,yz, and the number the error tables name it by
+options    : mlp train options without the leading "--", as strings, and species, the species'
+             names for the error tables, comma-separated
 checkpoint : called with the potential being trained wherever mlp saves it during the fit
+)doc");
+
+    m.def("error_table", [](PairMTP& potential, py::iterable structures, const std::vector<std::string>& species, const std::string& title) {
+        std::vector<TrainingStructure> share;
+        for (py::handle item : structures)
+            share.push_back(make_structure(item));
+        ThreadGroup group(1);
+        ThreadComm comm{&group, 0};
+        py::gil_scoped_release unlocked;
+        return error_table(potential, share, species, &comm, title);
+    }, py::arg("potential"), py::arg("structures"), py::arg("species"), py::arg("title"), R"doc(
+The errors of potential on the structures, as the table train_mtp logs, under title.
+
+structures : as train_mtp's
+species    : the species' names
 )doc");
 }
 

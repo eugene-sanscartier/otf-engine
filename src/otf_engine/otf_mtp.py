@@ -15,7 +15,7 @@ import ase
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-from .mtp_backend import calculate_grade, select_add, update_active_set
+from .mtp_backend import calculate_grade, errors, select_add, update_active_set
 from .almtp_io import read_mvs_state
 from .cycles import LOG_FILE, LOG_FORMAT, archive_cycle, current_cycle_dir, next_cycle_dir
 from .launchers import Launcher, JobTimedOut, JobOutOfMemory
@@ -161,12 +161,12 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
 
 
 def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None, state=None):
-    """Evaluate the structures, append those that succeed to the training set, and return their count and the deferred structures."""
+    """Evaluate the structures, append those that succeed to the training set, and return them, in the order appended, and the deferred structures."""
     n = len(selected_structures)
     w = len(str(n)) if n else 1
     parallel = launcher.concurrent_eval and n > 1
     logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
-    n_ok = 0
+    evaluated = []
     deferred = []
     gammas_evaluated = []
     max_forces_evaluated = []
@@ -179,10 +179,11 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
             if result is _EVAL_DEFERRED:
                 deferred += [selected_structures[i]]
             elif result is not None:
-                n_ok += 1
+                evaluated += [result]
                 save_structures(training_set, [result], append=True)
                 gammas_evaluated += [selected_structures[i].info["features"]["MV_grade"]]
                 max_forces_evaluated += [max_force(result)]
+    n_ok = len(evaluated)
     logger.info(f"Evaluated {n_ok}/{n} successfully ({len(deferred)} deferred, {n - n_ok - len(deferred)} failed).")
     if state is not None:
         state["n_selected"] = n
@@ -192,7 +193,7 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
         state["gammas_selected"] = [s.info["features"]["MV_grade"] for s in selected_structures]
         state["gammas_evaluated"] = gammas_evaluated
         state["max_forces_evaluated"] = max_forces_evaluated
-    return n_ok, deferred
+    return evaluated, deferred
 
 
 @dataclass
@@ -356,18 +357,19 @@ class OTFCycle:
         return dict(potential=self.potential, training_set=self.training_set, candidates=candidates, species=self.species)
 
     def evaluate(self, selected):
-        """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, and return their count."""
+        """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, log the potential's errors on them, and return their count."""
         deferred_file = self.cycle_dir.parent / DEFERRED_EVALS_FILE
         resubmitted = ase.io.read(deferred_file, index=":", format="extxyz") if deferred_file.is_file() else []
-        n_ok, deferred = eval_structures(selected + resubmitted, self.training_set, self.evaluator_fn, self.launcher, force_threshold=self.force_threshold, state=self.state)
+        evaluated, deferred = eval_structures(selected + resubmitted, self.training_set, self.evaluator_fn, self.launcher, force_threshold=self.force_threshold, state=self.state)
         ase.io.write(deferred_file, deferred, format="extxyz")
-        if not n_ok: logger.info("No configurations selected or evaluated — retraining.")
-        return n_ok
+        if evaluated: logger.info(errors(self.potential, evaluated, "Errors on the evaluated structures:", first=len(self.train_structures) + 1, species=self.species))
+        else: logger.info("No configurations selected or evaluated — retraining.")
+        return len(evaluated)
 
     @property
     def training(self):
         """The training this cycle needs, as otf_pool.train_potential's keyword arguments."""
-        return dict(potential=self.potential, training_set=self.training_set, save_to=f"tmp_{self.potential}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": "mlip_train.log"})
+        return dict(potential=self.potential, training_set=self.training_set, save_to=f"tmp_{self.potential}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": "mlip_train.log", "species": ",".join(self.species or [])})
 
     def replace_potential(self):
         """Replace the potential with the one training wrote."""
