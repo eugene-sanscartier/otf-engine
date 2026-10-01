@@ -21,9 +21,10 @@ from .cycles import LOG_FILE, LOG_FORMAT, archive_cycle, current_cycle_dir, next
 from .launchers import Launcher, JobTimedOut, JobOutOfMemory
 
 logger = logging.getLogger(__name__)
-_EVAL_TIMED_OUT = object()
+_EVAL_DEFERRED = object()
 
 OTF_STATE_FILE = "otf_state.json"
+DEFERRED_EVALS_FILE = "deferred_evals.extxyz"  # beside the cycle directories: the evaluations a cycle resubmits from the one before
 
 
 def _load_state():
@@ -89,7 +90,7 @@ def _record_state(state, n_train, active_set_size):
         "n_preselected": state.pop("n_preselected", 0),
         "n_selected": n_selected,
         "n_evaluated": n_ok,
-        "n_timed_out": state.pop("n_timed_out", 0),
+        "n_deferred": state.pop("n_deferred", 0),
         "n_failed": state.pop("n_failed", 0),
         "n_selected_total": state["n_selected_total"],
         "n_evaluated_total": state["n_evaluated_total"],
@@ -131,17 +132,21 @@ def save_structures(set_name, cfgs, append=False):
 
 
 def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
+    """Evaluate one structure: its result, None when it failed or was skipped, or _EVAL_DEFERRED when it timed out or ran out of memory at most launcher.max_retries times."""
     cycle = current_cycle_dir()
     eval_dir = (cycle / f"eval_{i:03d}") if cycle is not None else Path(f"eval_{i:03d}")
     try:
-        result = launcher.call_evaluator(evaluator_fn, structure, eval_dir)
+        result = launcher.call_evaluator(evaluator_fn, structure, eval_dir, timed_out_at_s=structure.info.get("eval_timed_out_at_s"))
         if force_threshold is not None and forcesthr_excess(result, threshold=force_threshold):
             logger.warning(f"struct {i+1}: skipped (max force {max_force(result):.2f} eV/Å exceeds threshold)")
             return None
         return result
-    except JobTimedOut:
-        logger.warning(f"struct {i+1}: timed out")
-        return _EVAL_TIMED_OUT
+    except (JobTimedOut, JobOutOfMemory) as e:
+        if isinstance(e, JobTimedOut) and e.time_limit_s: structure.info["eval_timed_out_at_s"] = e.time_limit_s
+        structure.info["eval_attempts"] = int(structure.info.get("eval_attempts", 0)) + 1
+        deferred = structure.info["eval_attempts"] <= launcher.max_retries
+        logger.warning(f"struct {i+1}: {'timed out' if isinstance(e, JobTimedOut) else 'ran out of memory'} on attempt {structure.info['eval_attempts']}, {'deferred to the next cycle' if deferred else 'dropped'}")
+        return _EVAL_DEFERRED if deferred else None
     except Exception as e:
         eval_dir.mkdir(parents=True, exist_ok=True)
         with open(eval_dir / "eval.log", "a") as _f:
@@ -156,11 +161,13 @@ def _eval_one(i, structure, evaluator_fn, launcher, force_threshold):
 
 
 def eval_structures(selected_structures, training_set, evaluator_fn, launcher, force_threshold=None, state=None):
+    """Evaluate the structures, append those that succeed to the training set, and return their count and the deferred structures."""
     n = len(selected_structures)
     w = len(str(n)) if n else 1
     parallel = launcher.concurrent_eval and n > 1
     logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
-    n_ok = n_timed_out = 0
+    n_ok = 0
+    deferred = []
     gammas_evaluated = []
     max_forces_evaluated = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=None if parallel else 1) as executor:
@@ -168,24 +175,24 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
         for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
             i = futures[future]
             result = future.result()
-            logger.info(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {'ok' if result not in (None, _EVAL_TIMED_OUT) else 'timed out' if result is _EVAL_TIMED_OUT else 'failed'}")
-            if result is _EVAL_TIMED_OUT:
-                n_timed_out += 1
+            logger.info(f"[{k:{w}d}/{n}] struct {i+1:{w}d} — {'deferred' if result is _EVAL_DEFERRED else 'failed' if result is None else 'ok'}")
+            if result is _EVAL_DEFERRED:
+                deferred += [selected_structures[i]]
             elif result is not None:
                 n_ok += 1
                 save_structures(training_set, [result], append=True)
                 gammas_evaluated += [selected_structures[i].info["features"]["MV_grade"]]
                 max_forces_evaluated += [max_force(result)]
-    logger.info(f"Evaluated {n_ok}/{n} successfully ({n_timed_out} timed out, {n - n_ok - n_timed_out} failed).")
+    logger.info(f"Evaluated {n_ok}/{n} successfully ({len(deferred)} deferred, {n - n_ok - len(deferred)} failed).")
     if state is not None:
         state["n_selected"] = n
         state["n_ok"] = n_ok
-        state["n_timed_out"] = n_timed_out
-        state["n_failed"] = n - n_ok - n_timed_out
+        state["n_deferred"] = len(deferred)
+        state["n_failed"] = n - n_ok - len(deferred)
         state["gammas_selected"] = [s.info["features"]["MV_grade"] for s in selected_structures]
         state["gammas_evaluated"] = gammas_evaluated
         state["max_forces_evaluated"] = max_forces_evaluated
-    return n_ok
+    return n_ok, deferred
 
 
 @dataclass
@@ -349,8 +356,11 @@ class OTFCycle:
         return dict(potential=self.potential, training_set=self.training_set, candidates=candidates, species=self.species)
 
     def evaluate(self, selected):
-        """Evaluate the selected structures through the launcher, add those that succeed to the training set, and return their count."""
-        n_ok = eval_structures(selected, self.training_set, self.evaluator_fn, self.launcher, force_threshold=self.force_threshold, state=self.state)
+        """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, and return their count."""
+        deferred_file = self.cycle_dir.parent / DEFERRED_EVALS_FILE
+        resubmitted = ase.io.read(deferred_file, index=":", format="extxyz") if deferred_file.is_file() else []
+        n_ok, deferred = eval_structures(selected + resubmitted, self.training_set, self.evaluator_fn, self.launcher, force_threshold=self.force_threshold, state=self.state)
+        ase.io.write(deferred_file, deferred, format="extxyz")
         if not n_ok: logger.info("No configurations selected or evaluated — retraining.")
         return n_ok
 

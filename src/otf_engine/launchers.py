@@ -20,7 +20,12 @@ logger = logging.getLogger(__name__)
 
 
 class JobTimedOut(subprocess.CalledProcessError):
-    """Raised by SlurmLauncher when sbatch exits non-zero due to a Slurm TIME LIMIT."""
+    """Raised by SlurmLauncher when sbatch exits non-zero due to a Slurm TIME LIMIT.
+
+    time_limit_s : the limit the job was submitted with, set by call_evaluator
+    """
+
+    time_limit_s: float | None = None
 
 
 class JobOutOfMemory(subprocess.CalledProcessError):
@@ -502,28 +507,24 @@ class Launcher(ABC):
         """Batch submission prefix: everything before ``--wrap="cmd"``."""
         return ""
 
-    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, _backoff: int | None = None):
-        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation and retry on timeout or OOM."""
-        if _backoff is None: _backoff = self.max_retries
+    def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, timed_out_at_s: float | None = None):
+        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation, once; a timeout or OOM raises.
+
+        timed_out_at_s : the limit this structure last timed out at; it is given at least ``timeout_f`` times that
+        """
         time_s = self.timing.estimate_eval() if self.timing else None
+        if timed_out_at_s: time_s = max(time_s or 0.0, TimingState.timeout_f * timed_out_at_s)
         if time_s:
             logger.info(f"Eval time estimate: {_seconds_to_hms(time_s)} per structure")
         t0 = time.monotonic()
         try:
             result = self._call_evaluator_impl(evaluator_fn, structure, eval_dir, time_limit_s=time_s)
-        except JobTimedOut:
+        except JobTimedOut as e:
             elapsed = time.monotonic() - t0
             logger.warning(f"Eval timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s)} allocated)")
             if self.timing:
                 self.timing.record_eval(elapsed, True, time_s)
-            if _backoff > 0:
-                logger.info(f"Retrying eval with new estimate ({_backoff} left)...")
-                return self.call_evaluator(evaluator_fn, structure, eval_dir, _backoff=_backoff - 1)
-            raise
-        except JobOutOfMemory:
-            if _backoff > 0:
-                logger.info(f"Retrying eval with a larger memory request ({_backoff} left)...")
-                return self.call_evaluator(evaluator_fn, structure, eval_dir, _backoff=_backoff - 1)
+            e.time_limit_s = time_s
             raise
         elapsed = time.monotonic() - t0
         if self.timing:
@@ -672,10 +673,11 @@ class SlurmLauncher(Launcher):
     ``--mem-per-cpu`` in ``batch_args`` is dropped when ``--mem`` is substituted
     and sets no ceiling.
 
-    **Out-of-memory recovery**: an OOM-killed job is resubmitted with a larger
-    ``--mem`` (up to ``max_retries``), because the request it died at is recorded
-    as a lower bound on its demand. Once the request reaches the ceiling a retry
-    would be identical, so the job fails instead.
+    **Out-of-memory recovery**: the request an OOM-killed job died at is recorded
+    as a lower bound on its demand, so the next job asks for more. A training job
+    is resubmitted at once (up to ``max_retries``); an evaluation raises
+    ``JobOutOfMemory`` for its cycle to defer. Once the request reaches the
+    ceiling a larger one cannot be made, so the job fails instead.
 
     Parameters
     ----------
