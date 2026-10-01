@@ -6,7 +6,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
-find_package(MPI COMPONENTS CXX)
+find_package(MPI REQUIRED COMPONENTS CXX)
 
 set(MTP_CSRC src/otf_engine/_mtp/csrc)
 
@@ -55,15 +55,13 @@ pybind11_add_module(_mtp_ext
 target_link_libraries(_mtp_ext PRIVATE mtp_core Threads::Threads)
 install(TARGETS _mtp_ext DESTINATION otf_engine/_mtp)
 
-# The trainer over MPI, which uses _mtp_ext's classes
-if(MPI_CXX_FOUND)
-    pybind11_add_module(_mtp_mpi
-        ${MTP_CSRC}/bfgs.cpp
-        ${MTP_CSRC}/mtp_trainer.cpp
-        ${MTP_CSRC}/mtp_trainer_bindings.cpp
-        ${MTP_CSRC}/maxvol_bindings.cpp
-    )
-    target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
-    target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX)
-    install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)
-endif()
+# The trainer and the MaxVol search over MPI, which use _mtp_ext's classes
+pybind11_add_module(_mtp_mpi
+    ${MTP_CSRC}/bfgs.cpp
+    ${MTP_CSRC}/mtp_trainer.cpp
+    ${MTP_CSRC}/mtp_trainer_bindings.cpp
+    ${MTP_CSRC}/maxvol_bindings.cpp
+)
+target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
+target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX)
+install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)

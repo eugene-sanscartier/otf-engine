@@ -23,13 +23,11 @@ license-files = ["LICEN[CS]E*"]
 requires-python = ">=3.10"
 dependencies = [
   "ase",
+  "mpi4py",
   "numpy",
   "scipy",
   "wrapt",
 ]
-
-[project.optional-dependencies]
-mpi = ["mpi4py"]
 
 [project.scripts]
 create-otf-state = "otf_engine.create_otf_state:main"

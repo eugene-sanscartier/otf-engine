@@ -57,7 +57,7 @@ def selection_equations(calc: MTPCalculator, structures: list, weights: dict, co
 def maximize_volume(mv: MaxVol, equations: Equations, pool_id: int, comm=None) -> None:
     """mv.maximize_volume over *equations*, or with an mpi4py communicator over its ranks, each holding the equations of its share."""
     if comm is None: return mv.maximize_volume(equations, pool_id=pool_id)
-    from ._mtp import _mtp_mpi
+    from ._mtp import _mtp_mpi    # only under a communicator, so a process without one never loads the MPI library
     _mtp_mpi.maximize_volume(mv, equations, pool_id, comm)
 
 
@@ -244,7 +244,7 @@ def _references(atoms) -> tuple:
 def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None):
     """train_mtp on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*."""
     if comm is None: return train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint)
-    from ._mtp import _mtp_mpi
+    from ._mtp import _mtp_mpi    # only under a communicator, so a process without one never loads the MPI library
     return _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=checkpoint)
 
 
