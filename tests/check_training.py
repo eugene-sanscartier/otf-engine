@@ -37,16 +37,16 @@ from otf_engine.mtp_backend import train
 TEMPLATE = MLP.parents[1] / "MTP_templates/08.almtp"
 NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
 # the trainer's lines, not mlp's: its own, and its error tables
-TRAINER_LINE = re.compile(r"^\d+ coefficients \(|^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: ")
+TRAINER_LINE = re.compile(r"^\d+ coefficients \(|^ +loss +energy |^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: ")
 MIN_DIST_LINE = re.compile(r"^Minimal interatomic distance |^min_dist = ")    # mlp's line and the trainer's for the same update
-LOSS_TERMS = re.compile(r" +\(E +\d+% +F +\d+% +S +\d+% +P +\d+%\)$")    # the trainer's share of each term, after mlp's loss
+LOSS_TERMS = re.compile(r"( +\S+ \( *\d+%\)){4}$")    # the trainer's terms of the loss, after mlp's loss
 ITERATIONS = 30
 PREINIT_ITERATIONS = 5
 
 
 def fit_log(text):
     """The lines of a log that mlp writes too, from the training-set count to the last rescaling, with single spaces."""
-    lines = [" ".join(LOSS_TERMS.sub("", line).split()) for line in text.splitlines() if not TRAINER_LINE.search(line) and not MIN_DIST_LINE.search(line)]
+    lines = [" ".join(LOSS_TERMS.sub("", line).replace(": f=", ": ").split()) for line in text.splitlines() if not TRAINER_LINE.search(line) and not MIN_DIST_LINE.search(line)]
     start = next(i for i, line in enumerate(lines) if "configurations found" in line)
     end = max(i for i, line in enumerate(lines) if line.startswith("Rescaling to"))
     return lines[start:end + 1]

@@ -333,7 +333,12 @@ void MTPTrainer::update_min_dist() {
 void MTPTrainer::fit_nonlinear(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     MPI_Barrier(comm);
-    if (log) *log << "MTPR training started on " << size << " core(s)" << std::endl;
+    if (log) {
+        *log << "MTPR training started on " << size << " core(s)" << std::endl;
+        char header[128];
+        std::snprintf(header, sizeof header, "%17s%-15s%-16s%-16s%-16s%s", "", "loss", "energy", "force", "stress", "penalty");
+        *log << header << std::endl;
+    }
 
     const int n = (int) coeffs.size();
     std::vector<double> grad(n), bfgs_g(n);
@@ -407,9 +412,11 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
                 loss_prev = bfgs_f;
                 if (log) {
-                    // mlp's line in columns, with the share of each term in the loss
-                    char line[128];
-                    std::snprintf(line, sizeof line, "BFGS iter %4d: f=%.7e  (E %3.0f%%  F %3.0f%%  S %3.0f%%  P %3.0f%%)", num_step, bfgs_f, 100 * bfgs_terms[0] / bfgs_f, 100 * bfgs_terms[1] / bfgs_f, 100 * bfgs_terms[2] / bfgs_f, 100 * bfgs_terms[3] / bfgs_f);
+                    // mlp's line in columns, with each term of the loss and its share
+                    char line[160];
+                    int length = std::snprintf(line, sizeof line, "BFGS iter %4d:  %.7e", num_step, bfgs_f);
+                    for (double term : bfgs_terms)
+                        length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", term, 100 * term / bfgs_f);
                     *log << line << std::endl;
                 }
                 num_step++;
