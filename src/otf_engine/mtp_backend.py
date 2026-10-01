@@ -144,7 +144,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
 # ---------------------------------------------------------------------------
 
 
-def select_add(potential, training_structs: list, candidate_structs: list, threshold: float = 1.001, state: MVSState | None = None, weights: dict | None = None, al_mode: str = "nbh", train_eqns: Equations | None = None) -> tuple:
+def select_add(potential, training_structs: list, candidate_structs: list, threshold: float = 1.001, state: MVSState | None = None, weights: dict | None = None, al_mode: str = "nbh", train_eqns: Equations | None = None, comm=None) -> tuple:
     """D-optimality greedy structure selection.
 
     Rebuilds the MaxVol active set from *training_structs*, then greedily
@@ -160,6 +160,10 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     train_eqns : Equations or None
         Equations already built for *training_structs* with these coefficients
         and weights, as returned by update_active_set.  Rebuilt when absent.
+    comm : mpi4py communicator or None
+        Search over its ranks, each holding the equations of its share of the
+        training structures and of the candidates, dealt round-robin. Every
+        rank passes the same arguments and returns the same selection.
 
     Returns
     -------
@@ -187,18 +191,31 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
             weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
         mv = MaxVol(n, threshold=threshold)
 
-    if train_eqns is None:
-        train_eqns = selection_equations(calc, training_structs, weights)
-    cand_eqns = selection_equations(calc, candidate_structs, weights)
+    rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
+    train_share, cand_share = range(rank, len(training_structs), size), range(rank, len(candidate_structs), size)
+    error = None
+    try:
+        if train_eqns is None:
+            train_eqns = selection_equations(calc, [training_structs[i] for i in train_share], weights, train_share)
+        cand_eqns = selection_equations(calc, [candidate_structs[i] for i in cand_share], weights, cand_share)
+    except Exception as e:
+        error = e
+    _raise_together(comm, error)
+
+    if comm is None:
+        maximize_volume = mv.maximize_volume
+    else:
+        from ._mtp import _mtp_mpi
+        def maximize_volume(pool, pool_id): _mtp_mpi.maximize_volume(mv, pool, pool_id, comm)
 
     # This three-pass sequence matches mlip-3 select_add and must stay ordered:
     # training rebuild at 1.001, candidate selection at threshold, training pass again.
     mv.threshold = 1.001
-    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN)
+    maximize_volume(train_eqns, pool_id=_POOL_TRAIN)
     initial = MaxVol(mv.A, mv.invA)
     mv.threshold = threshold
-    mv.maximize_volume(cand_eqns, pool_id=_POOL_CAND)
-    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN)
+    maximize_volume(cand_eqns, pool_id=_POOL_CAND)
+    maximize_volume(train_eqns, pool_id=_POOL_TRAIN)
 
     active_indices = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0})
     selected_structs = [candidate_structs[i] for i in active_indices]
@@ -206,6 +223,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     # Each selected structure's grade against the active set before the candidates entered it
     grades = numpy.zeros(len(candidate_structs))
     numpy.maximum.at(grades, cand_eqns.structure_indices, initial.grade(cand_eqns))
+    if comm is not None: grades = comm.allreduce(grades)    # each candidate's grade comes from one rank, the others' are 0
     for i, j in enumerate(active_indices):
         logger.info(f"  selected structure[{i}]: extrapolation grade (gamma) = {grades[j]:.4f}")
 
@@ -312,10 +330,13 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
     mv = MaxVol(pot.get_coeff_count(), threshold=threshold)
-    if comm is not None: from ._mtp import _mtp_mpi
-    for pool in (seed, train_eqns):
-        if comm is None: mv.maximize_volume(pool, pool_id=_POOL_TRAIN)
-        else: _mtp_mpi.maximize_volume(mv, pool, _POOL_TRAIN, comm)
+    if comm is None:
+        maximize_volume = mv.maximize_volume
+    else:
+        from ._mtp import _mtp_mpi
+        def maximize_volume(pool, pool_id): _mtp_mpi.maximize_volume(mv, pool, pool_id, comm)
+    maximize_volume(seed, pool_id=_POOL_TRAIN)
+    maximize_volume(train_eqns, pool_id=_POOL_TRAIN)
 
     seeded = len(seed) if comm is None else comm.allreduce(len(seed))
     if rank == 0:

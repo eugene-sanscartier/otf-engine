@@ -192,10 +192,13 @@ def eval_structures(selected_structures, training_set, evaluator_fn, launcher, f
 class OTFCycle:
     """One OTF-MTP update cycle, from extrapolative dumps to a retrained model, stepped through by its caller.
 
-    Inside `with`, the caller grades each dump with grade_dump, passes the result through preselect, select
-    and evaluate, trains with `training`, and calls replace_potential. Entering logs the otf_engine package
-    into cycle_dir's LOG_FILE, and only there, loads the OTF state and brings the active set up to date;
-    leaving records the state and archives the cycle in cycle_dir, as failed, and re-raising, if the block raised.
+    Inside `with`, the caller brings the active set up to date with `active_set_update`, then grades each
+    dump with grade_dump against it, passes the result through preselect, selects with `selection`, evaluates
+    the selected with evaluate, trains with `training`, and calls replace_potential. `active_set_update`,
+    `selection(candidates)` and `training` are the keyword arguments of otf_pool's update_active_set,
+    select_add and train_potential. Entering logs the otf_engine package into cycle_dir's LOG_FILE, and only
+    there, and loads the OTF state and the training set; leaving records the state and archives the cycle in
+    cycle_dir, as failed, and re-raising, if the block raised.
 
     extrapolative_dumps and the options up to force_threshold are `python -m otf_engine`'s, under the same names.
     evaluator_fn : evaluator_fn(structure) labels one structure, for the launchers that call it in-process;
@@ -234,10 +237,7 @@ class OTFCycle:
             self.state = _load_state()
             self.launcher.configure_timing(self.state, _save_state)
             self.launcher.configure_memory(self.state, _save_state)
-            # The dumps are graded against the active set, so it is brought up to date with the training set first.
             self.train_structures = load_structures(self.training_set, self.species)
-            self.train_eqns = update_active_set(self.potential, self.train_structures)
-            self.active_set_size = len(read_mvs_state(self.potential).selected_cfgs)
         except BaseException as e:
             self.__exit__(type(e), e, e.__traceback__)
             raise
@@ -272,6 +272,8 @@ class OTFCycle:
         graded : the structures grade_dump returned, by dump
         """
         state = self.state
+        # The size of the active set the dumps were graded against, recorded with the cycle
+        self.active_set_size = len(read_mvs_state(self.potential).selected_cfgs)
         candidates = []
         for k, (dump, structures) in enumerate(graded.items(), 1):
             logger.info(f"Graded dump {k}/{len(graded)}: {dump} with {len(structures)} structures")
@@ -337,11 +339,14 @@ class OTFCycle:
         state["n_preselected"] = len(candidates)
         return candidates
 
-    def select(self, candidates):
-        """Select, from the candidates, those that extend the active set, as mlip-3's select_add does."""
-        # train_eqns were built on entry, from the same coefficients and weights.
-        selected, _ = select_add(self.potential, self.train_structures, candidates, train_eqns=self.train_eqns)
-        return selected
+    @property
+    def active_set_update(self):
+        """The active-set update the dumps must be graded after, as otf_pool.update_active_set's keyword arguments."""
+        return dict(potential=self.potential, training_set=self.training_set, species=self.species)
+
+    def selection(self, candidates):
+        """The selection from the candidates of those that extend the active set, as otf_pool.select_add's keyword arguments."""
+        return dict(potential=self.potential, training_set=self.training_set, candidates=candidates, species=self.species)
 
     def evaluate(self, selected):
         """Evaluate the selected structures through the launcher, add those that succeed to the training set, and return their count."""
@@ -366,7 +371,9 @@ def run_cycle(extrapolative_dumps, launcher: Launcher, *, mlp_command=None, **op
     options : OTFCycle's
     """
     with OTFCycle(extrapolative_dumps, launcher, **options) as cycle:
+        train_eqns = update_active_set(cycle.potential, cycle.train_structures)
         candidates = cycle.preselect(grade_extrapolative_dumps(cycle.potential, extrapolative_dumps, cycle.species))
-        n_ok = cycle.evaluate(cycle.select(candidates))
+        selected, _ = select_add(cycle.potential, cycle.train_structures, candidates, train_eqns=train_eqns)
+        n_ok = cycle.evaluate(selected)
         launcher.run(f"{mlp_command} train {cycle.potential} {cycle.training_set} --save_to={cycle.training['save_to']} --iteration_limit={cycle.iteration_limit} ", log_file="mlip_train.log", training_set_size=len(cycle.train_structures) + n_ok)
         cycle.replace_potential()
