@@ -1,30 +1,13 @@
-import os
-import argparse
+"""Evaluator for otf_engine: evaluator(structure) labels one structure with Quantum ESPRESSO.
+
+The engine runs it in each evaluation's directory through ``python -m otf_engine.evaluate``.
+"""
 from pathlib import Path
 
-import ase.io
-import ase.io.extxyz
-
-import ase.calculators
 import ase.calculators.espresso
 from ase.calculators.espresso import EspressoProfile
 
-
-def build_command(binary, ase_env=None):
-    """Assemble the full executable command from env vars set by the kmtp-otf launcher.
-
-    The launcher writes ``COMMAND_PREFIX`` before calling evaluator() (or before
-    submitting this script as a batch job via SlurmLauncher):
-
-        COMMAND_PREFIX — prefix produced by launcher.command_prefix():
-                         ``"mpirun [exec_args]"`` (NestedMPILauncher),
-                         ``"srun [exec_args]"`` (SlurmLauncher, default exec_prefix),
-                         ``""`` (ForkLauncher, no wrapper).
-    """
-    prefix = os.environ.get("COMMAND_PREFIX", "")
-    command = f"{prefix} {binary}".strip()
-    if ase_env: os.environ[ase_env] = command
-    return command
+from otf_engine.evaluate import command
 
 
 # Directory containing this file — use for artifact paths so they resolve
@@ -33,7 +16,7 @@ evaluator_dir = Path(__file__).resolve().parent
 
 
 def evaluator(structure):
-    pwx_cmd = build_command("pw.x")
+    pwx_cmd = command("pw.x")
     pseudo_dir = evaluator_dir
 
     input_data = {
@@ -72,28 +55,3 @@ def evaluator(structure):
     structure.get_stress()
 
     return structure
-
-
-if __name__ == "__main__":
-    """Batch-job entry point invoked by SlurmLauncher.call_evaluator().
-
-    SlurmLauncher cannot call evaluator() in-process because structure
-    evaluations run on remote compute nodes. Instead it serialises the
-    structure to an extxyz file, submits this script via
-    ``sbatch --wait --wrap="python evaluator.py <input> <output>"``, and
-    reads the result back from the output file once the job finishes.
-
-    COMMAND_PREFIX is inherited from the parent job's environment and
-    consumed by build_command() inside evaluator().
-
-    Positional arguments (paths set by SlurmLauncher.call_evaluator):
-        input   extxyz file containing the structure to evaluate.
-        output  extxyz file where the evaluated structure is written.
-    """
-    p = argparse.ArgumentParser()
-    p.add_argument("input")
-    p.add_argument("output")
-    a = p.parse_args()
-    with open(a.input) as f:
-        structure = next(ase.io.extxyz.read_extxyz(f))
-    ase.io.extxyz.write_extxyz(a.output, [evaluator(structure)])

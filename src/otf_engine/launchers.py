@@ -542,12 +542,12 @@ class Launcher(ABC):
         return result
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None):
-        """Call evaluator_fn on structure inside eval_dir, or without one run ./evaluator.py on it there, with ``COMMAND_PREFIX`` set."""
+        """Call evaluator_fn on structure inside eval_dir, or without one run ./evaluator.py's evaluator on it there in a process of its own, with ``COMMAND_PREFIX`` set."""
         import ase.io.extxyz
         eval_dir.mkdir(parents=True, exist_ok=True)
         if evaluator_fn is None:
             ase.io.extxyz.write_extxyz(eval_dir / "input_structure.extxyz", [structure])
-            self._run_evaluator(_join([sys.executable, os.path.relpath("evaluator.py", eval_dir), "input_structure.extxyz", "output_structure.extxyz"]), eval_dir, single_rank, time_limit_s)
+            self._run_evaluator(_join([sys.executable, "-m", "otf_engine.evaluate", os.path.relpath("evaluator.py", eval_dir), "input_structure.extxyz", "output_structure.extxyz"]), eval_dir, single_rank, time_limit_s)
             with open(eval_dir / "output_structure.extxyz") as f:
                 return next(ase.io.extxyz.read_extxyz(f))
 
@@ -646,9 +646,9 @@ class SlurmLauncher(Launcher):
     """Submit mlp calls and evaluator jobs via ``sbatch --wait --wrap="cmd"``.
 
     Each ``launcher.run()`` call submits one Slurm batch job and blocks until
-    it finishes (``--wait``).  Structure evaluations always invoke ``evaluator.py``
-    directly as a script (requires an ``if __name__ == "__main__":`` block
-    with argparse in ``evaluator.py``); an ``evaluator_fn`` is not called.
+    it finishes (``--wait``).  Structure evaluations always run ``evaluator.py``'s
+    ``evaluator(structure)`` through ``python -m otf_engine.evaluate``; an
+    ``evaluator_fn`` is not called.
 
     Structure evaluations are submitted concurrently by default
     (``concurrent_eval=True``): all sbatch jobs are submitted simultaneously
@@ -656,7 +656,7 @@ class SlurmLauncher(Launcher):
     controlled by the job's resource allocation via ``batch_args``.
 
     ``COMMAND_PREFIX`` (``runner_exec``, default ``"srun"``) is set on each
-    evaluation job's command line — ``evaluator.py`` reads it via ``build_command()``.
+    evaluation job's command line — ``evaluator.py`` reads it via ``otf_engine.evaluate.command()``.
 
     **Python environment requirement**: ``sys.executable`` must be on a shared
     filesystem accessible from all compute nodes (NFS/Lustre, /home, /project).

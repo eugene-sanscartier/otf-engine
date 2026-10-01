@@ -108,7 +108,7 @@ class OTFCycle:
 
     extrapolative_dumps and the options up to force_threshold are `python -m otf_engine`'s, under the same names.
     evaluator_fn : evaluator_fn(structure) labels one structure in-process; without it, or under SlurmLauncher,
-                   ./evaluator.py runs on each structure
+                   ./evaluator.py's evaluator(structure) runs on each structure through `python -m otf_engine.evaluate`
     cycle_dir    : by default the next one under otf_cycles/
     """
 

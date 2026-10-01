@@ -1,4 +1,3 @@
-import importlib.util
 import inspect
 import logging
 import os
@@ -9,6 +8,7 @@ from pathlib import Path
 from .otf_mtp import OTFCycle, run_cycle
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
 from .cycles import next_cycle_dir, LOG_FILE, LOG_FORMAT
+from .evaluate import load_evaluator
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +71,8 @@ def main():
         case "slurm":
             launcher = SlurmLauncher(batch_args=args.batch_args, concurrent_eval=args.concurrent_eval, runner_args=args.runner_args)
 
-    spec = importlib.util.spec_from_file_location("evaluator", "evaluator.py")
-    evaluator = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(evaluator)
+    # Fails here, before grading, when evaluator.py is missing or broken; each evaluation runs it through otf_engine.evaluate.
+    load_evaluator("evaluator.py")
 
     cycle_dir = next_cycle_dir()
     log_path = cycle_dir / LOG_FILE
@@ -91,7 +90,7 @@ def main():
     options = vars(args)
     for name in ("launcher", "batch_args", "runner_args", "concurrent_eval"): del options[name]
     try:
-        run_cycle(launcher=launcher, evaluator_fn=evaluator.evaluator, mlp_command=mlp_command, cycle_dir=cycle_dir, **options)
+        run_cycle(launcher=launcher, mlp_command=mlp_command, cycle_dir=cycle_dir, **options)
     except Exception:
         sys.exit(67)
     sys.exit(0)
