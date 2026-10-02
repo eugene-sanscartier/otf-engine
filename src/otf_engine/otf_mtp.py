@@ -298,7 +298,8 @@ class OTFCycle:
         parallel = self.launcher.concurrent_eval and n > 1
         logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
         evaluated, deferred, gammas_evaluated = [],[],[]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=None if parallel else 1) as executor:
+        # One thread per structure: max_workers=None caps the pool at process_cpu_count() + 4.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n if parallel else 1) as executor:
             futures = {executor.submit(self._evaluate_one, i, s): i for i, s in enumerate(structures)}
             for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 i = futures[future]
