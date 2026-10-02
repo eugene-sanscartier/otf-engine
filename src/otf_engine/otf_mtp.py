@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy
 
 import ase
+import ase.io.extxyz
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
@@ -288,7 +289,9 @@ class OTFCycle:
     def evaluate(self, selected):
         """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, log the potential's errors on them, and return their count."""
         deferred_file = self.cycle_dir.parent / DEFERRED_EVALS_FILE
-        resubmitted = ase.io.read(deferred_file, index=":", format="extxyz") if deferred_file.is_file() else []
+        resubmitted = []
+        if deferred_file.is_file():
+            with open(deferred_file) as f: resubmitted = list(ase.io.extxyz.read_extxyz(f, index=slice(None)))
         structures = selected + resubmitted
         n = len(structures)
         w = len(str(n))
@@ -311,7 +314,7 @@ class OTFCycle:
         logger.info(f"Evaluated {len(evaluated)}/{n} successfully ({len(deferred)} deferred, {n_failed} failed).")
         self.record.update(n_selected=n, n_evaluated=len(evaluated), n_deferred=len(deferred), n_failed=n_failed, gammas_selected=[s.info["features"]["MV_grade"] for s in structures], gammas_evaluated=gammas_evaluated, max_forces_evaluated=[max_force(atoms) for atoms in evaluated])
 
-        ase.io.write(deferred_file, deferred, format="extxyz")
+        ase.io.extxyz.write_extxyz(deferred_file, deferred)
         if evaluated: logger.info(errors(self.potential, evaluated, "Errors on the evaluated structures:", first=len(self.train_structures) + 1, species=self.species))
         else: logger.info("No configurations selected or evaluated — retraining.")
         return len(evaluated)
