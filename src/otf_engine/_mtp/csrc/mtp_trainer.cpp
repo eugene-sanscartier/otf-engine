@@ -205,9 +205,16 @@ std::string error_table(PairMTP& potential, const std::vector<TrainingStructure>
         const double rmse = std::sqrt(sum[2] / sum[0]);
         const bool energy = r == ENE || r == EPA;
         const double mean = sum[4] / sum[0];
-        const double rel_max = max[0] / ((energy ? max[1] + max[2] : max[1]) + 1e-300);
-        const double rel_rmse = energy ? rmse / (std::sqrt(std::max(sum[3] / sum[0] - mean * mean, 0.0)) + 1e-300) : std::sqrt(sum[2] / (sum[3] + 1e-300));
-        std::snprintf(line, sizeof line, "%-12s %7ld %9.2e %9.2e %9.2e %9.3g %9.3g  %s\n", name.c_str(), (long) sum[0], sum[1] / sum[0], rmse, max[0], rel_max, rel_rmse, unit);
+        // a relative error over a zero reference scale, as of a single structure's energy, is shown as a dash
+        auto relative = [](double value, double scale) {
+            char field[16];
+            if (scale > 0) std::snprintf(field, sizeof field, " %9.2e", value / scale);
+            else std::snprintf(field, sizeof field, " %8s—", "");
+            return std::string(field);
+        };
+        const std::string rel_max = relative(max[0], energy ? max[1] + max[2] : max[1]);
+        const std::string rel_rmse = energy ? relative(rmse, std::sqrt(std::max(sum[3] / sum[0] - mean * mean, 0.0))) : relative(std::sqrt(sum[2]), std::sqrt(sum[3]));
+        std::snprintf(line, sizeof line, "%-12s %7ld %9.2e %9.2e %9.2e%s%s  %s\n", name.c_str(), (long) sum[0], sum[1] / sum[0], rmse, max[0], rel_max.c_str(), rel_rmse.c_str(), unit);
         out << line;
     };
     row(ENE, "energy", "eV");
