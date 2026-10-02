@@ -287,7 +287,7 @@ class OTFCycle:
         return dict(potential=self.potential, training_set=self.training_set, candidates=candidates, species=self.species)
 
     def evaluate(self, selected):
-        """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, log the potential's errors on them, and return their count."""
+        """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, log the potential's errors on them before training, and return their count."""
         deferred_file = self.cycle_dir.parent / DEFERRED_EVALS_FILE
         resubmitted = []
         if deferred_file.is_file():
@@ -315,7 +315,8 @@ class OTFCycle:
         self.record.update(n_selected=n, n_evaluated=len(evaluated), n_deferred=len(deferred), n_failed=n_failed, gammas_selected=[s.info["features"]["MV_grade"] for s in structures], gammas_evaluated=gammas_evaluated, max_forces_evaluated=[max_force(atoms) for atoms in evaluated])
 
         ase.io.extxyz.write_extxyz(deferred_file, deferred)
-        if evaluated: logger.info(errors(self.potential, evaluated, "Errors on the evaluated structures:", first=len(self.train_structures) + 1, species=self.species))
+        self.evaluated = evaluated
+        if evaluated: logger.info(errors(self.potential, evaluated, "Errors on the evaluated structures before training:", first=len(self.train_structures) + 1, species=self.species))
         else: logger.info("No configurations selected or evaluated — retraining.")
         return len(evaluated)
 
@@ -352,8 +353,9 @@ class OTFCycle:
         return dict(potential=self.potential, training_set=self.training_set, save_to=f"tmp_{self.potential}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG, "species": ",".join(self.species or [])})
 
     def replace_potential(self):
-        """Replace the potential with the one training wrote."""
+        """Replace the potential with the one training wrote, and log its errors on the evaluated structures."""
         os.replace(self.training["save_to"], self.potential)
+        if self.evaluated: logger.info(errors(self.potential, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.train_structures) + 1, species=self.species))
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {self.potential}.")
 
 
