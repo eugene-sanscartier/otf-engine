@@ -155,6 +155,10 @@ void BFGS::reset_hessian() {
         inv_hess[(size_t) i * size + i] = 1.0;
 }
 
+void BFGS::set_inverse_hessian(const double* h) {
+    inv_hess.assign(h, h + (size_t) size * size);
+}
+
 bool BFGS::iterate(double f, const std::vector<double>& g) {
     double p_dot_g = dot(g, p);
     bool loss_decrease = true;

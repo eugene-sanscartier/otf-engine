@@ -64,6 +64,7 @@ struct TrainerOptions {
     bool no_mindist_update = false; // keep min_dist rather than setting it to 0.99 of the shortest training distance
     bool init_random = false;       // randomize the radial coefficients of an untrained potential
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
+    bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
     std::vector<std::string> species;    // the species' names in the error tables
 };
 
@@ -77,6 +78,11 @@ class MTPTrainer {
     // species of the training set it lacked added, and logs the errors on the
     // training set before and after.
     void train();
+
+    // BFGS starts from the inverse Hessian in h, n x n for the n coefficients it
+    // trains, and leaves its final inverse Hessian there. Every rank gives n;
+    // only rank 0 gives h.
+    void set_inverse_hessian(double* h, int n) { inverse_hessian = h; inverse_hessian_size = n; }
 
   private:
     void add_species();
@@ -124,6 +130,8 @@ class MTPTrainer {
     bool scalable = true;
 
     BFGS bfgs;
+    double* inverse_hessian = nullptr;    // where BFGS starts from and leaves its inverse Hessian, on rank 0
+    int inverse_hessian_size = 0;         // its n, on every rank; 0 starts from the identity
 
     // Per-structure scratch
     std::vector<double> dloss_dforces;

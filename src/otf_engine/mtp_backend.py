@@ -249,11 +249,14 @@ def errors(potential: str, structures: list, title: str, first: int = 1, species
     return table
 
 
-def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None):
-    """train_mtp on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*."""
-    if comm is None: return train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint)
+def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None):
+    """train_mtp on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
+
+    inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's
+    """
+    if comm is None: return train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, inverse_hessian=inverse_hessian)
     from ._mtp import _mtp_mpi    # only under a communicator, so a process without one never loads the MPI library
-    return _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=checkpoint)
+    return _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=checkpoint, inverse_hessian=inverse_hessian)
 
 
 def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg", comm=None) -> None:

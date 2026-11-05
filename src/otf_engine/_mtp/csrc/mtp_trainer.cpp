@@ -62,6 +62,13 @@ void MTPTrainer::train() {
 
     add_species();
     if (log) *log << coeffs.size() << " coefficients (" << n_radial << " radial, " << n_linear << " linear)" << std::endl;
+
+    // Every rank checks the same options and sizes, so every rank raises together.
+    if (options.radial_only && !potential.is_trained())
+        throw std::runtime_error("train_mtp: radial_only needs a trained potential");
+    const int trained = options.radial_only ? n_radial : (int) coeffs.size();
+    if (inverse_hessian_size != 0 && inverse_hessian_size != trained)
+        throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
     log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
 
@@ -108,8 +115,10 @@ void MTPTrainer::train() {
         }
 
         fit_nonlinear(options.iteration_limit);
-        fit_linear();
-        rescale();
+        if (!options.radial_only) {
+            fit_linear();
+            rescale();
+        }
     }
 
     potential.set_coeffs(coeffs.data());
@@ -392,13 +401,17 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
         *log << header << std::endl;
     }
 
-    const int n = (int) coeffs.size();
-    std::vector<double> grad(n), bfgs_g(n);
+    // BFGS steps the leading n coefficients: all of them, or the radial block
+    const int n = options.radial_only ? n_radial : (int) coeffs.size();
+    std::vector<double> grad(coeffs.size()), bfgs_g(n);
     double bfgs_f = 0.0, bfgs_terms[4] = {};
 
     if (rank == 0) {
         bfgs.set_x(coeffs.data(), n);
-        bfgs.reset_hessian();
+        if (inverse_hessian)
+            bfgs.set_inverse_hessian(inverse_hessian);
+        else
+            bfgs.reset_hessian();
     }
 
     int num_step = 0;
@@ -414,7 +427,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             curr_line_search = 0;
             if (rank == 0) bfgs.set_x(coeffs.data(), n);
 
-            if (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400) {
+            if (!options.radial_only && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
                 fit_linear();
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian
@@ -430,8 +443,8 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             }
         }
 
-        if (rank == 0) coeffs = bfgs.x();
-        MPI_Bcast(coeffs.data(), n, MPI_DOUBLE, 0, comm);
+        if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
+        MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
 
         double loss = loss_grad(grad) / structure_count;
         for (double& g : grad) g /= structure_count;
@@ -498,6 +511,9 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
         MPI_Bcast(&linesearch, 1, MPI_C_BOOL, 0, comm);
         MPI_Bcast(&num_step, 1, MPI_INT, 0, comm);
     }
+
+    if (rank == 0 && inverse_hessian)
+        std::copy(bfgs.inverse_hessian().begin(), bfgs.inverse_hessian().end(), inverse_hessian);
 
     // the potential counts as trained from its first fit on
     potential.set_trained(true);

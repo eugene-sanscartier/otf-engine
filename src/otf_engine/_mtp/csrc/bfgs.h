@@ -38,6 +38,9 @@ class BFGS {
     void set_x(const double* x, int n);
     // Sets the inverse Hessian to the identity.
     void reset_hessian();
+    // Sets the inverse Hessian to h, size * size values for the current x.
+    void set_inverse_hessian(const double* h);
+    const std::vector<double>& inverse_hessian() const { return inv_hess; }
 
     double x(int i) const { return x_[i]; }
     const std::vector<double>& x() const { return x_; }
