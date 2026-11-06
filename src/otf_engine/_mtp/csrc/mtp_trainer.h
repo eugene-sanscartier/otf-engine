@@ -50,7 +50,7 @@ struct TrainingStructure {
 // largest energy and force errors; on rank 0, and empty on the others.
 std::string error_table(PairMTP& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title);
 
-// `mlp train`'s options, under its names and with its defaults.
+// `mlp train`'s options, under its names and with its defaults, and the trainer's own.
 struct TrainerOptions {
     double energy_weight = 1.0;
     double force_weight = 0.01;
@@ -67,7 +67,7 @@ struct TrainerOptions {
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
-    bool balance_species = false;   // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
+    bool balance_species = true;    // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
 };
 

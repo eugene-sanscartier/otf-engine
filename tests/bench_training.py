@@ -110,7 +110,7 @@ def main():
                 if arm == "mlp":
                     cmd = ([] if ranks == 1 else ["mpirun", "-np", str(ranks)]) + [str(MLP), "train", str(potential), str(train_cfg)] + options
                 else:
-                    cmd = [sys.executable, "-m", "otf_engine.train", str(potential), str(train_cfg), f"--ranks={ranks}"] + options
+                    cmd = [sys.executable, "-m", "otf_engine.train", str(potential), str(train_cfg), f"--ranks={ranks}", "--balance_species=false"] + options
                 r = runs[arm, ranks] = run_logged(cmd, workdir)
                 steps = len(r["times"]) - 1
                 per_iter = (r["times"][-1] - r["times"][0]) / steps if steps > 0 else float("nan")
