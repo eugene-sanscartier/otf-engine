@@ -64,8 +64,8 @@ void MTPTrainer::train() {
     if (log) *log << coeffs.size() << " coefficients (" << n_radial << " radial, " << n_linear << " linear)" << std::endl;
 
     // Every rank checks the same options and sizes, so every rank raises together.
-    if (options.radial_only && !potential.is_trained())
-        throw std::runtime_error("train_mtp: radial_only needs a trained potential");
+    if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
+        throw std::runtime_error("train_mtp: radial_only and bfgs_only need a trained potential");
     const int trained = options.radial_only ? n_radial : (int) coeffs.size();
     if (inverse_hessian_size != 0 && inverse_hessian_size != trained)
         throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
@@ -115,7 +115,7 @@ void MTPTrainer::train() {
         }
 
         fit_nonlinear(options.iteration_limit);
-        if (!options.radial_only) {
+        if (!options.radial_only && !options.bfgs_only) {
             fit_linear();
             rescale();
         }
@@ -427,7 +427,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             curr_line_search = 0;
             if (rank == 0) bfgs.set_x(coeffs.data(), n);
 
-            if (!options.radial_only && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
+            if (!options.radial_only && !options.bfgs_only && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
                 fit_linear();
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian

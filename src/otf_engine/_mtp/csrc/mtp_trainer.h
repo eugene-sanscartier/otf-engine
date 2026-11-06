@@ -64,6 +64,7 @@ struct TrainerOptions {
     bool no_mindist_update = false; // keep min_dist rather than setting it to 0.99 of the shortest training distance
     bool init_random = false;       // randomize the radial coefficients of an untrained potential
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
+    bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
     std::vector<std::string> species;    // the species' names in the error tables
 };

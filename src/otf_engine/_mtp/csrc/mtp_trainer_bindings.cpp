@@ -62,7 +62,7 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
         {"tolerance", &o.tolerance}};
     const std::map<std::string, int*> ints = {
         {"weight_scaling", &o.weight_scaling}, {"weight_scaling_forces", &o.weight_scaling_forces}, {"iteration_limit", &o.iteration_limit}};
-    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}};
+    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}};
 
     for (const auto& [key, value] : options) {
         if (key == "log")
