@@ -37,6 +37,7 @@ struct TrainingStructure {
     std::vector<double> forces;    // [n_atoms * 3]
     double virial[6] = {};         // xx,yy,zz,xy,xz,yz in eV, mlip-3's PlusStress
     int number = 0;                // the caller's number for it, which the error table names
+    std::vector<double> species_factors;    // force-weight factor by species index under balance_species
 
     int n_atoms() const { return (int) types.size(); }
     NeighList list() const {
@@ -66,7 +67,7 @@ struct TrainerOptions {
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
-    std::vector<double> species_force_factors;  // factors on force weights by species index; species past the end keep 1
+    bool balance_species = false;   // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
 };
 

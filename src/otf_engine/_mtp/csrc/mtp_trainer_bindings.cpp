@@ -62,7 +62,7 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
         {"tolerance", &o.tolerance}};
     const std::map<std::string, int*> ints = {
         {"weight_scaling", &o.weight_scaling}, {"weight_scaling_forces", &o.weight_scaling_forces}, {"iteration_limit", &o.iteration_limit}};
-    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}};
+    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}, {"balance_species", &o.balance_species}};
 
     for (const auto& [key, value] : options) {
         if (key == "log")
@@ -71,10 +71,6 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
             std::stringstream names(value);
             for (std::string name; std::getline(names, name, ',');)
                 o.species.push_back(name);
-        } else if (key == "species_force_factors") {
-            std::stringstream factors(value);
-            for (std::string factor; std::getline(factors, factor, ',');)
-                o.species_force_factors.push_back(std::stod(factor));
         } else if (doubles.count(key))
             *doubles.at(key) = std::stod(value);
         else if (ints.count(key))

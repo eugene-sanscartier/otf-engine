@@ -32,6 +32,20 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     potential.get_coeffs(coeffs.data());
     reg_vector.assign(n_linear, reg_param);
 
+    // N atoms of k species, n_s of species s: each atom of s weighs N / (k n_s), its species N / k.
+    if (options.balance_species)
+        for (TrainingStructure& s : this->structures) {
+            std::vector<int> counts;
+            for (int i : s.ilist) {
+                if (s.types[i] >= (int) counts.size()) counts.resize(s.types[i] + 1, 0);
+                counts[s.types[i]]++;
+            }
+            const int k = (int) std::count_if(counts.begin(), counts.end(), [](int n) { return n > 0; });
+            s.species_factors.assign(counts.size(), 0.0);
+            for (size_t t = 0; t < counts.size(); t++)
+                if (counts[t] > 0) s.species_factors[t] = (double) s.ilist.size() / (k * counts[t]);
+        }
+
     // A basic moment has degree 1, a product the sum of its factors'.
     std::vector<int> moment_degree(potential.get_alpha_moment_count(), 0);
     std::fill_n(moment_degree.begin(), potential.get_alpha_index_basic_count(), 1);
@@ -112,11 +126,7 @@ void MTPTrainer::train() {
                 *log << "Force weight: " << options.force_weight << std::endl;
                 *log << "Stress weight: " << options.stress_weight << std::endl;
             }
-            if (!options.species_force_factors.empty()) {
-                *log << "Species force factors:";
-                for (double factor : options.species_force_factors) *log << " " << factor;
-                *log << std::endl;
-            }
+            if (options.balance_species) *log << "Force weights balanced over species" << std::endl;
         }
 
         fit_nonlinear(options.iteration_limit);
@@ -927,8 +937,8 @@ double MTPTrainer::force_weight(const TrainingStructure& s, int i) const {
         const double* f = s.forces.data() + i * 3;
         wgt *= options.scale_by_force / (f[0] * f[0] + f[1] * f[1] + f[2] * f[2] + options.scale_by_force);
     }
-    if (s.types[i] < (int) options.species_force_factors.size())
-        wgt *= options.species_force_factors[s.types[i]];
+    if (options.balance_species)
+        wgt *= s.species_factors[s.types[i]];
     return wgt * options.select_factor;
 }
 
