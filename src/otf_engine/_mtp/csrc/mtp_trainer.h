@@ -66,6 +66,7 @@ struct TrainerOptions {
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
+    std::vector<double> species_force_factors;  // factors on force weights by species index; species past the end keep 1
     std::vector<std::string> species;    // the species' names in the error tables
 };
 

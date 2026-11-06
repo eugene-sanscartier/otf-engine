@@ -112,6 +112,11 @@ void MTPTrainer::train() {
                 *log << "Force weight: " << options.force_weight << std::endl;
                 *log << "Stress weight: " << options.stress_weight << std::endl;
             }
+            if (!options.species_force_factors.empty()) {
+                *log << "Species force factors:";
+                for (double factor : options.species_force_factors) *log << " " << factor;
+                *log << std::endl;
+            }
         }
 
         fit_nonlinear(options.iteration_limit);
@@ -922,6 +927,8 @@ double MTPTrainer::force_weight(const TrainingStructure& s, int i) const {
         const double* f = s.forces.data() + i * 3;
         wgt *= options.scale_by_force / (f[0] * f[0] + f[1] * f[1] + f[2] * f[2] + options.scale_by_force);
     }
+    if (s.types[i] < (int) options.species_force_factors.size())
+        wgt *= options.species_force_factors[s.types[i]];
     return wgt * options.select_factor;
 }
 

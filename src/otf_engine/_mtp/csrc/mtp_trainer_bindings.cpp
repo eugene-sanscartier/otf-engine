@@ -71,6 +71,10 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
             std::stringstream names(value);
             for (std::string name; std::getline(names, name, ',');)
                 o.species.push_back(name);
+        } else if (key == "species_force_factors") {
+            std::stringstream factors(value);
+            for (std::string factor; std::getline(factors, factor, ',');)
+                o.species_force_factors.push_back(std::stod(factor));
         } else if (doubles.count(key))
             *doubles.at(key) = std::stod(value);
         else if (ints.count(key))
