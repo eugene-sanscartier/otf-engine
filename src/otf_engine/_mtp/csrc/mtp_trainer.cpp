@@ -129,6 +129,7 @@ void MTPTrainer::train() {
             if (options.balance_species) *log << "Force weights balanced over species" << std::endl;
         }
 
+        if (options.no_orthogonalize) orthogonalizing = false;
         fit_nonlinear(options.iteration_limit);
         if (!options.radial_only && !options.bfgs_only) {
             fit_linear();
@@ -907,6 +908,8 @@ void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad) {
 // and basis functions. The projection divides by the squared norm of the
 // function being reduced, not of the one projected out.
 void MTPTrainer::orthogonalize() {
+    if (!orthogonalizing) return;
+
     const int C = potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();

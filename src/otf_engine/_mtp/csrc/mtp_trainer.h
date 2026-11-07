@@ -69,6 +69,7 @@ struct TrainerOptions {
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
     bool reg_once = false;          // build the linear regularization at the first linear fit only
+    bool no_orthogonalize = false;  // orthogonalize the radial functions in pre-training only, so a linear fit never raises the loss
     int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
     bool balance_species = true;    // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
@@ -133,6 +134,7 @@ class MTPTrainer {
     std::vector<double> reg_vector;    // regularization on its diagonal
     bool reg_init = true;              // whether reg_vector is rebuilt at the next solve
     bool reg_built = false;            // whether a linear fit has built reg_vector
+    bool orthogonalizing = true;       // whether orthogonalize acts; no_orthogonalize clears it after pre-training
 
     // Degree of each basis function in the radial functions, and whether the
     // linear system scales with it, so that rescale assembles it once.
