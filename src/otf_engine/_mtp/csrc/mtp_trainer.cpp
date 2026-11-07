@@ -31,6 +31,7 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     coeffs.resize(n_radial + n_linear);
     potential.get_coeffs(coeffs.data());
     reg_vector.assign(n_linear, options.reg_param);
+    if (options.varpro) this->options.reg_once = true;    // a regularization that moved during BFGS would change the objective
 
     // N atoms of k species, n_s of species s: each atom of s weighs N / (k n_s), its species N / k.
     if (options.balance_species)
@@ -80,7 +81,7 @@ void MTPTrainer::train() {
     // Every rank checks the same options and sizes, so every rank raises together.
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
         throw std::runtime_error("train_mtp: radial_only and bfgs_only need a trained potential");
-    const int trained = options.radial_only ? n_radial : (int) coeffs.size();
+    const int trained = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
     if (inverse_hessian_size != 0 && inverse_hessian_size != trained)
         throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
     log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
@@ -418,7 +419,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
     }
 
     // BFGS steps the leading n coefficients: all of them, or the radial block
-    const int n = options.radial_only ? n_radial : (int) coeffs.size();
+    const int n = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
     std::vector<double> grad(coeffs.size()), bfgs_g(n);
     double bfgs_f = 0.0, bfgs_terms[4] = {};
 
@@ -443,7 +444,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             curr_line_search = 0;
             if (rank == 0) bfgs.set_x(coeffs.data(), n);
 
-            if (!options.radial_only && !options.bfgs_only && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
+            if (!options.radial_only && !options.bfgs_only && !options.varpro && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
                 fit_linear();
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian
@@ -461,6 +462,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
         if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
         MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
+        if (options.varpro) fit_linear(false);    // the linear coefficients at their optimum for these radial ones
 
         double loss = loss_grad(grad) / structure_count;
         for (double& g : grad) g /= structure_count;
@@ -547,10 +549,10 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
 /* ----------------------------------------------------------------------
    Least squares for the species and linear coefficients, after
-   orthonormalizing the radial functions. Rank 0 solves the summed system.
+   orthonormalizing the radial functions unless told not to. Rank 0 solves the summed system.
 ------------------------------------------------------------------------- */
-void MTPTrainer::fit_linear() {
-    orthogonalize();
+void MTPTrainer::fit_linear(bool orthonormalize) {
+    if (orthonormalize) orthogonalize();
     potential.set_coeffs(coeffs.data());
     assemble_linear();
     if (rank == 0) solve_linear(structure_count);
@@ -786,7 +788,10 @@ void MTPTrainer::rescale() {
 }
 
 double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>& grad) {
+    // fixes the regularization at the potential's own radial coefficients, where BFGS's first evaluation fixes it
+    if (options.varpro) fit_linear(false);
     std::copy(at.begin(), at.end(), coeffs.begin());
+    if (options.varpro) fit_linear(false);
     std::vector<double> local(coeffs.size());
     double loss = loss_grad(local) / structure_count;
     for (double& g : local) g /= structure_count;
@@ -796,6 +801,8 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
     grad.assign(coeffs.size(), 0.0);
     MPI_Allreduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, comm);
     MPI_Allreduce(local.data(), grad.data(), (int) grad.size(), MPI_DOUBLE, MPI_SUM, comm);
+    // the linear coefficients are a function of the radial ones: their partial gradient is zero at the optimum
+    if (options.varpro) std::fill(grad.begin() + n_radial, grad.end(), 0.0);
     return total;
 }
 

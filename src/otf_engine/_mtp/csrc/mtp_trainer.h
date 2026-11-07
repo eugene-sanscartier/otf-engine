@@ -68,6 +68,7 @@ struct TrainerOptions {
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
+    bool varpro = false;            // variable projection: BFGS over the radial coefficients, the linear ones solved exactly at every evaluation with the regularization built once
     bool reg_once = false;          // build the linear regularization at the first linear fit only
     bool no_orthogonalize = false;  // orthogonalize the radial functions in pre-training only, so a linear fit never raises the loss
     int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
@@ -99,7 +100,7 @@ class MTPTrainer {
     void add_species();
     void update_min_dist();
     void fit_nonlinear(int max_iter);
-    void fit_linear();
+    void fit_linear(bool orthonormalize = true);
     void assemble_linear();
     void solve_linear(int structure_count);
     void broadcast_linear();
