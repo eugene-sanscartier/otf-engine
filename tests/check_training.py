@@ -105,7 +105,7 @@ def main():
                     with open(log, "w") as stream:
                         proc = subprocess.Popen([str(MLP), "train", str(potential), str(data), f"--save_to={out}"] + [f"--{k}={v}" for k, v in options.items()], stdout=stream, stderr=subprocess.STDOUT, cwd=workdir)
                     return lambda: (proc.wait(), log.read_text())[1]
-                train(str(potential), structs, str(out), settings=options | {"log": str(log), "balance_species": "false"}, ranks=r)
+                train(str(potential), structs, str(out), settings=options | {"log": str(log)}, ranks=r, balance_species=False)
                 return lambda: log.read_text()
 
             renamed = [atoms.copy() for atoms in structs]

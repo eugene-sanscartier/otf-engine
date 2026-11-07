@@ -3,8 +3,7 @@
     python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=cfg|nbh] [mlp train options]
 
 Takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random, --skip_preinit,
-...). Every species of a structure has an equal share of its force weight; --balance_species=false
-weighs every force alike, as mlp does. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
+...). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
 be untrained, such as an mlip-3 template, and gains the species of the training set it lacks. The
 trained potential is written to --save_to, by default over the input, with an active set built on
 the training set.
@@ -17,7 +16,7 @@ from .io_cfg import read_cfg
 from .mtp_backend import train
 
 
-def main(argv=None):
+def main(argv=None, balance_species: bool = True):
     argv = sys.argv[1:] if argv is None else argv
     args = [a for a in argv if not a.startswith("--")]
     options = dict(a[2:].split("=", 1) if "=" in a else (a[2:], "true") for a in argv if a.startswith("--"))
@@ -31,7 +30,7 @@ def main(argv=None):
 
     with open(training_set) as f:
         structures = read_cfg(f)
-    train(potential, structures, save_to, settings=options, ranks=ranks, al_mode=al_mode)
+    train(potential, structures, save_to, settings=options, ranks=ranks, al_mode=al_mode, balance_species=balance_species)
     logging.getLogger(__name__).info("training complete")
 
 

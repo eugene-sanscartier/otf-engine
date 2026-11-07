@@ -249,17 +249,18 @@ def errors(potential: str, structures: list, title: str, first: int = 1, species
     return table
 
 
-def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None):
+def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None, balance_species: bool = True):
     """train_mtp on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
 
     inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's
+    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp does
     """
-    if comm is None: return train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, inverse_hessian=inverse_hessian)
+    if comm is None: return train_mtp(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, inverse_hessian=inverse_hessian, balance_species=balance_species)
     from ._mtp import _mtp_mpi    # only under a communicator, so a process without one never loads the MPI library
-    return _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=checkpoint, inverse_hessian=inverse_hessian)
+    return _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=checkpoint, inverse_hessian=inverse_hessian, balance_species=balance_species)
 
 
-def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg", comm=None) -> None:
+def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg", comm=None, balance_species: bool = True) -> None:
     """Train *potential* on *training_structs* as mlip-3's `mlp train` does, and write it with an active set to *save_to*.
 
     *potential* may be untrained, and gains the species of *training_structs* it lacks.
@@ -270,6 +271,7 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
                same *training_structs*, and rank 0 writes *save_to*.
+    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp does
     """
     try:
         weights = read_mvs_header(potential)[0]
@@ -281,7 +283,7 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
     structures = (_labelled(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
     options = {key: str(value) for key, value in (settings or {}).items()}
-    pot = fit(potential, structures, options, checkpoint=lambda pot: write_mtp(pot, save_to), ranks=ranks, comm=comm)
+    pot = fit(potential, structures, options, checkpoint=lambda pot: write_mtp(pot, save_to), ranks=ranks, comm=comm, balance_species=balance_species)
 
     if rank == 0: write_mtp(pot, save_to)
     if comm is not None: comm.Barrier()    # every rank reads save_to back

@@ -62,7 +62,7 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
         {"tolerance", &o.tolerance}};
     const std::map<std::string, int*> ints = {
         {"weight_scaling", &o.weight_scaling}, {"weight_scaling_forces", &o.weight_scaling_forces}, {"iteration_limit", &o.iteration_limit}};
-    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}, {"balance_species", &o.balance_species}};
+    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}};
 
     for (const auto& [key, value] : options) {
         if (key == "log")
@@ -131,7 +131,7 @@ static void raise_together(MPI_Comm comm, const std::string& error) {
     throw std::runtime_error(message);
 }
 
-static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::object comm_object, py::object checkpoint, py::object inverse_hessian) {
+static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::object comm_object, py::object checkpoint, py::object inverse_hessian, bool balance_species) {
     const MPI_Comm comm = MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>());
     int rank = 0;
     MPI_Comm_rank(comm, &rank);
@@ -148,6 +148,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
     try {
         std::string log_target = "stdout";
         trainer_options = parse_options(options, log_target);
+        trainer_options.balance_species = balance_species;
         for (py::handle item : structures)
             share.push_back(make_structure(item));
         if (rank == 0) log = open_log(log_target, log_file);
@@ -194,7 +195,7 @@ PYBIND11_MODULE(_mtp_mpi, m) {
     py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining, NeighList, Equations and MaxVol
     bind_maxvol(m);
 
-    m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), R"doc(
+    m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename as mlip-3's `mlp train` does, over the ranks of comm, and return it.
 
 Every rank calls it with its own share of the structures and the same other arguments, and returns
@@ -211,14 +212,17 @@ checkpoint : called on rank 0 with the potential being trained wherever mlp save
 inverse_hessian : (n, n) float64 array, n the coefficients BFGS trains (the radial ones under
              radial_only, else all); BFGS starts from it and leaves its final inverse Hessian in
              rank 0's. Every rank passes one of the same shape. None starts from the identity
+balance_species : give every species of a structure an equal share of its force weight; False
+             weighs every force alike, as mlp does
 )doc");
 }
 
 #else
 
-static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, int ranks, py::object checkpoint, py::object inverse_hessian) {
+static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, int ranks, py::object checkpoint, py::object inverse_hessian, bool balance_species) {
     std::string log_target = "stdout";
-    const TrainerOptions trainer_options = parse_options(options, log_target);
+    TrainerOptions trainer_options = parse_options(options, log_target);
+    trainer_options.balance_species = balance_species;
     if (ranks < 1)
         throw std::runtime_error("train_mtp: ranks must be at least 1");
     int hessian_size = 0;
@@ -283,7 +287,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
 }
 
 void bind_trainer(py::module_& m) {
-    m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), R"doc(
+    m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename as mlip-3's `mlp train` does, on `ranks` threads, and return it.
 
 structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None, number),
@@ -295,6 +299,8 @@ checkpoint : called with the potential being trained wherever mlp saves it durin
 inverse_hessian : (n, n) float64 array, n the coefficients BFGS trains (the radial ones under
              radial_only, else all); BFGS starts from it and leaves its final inverse Hessian
              there. None starts from the identity
+balance_species : give every species of a structure an equal share of its force weight; False
+             weighs every force alike, as mlp does
 )doc");
 
     m.def("error_table", [](PairMTP& potential, py::iterable structures, const std::vector<std::string>& species, const std::string& title) {
