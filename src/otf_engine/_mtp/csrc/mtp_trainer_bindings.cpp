@@ -286,7 +286,27 @@ static py::object train(const std::string& filename, py::iterable structures, co
     return potential;
 }
 
+// The trainer's objective and its gradient at coeffs, on one thread.
+static py::tuple objective(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::array_t<double, py::array::c_style | py::array::forcecast> coeffs, bool balance_species) {
+    std::string log_target;
+    TrainerOptions trainer_options = parse_options(options, log_target);
+    trainer_options.balance_species = balance_species;
+    std::vector<TrainingStructure> share;
+    for (py::handle item : structures)
+        share.push_back(make_structure(item));
+
+    MTPTraining potential(filename);
+    std::vector<double> at(coeffs.data(), coeffs.data() + coeffs.size()), grad;
+    ThreadGroup group(1);
+    ThreadComm comm{&group, 0};
+    MTPTrainer trainer(potential, std::move(share), trainer_options, &comm);
+    const double loss = trainer.objective(at, grad);
+    return py::make_tuple(loss, py::array_t<double>(grad.size(), grad.data()));
+}
+
 void bind_trainer(py::module_& m) {
+    m.def("trainer_objective", &objective, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("balance_species") = true,
+          "The loss the trainer's BFGS minimizes and its gradient at coeffs, for gradient tests; the potential in filename must hold every species of structures.");
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename as mlip-3's `mlp train` does, on `ranks` threads, and return it.
 

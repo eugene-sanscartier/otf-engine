@@ -784,6 +784,20 @@ void MTPTrainer::rescale() {
     } while (ind != 2);
 }
 
+double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>& grad) {
+    std::copy(at.begin(), at.end(), coeffs.begin());
+    std::vector<double> local(coeffs.size());
+    double loss = loss_grad(local) / structure_count;
+    for (double& g : local) g /= structure_count;
+    if (rank == 0) add_penalty(loss, local);
+
+    double total = 0.0;
+    grad.assign(coeffs.size(), 0.0);
+    MPI_Allreduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, comm);
+    MPI_Allreduce(local.data(), grad.data(), (int) grad.size(), MPI_DOUBLE, MPI_SUM, comm);
+    return total;
+}
+
 /* ---------------------------------------------------------------------- */
 double MTPTrainer::loss_grad(std::vector<double>& grad) {
     potential.set_coeffs(coeffs.data());

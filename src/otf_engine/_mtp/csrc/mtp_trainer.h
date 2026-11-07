@@ -90,6 +90,10 @@ class MTPTrainer {
     // only rank 0 gives h.
     void set_inverse_hessian(double* h, int n) { inverse_hessian = h; inverse_hessian_size = n; }
 
+    // The loss BFGS minimizes, penalty included, and its gradient over every coefficient,
+    // at coeffs, summed over the ranks, on every rank. For tests of the gradient.
+    double objective(const std::vector<double>& at, std::vector<double>& grad);
+
   private:
     void add_species();
     void update_min_dist();
