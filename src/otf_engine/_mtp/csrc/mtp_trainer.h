@@ -56,6 +56,7 @@ struct TrainerOptions {
     double force_weight = 0.01;
     double stress_weight = 0.001;
     double penalty_weight = 1e-6;
+    double reg_param = 1e-10;       // the linear coefficients' regularization, times max(1, A_ii) / N once the first linear fit builds it
     double scale_by_force = 0.0;    // > 0 weighs each force by scale_by_force / (|F|^2 + scale_by_force)
     double select_factor = 1.0;     // scales every weight
     int weight_scaling = 1;         // energy weights are divided by n_atoms^weight_scaling
@@ -67,6 +68,8 @@ struct TrainerOptions {
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
+    bool reg_once = false;          // build the linear regularization at the first linear fit only
+    int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
     bool balance_species = true;    // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
 };
@@ -125,7 +128,7 @@ class MTPTrainer {
     std::vector<double> lin_matrix, lin_vector;
     std::vector<double> reg_vector;    // regularization on its diagonal
     bool reg_init = true;              // whether reg_vector is rebuilt at the next solve
-    const double reg_param = 1e-10;
+    bool reg_built = false;            // whether a linear fit has built reg_vector
 
     // Degree of each basis function in the radial functions, and whether the
     // linear system scales with it, so that rescale assembles it once.

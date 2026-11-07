@@ -30,7 +30,7 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();
     coeffs.resize(n_radial + n_linear);
     potential.get_coeffs(coeffs.data());
-    reg_vector.assign(n_linear, reg_param);
+    reg_vector.assign(n_linear, options.reg_param);
 
     // N atoms of k species, n_s of species s: each atom of s weighs N / (k n_s), its species N / k.
     if (options.balance_species)
@@ -89,7 +89,7 @@ void MTPTrainer::train() {
     if (options.init_random && !potential.is_trained()) {
         if (rank == 0) {
             std::random_device rand_device;
-            std::default_random_engine generator(rand_device());
+            std::default_random_engine generator(options.random_seed >= 0 ? (unsigned) options.random_seed : rand_device());
             std::uniform_real_distribution<> uniform(-1.0, 1.0);
 
             if (log) *log << "Random initialization of radial coefficients" << std::endl;
@@ -656,17 +656,20 @@ void MTPTrainer::solve_linear(int ts_size) {
             A[j * n + i] = A[i * n + j];
 
     // the regularization is rebuilt when the diagonal has moved two orders of magnitude from it
-    if (!reg_init)
+    if (options.reg_once && reg_built) reg_init = false;
+    if (!reg_init && !options.reg_once)
         for (int i = 0; i < n; i++)
-            if (reg_vector[i] < 1e-2 * reg_param * std::max(1.0, A[i * n + i]) / ts_size || reg_vector[i] > 1e2 * reg_param * std::max(1.0, A[i * n + i]) / ts_size) {
+            if (reg_vector[i] < 1e-2 * options.reg_param * std::max(1.0, A[i * n + i]) / ts_size || reg_vector[i] > 1e2 * options.reg_param * std::max(1.0, A[i * n + i]) / ts_size) {
                 reg_init = true;
                 if (log) *log << "Regularization parameters updated. Hessian in BFGS is reset" << std::endl;
                 break;
             }
 
-    if (reg_init)
+    if (reg_init) {
         for (int i = 0; i < n; i++)
-            reg_vector[i] = reg_param * std::max(1.0, A[i * n + i]) / ts_size;
+            reg_vector[i] = options.reg_param * std::max(1.0, A[i * n + i]) / ts_size;
+        reg_built = true;
+    }
 
     for (int i = 0; i < n; i++)
         A[i * n + i] += reg_vector[i] * ts_size;
