@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -84,6 +85,8 @@ void MTPTrainer::train() {
     const int trained = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
     if (inverse_hessian_size != 0 && inverse_hessian_size != trained)
         throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
+    if (options.riemannian && (inverse_hessian_size != 0 || options.radial_only || options.bfgs_only))
+        throw std::runtime_error("train_mtp: riemannian takes no inverse_hessian, radial_only or bfgs_only");
     log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
 
@@ -131,7 +134,10 @@ void MTPTrainer::train() {
         }
 
         if (options.no_orthogonalize) orthogonalizing = false;
-        fit_nonlinear(options.iteration_limit);
+        if (options.riemannian)
+            fit_riemannian(options.iteration_limit);
+        else
+            fit_nonlinear(options.iteration_limit);
         if (!options.radial_only && !options.bfgs_only) {
             fit_linear();
             rescale();
@@ -548,6 +554,189 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 }
 
 /* ----------------------------------------------------------------------
+   Riemannian L-BFGS (Huang, Gallivan, Absil 2015, in the form of Boumal's
+   book) over the radial functions on the Stiefel manifold W W^T = I, with
+   the embedded metric: the gradient is the tangent projection of the
+   Euclidean one, the retraction is QR, vector transport is projection, and
+   the step is a backtracking Armijo search along the retraction curve.
+   Without varpro the linear block is a Euclidean factor, refitted at mlp's
+   steps. Every rank takes the same steps from the broadcast loss and gradient.
+------------------------------------------------------------------------- */
+void MTPTrainer::fit_riemannian(int max_iter) {
+    const auto start = std::chrono::steady_clock::now();
+    MPI_Barrier(comm);
+    if (log) {
+        *log << "Riemannian L-BFGS started on " << size << " core(s)" << std::endl;
+        char header[128];
+        std::snprintf(header, sizeof header, "%17s%-15s%-16s%-16s%-16s%-16s%s", "", "loss", "energy", "force", "stress", "penalty", "|WW^T-I|");
+        *log << header << std::endl;
+    }
+
+    // the coordinates stepped: the radial block, and the linear one without varpro
+    const int n = options.varpro ? n_radial : (int) coeffs.size();
+    const int K = potential.get_radial_func_count();
+    std::vector<double> grad(coeffs.size()), g(n), g_new(n), p(n), x0(n);
+    std::deque<std::vector<double>> s_memory, y_memory;    // tangent at the current point
+    double terms[4] = {};
+    int evaluations = 0;
+    auto dot = [n](const std::vector<double>& a, const std::vector<double>& b) {
+        double sum = 0.0;
+        for (int i = 0; i < n; i++) sum += a[i] * b[i];
+        return sum;
+    };
+
+    // the loss at coeffs, and its Riemannian gradient into out, on every rank
+    auto evaluate = [&](std::vector<double>& out) {
+        MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
+        if (options.varpro) fit_linear(false);
+        double loss = loss_grad(grad) / structure_count;
+        for (double& x : grad) x /= structure_count;
+        double local[4] = {loss_terms[0] / structure_count, loss_terms[1] / structure_count, loss_terms[2] / structure_count, loss};
+        if (rank == 0) add_penalty(loss, grad, false);
+        local[3] = loss - local[3];
+
+        double total = 0.0;
+        MPI_Reduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
+        MPI_Reduce(local, terms, 4, MPI_DOUBLE, MPI_SUM, 0, comm);
+        MPI_Reduce(grad.data(), out.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
+        MPI_Bcast(&total, 1, MPI_DOUBLE, 0, comm);
+        MPI_Bcast(out.data(), n, MPI_DOUBLE, 0, comm);
+        project_tangent(coeffs.data(), out.data());
+        evaluations++;
+        return total;
+    };
+
+    // the start on the manifold, a lower-triangular change of the radial functions, with the linear coefficients refitted
+    retract(coeffs);
+    if (!options.varpro) {
+        fit_linear(false);
+        reg_init = false;
+    }
+    double f = evaluate(g);
+
+    int num_step = 0;
+    double linf = 9e99;    // the loss 50 steps ago
+    while (true) {
+        if (!options.varpro && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
+            fit_linear(false);
+            f = evaluate(g);
+            // a new regularization invalidates the memory
+            if (reg_init) {
+                s_memory.clear();
+                y_memory.clear();
+                reg_init = false;
+            }
+        }
+
+        if (log) {
+            const std::vector<double> gram = radial_overlaps(coeffs.data(), coeffs.data());
+            double violation = 0.0;
+            for (int k1 = 0; k1 < K; k1++)
+                for (int k2 = 0; k2 < K; k2++)
+                    violation += (gram[k1 * K + k2] - (k1 == k2)) * (gram[k1 * K + k2] - (k1 == k2));
+            char line[192];
+            int length = std::snprintf(line, sizeof line, "Riemann iter %4d:  %.7e", num_step, f);
+            for (double term : terms)
+                length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", term, 100 * term / f);
+            std::snprintf(line + length, sizeof line - length, "  %.1e", std::sqrt(violation));
+            *log << line << std::endl;
+        }
+        if (rank == 0 && checkpoint) {
+            potential.set_coeffs(coeffs.data());
+            checkpoint();
+        }
+
+        if (num_step >= max_iter) {
+            if (log) *log << "step limit reached" << std::endl;
+            break;
+        }
+        if (num_step % 50 == 0 && num_step > 100) {
+            if ((linf - f) / f < options.tolerance) {
+                if (log) *log << "L-BFGS ended due to small decr. in 50 iterations" << std::endl;
+                break;
+            }
+            linf = f;
+        }
+        const double g_norm = std::sqrt(dot(g, g));
+        if (g_norm == 0.0) break;
+
+        // the two-loop recursion, scaled by the newest pair, or a unit step down the gradient
+        std::vector<double> alpha(s_memory.size());
+        p = g;
+        for (int i = (int) s_memory.size() - 1; i >= 0; i--) {
+            alpha[i] = dot(s_memory[i], p) / dot(y_memory[i], s_memory[i]);
+            for (int j = 0; j < n; j++) p[j] -= alpha[i] * y_memory[i][j];
+        }
+        const double gamma = s_memory.empty() ? 1.0 / g_norm : dot(s_memory.back(), y_memory.back()) / dot(y_memory.back(), y_memory.back());
+        for (double& x : p) x *= -gamma;
+        for (size_t i = 0; i < s_memory.size(); i++) {
+            const double beta = dot(y_memory[i], p) / dot(y_memory[i], s_memory[i]);
+            for (int j = 0; j < n; j++) p[j] -= (alpha[i] + beta) * s_memory[i][j];
+        }
+        project_tangent(coeffs.data(), p.data());
+        double slope = dot(g, p);
+        if (!(slope < 0.0)) {
+            s_memory.clear();
+            y_memory.clear();
+            for (int j = 0; j < n; j++) p[j] = -g[j] / g_norm;
+            slope = -g_norm;
+        }
+
+        // backtracking Armijo along the retraction curve
+        std::copy_n(coeffs.begin(), n, x0.begin());
+        double t = 1.0, f_new = f;
+        int halvings = 0;
+        for (; halvings <= 40; halvings++, t *= 0.5) {
+            for (int j = 0; j < n; j++) coeffs[j] = x0[j] + t * p[j];
+            retract(coeffs);
+            f_new = evaluate(g_new);
+            if (f_new <= f + 1e-4 * t * slope) break;
+        }
+        if (halvings > 40) {
+            std::copy(x0.begin(), x0.end(), coeffs.begin());
+            f = evaluate(g);
+            if (log) *log << "L-BFGS line search failed" << std::endl;
+            break;
+        }
+
+        // the step and the change of the gradient, with the old vectors transported by projection onto the new tangent space
+        std::vector<double> s(n), y = g;
+        for (int j = 0; j < n; j++) s[j] = t * p[j];
+        project_tangent(coeffs.data(), s.data());
+        project_tangent(coeffs.data(), y.data());
+        for (int j = 0; j < n; j++) y[j] = g_new[j] - y[j];
+        for (size_t i = 0; i < s_memory.size(); i++) {
+            project_tangent(coeffs.data(), s_memory[i].data());
+            project_tangent(coeffs.data(), y_memory[i].data());
+        }
+        // the cautious update of Huang, Absil and Gallivan keeps the inverse Hessian positive definite
+        if (dot(s, y) >= 1e-4 * g_norm * dot(s, s)) {
+            s_memory.push_back(s);
+            y_memory.push_back(y);
+            if ((int) s_memory.size() > options.lbfgs_memory) {
+                s_memory.pop_front();
+                y_memory.pop_front();
+            }
+        }
+        f = f_new;
+        g.swap(g_new);
+        num_step++;
+    }
+
+    potential.set_coeffs(coeffs.data());
+    potential.set_trained(true);
+    reg_init = true;
+
+    if (log) {
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        char line[128];
+        std::snprintf(line, sizeof line, "%d iterations, %d evaluations in %.1f s @ %.2g s/iteration", num_step, evaluations, seconds, seconds / std::max(num_step, 1));
+        *log << line << std::endl;
+        *log << "MTPR training ended" << std::endl;
+    }
+}
+
+/* ----------------------------------------------------------------------
    Least squares for the species and linear coefficients, after
    orthonormalizing the radial functions unless told not to. Rank 0 solves the summed system.
 ------------------------------------------------------------------------- */
@@ -795,7 +984,7 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
     std::vector<double> local(coeffs.size());
     double loss = loss_grad(local) / structure_count;
     for (double& g : local) g /= structure_count;
-    if (rank == 0) add_penalty(loss, local);
+    if (rank == 0) add_penalty(loss, local, !options.riemannian);
 
     double total = 0.0;
     grad.assign(coeffs.size(), 0.0);
@@ -803,6 +992,8 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
     MPI_Allreduce(local.data(), grad.data(), (int) grad.size(), MPI_DOUBLE, MPI_SUM, comm);
     // the linear coefficients are a function of the radial ones: their partial gradient is zero at the optimum
     if (options.varpro) std::fill(grad.begin() + n_radial, grad.end(), 0.0);
+    // under riemannian, the Riemannian gradient at the radial functions in at, which must be orthonormal
+    if (options.riemannian) project_tangent(coeffs.data(), grad.data());
     return total;
 }
 
@@ -863,14 +1054,14 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
     return loss;
 }
 
-void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad) {
+void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad, bool radial) {
     const int C = potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
     const double coeff = options.penalty_weight;
 
     // the norm of each radial function over all species pairs, towards 1
-    for (int k = 0; k < K; k++) {
+    for (int k = 0; radial && k < K; k++) {
         double norm = 0;
         for (int p = 0; p < C * C; p++)
             for (int l = 0; l < R; l++) {
@@ -887,7 +1078,7 @@ void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad) {
     }
 
     // the overlap of each two radial functions, towards 0
-    for (int k1 = 0; k1 < K; k1++)
+    for (int k1 = 0; radial && k1 < K; k1++)
         for (int k2 = k1 + 1; k2 < K; k2++) {
             double scal = 0;
             for (int p = 0; p < C * C; p++)
@@ -951,6 +1142,56 @@ void MTPTrainer::orthogonalize() {
             for (int l = 0; l < R; l++)
                 coeffs[p * K * R + k * R + l] /= norm;
     }
+}
+
+std::vector<double> MTPTrainer::radial_overlaps(const double* a, const double* b) const {
+    const int P = potential.get_species_count() * potential.get_species_count();
+    const int K = potential.get_radial_func_count();
+    const int R = potential.get_radial_basis_size();
+    std::vector<double> overlaps(K * K, 0.0);
+    for (int p = 0; p < P; p++)
+        for (int k1 = 0; k1 < K; k1++)
+            for (int k2 = 0; k2 < K; k2++)
+                for (int l = 0; l < R; l++)
+                    overlaps[k1 * K + k2] += a[(p * K + k1) * R + l] * b[(p * K + k2) * R + l];
+    return overlaps;
+}
+
+void MTPTrainer::project_tangent(const double* w, double* v) const {
+    const int P = potential.get_species_count() * potential.get_species_count();
+    const int K = potential.get_radial_func_count();
+    const int R = potential.get_radial_basis_size();
+    const std::vector<double> overlaps = radial_overlaps(v, w);
+    for (int p = 0; p < P; p++)
+        for (int k1 = 0; k1 < K; k1++)
+            for (int k2 = 0; k2 < K; k2++)
+                for (int l = 0; l < R; l++)
+                    v[(p * K + k1) * R + l] -= 0.5 * (overlaps[k1 * K + k2] + overlaps[k2 * K + k1]) * w[(p * K + k2) * R + l];
+}
+
+void MTPTrainer::retract(std::vector<double>& c) const {
+    const int P = potential.get_species_count() * potential.get_species_count();
+    const int K = potential.get_radial_func_count();
+    const int R = potential.get_radial_basis_size();
+    auto row_dot = [&](int k1, int k2) {
+        double sum = 0.0;
+        for (int p = 0; p < P; p++)
+            for (int l = 0; l < R; l++) sum += c[(p * K + k1) * R + l] * c[(p * K + k2) * R + l];
+        return sum;
+    };
+
+    // modified Gram-Schmidt, twice for orthonormality to rounding
+    for (int pass = 0; pass < 2; pass++)
+        for (int k = 0; k < K; k++) {
+            for (int k2 = 0; k2 < k; k2++) {
+                const double overlap = row_dot(k, k2);
+                for (int p = 0; p < P; p++)
+                    for (int l = 0; l < R; l++) c[(p * K + k) * R + l] -= overlap * c[(p * K + k2) * R + l];
+            }
+            const double norm = std::sqrt(row_dot(k, k));
+            for (int p = 0; p < P; p++)
+                for (int l = 0; l < R; l++) c[(p * K + k) * R + l] /= norm;
+        }
 }
 
 /* ---------------------------------------------------------------------- */

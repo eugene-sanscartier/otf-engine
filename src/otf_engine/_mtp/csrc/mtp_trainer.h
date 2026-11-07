@@ -71,6 +71,8 @@ struct TrainerOptions {
     bool varpro = false;            // variable projection: BFGS over the radial coefficients, the linear ones solved exactly at every evaluation with the regularization built once
     bool reg_once = false;          // build the linear regularization at the first linear fit only
     bool no_orthogonalize = false;  // orthogonalize the radial functions in pre-training only, so a linear fit never raises the loss
+    bool riemannian = false;        // the main fit by Riemannian L-BFGS with the radial functions orthonormal (W W^T = I), no radial penalty
+    int lbfgs_memory = 10;          // the pairs riemannian's L-BFGS keeps
     int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
     bool balance_species = true;    // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
@@ -100,6 +102,7 @@ class MTPTrainer {
     void add_species();
     void update_min_dist();
     void fit_nonlinear(int max_iter);
+    void fit_riemannian(int max_iter);
     void fit_linear(bool orthonormalize = true);
     void assemble_linear();
     void solve_linear(int structure_count);
@@ -108,10 +111,18 @@ class MTPTrainer {
 
     // Loss and dL/dc over this rank's structures, without the penalty.
     double loss_grad(std::vector<double>& grad);
-    // Adds the penalty on the radial functions' norms and overlaps and on the
-    // linear coefficients' size.
-    void add_penalty(double& loss, std::vector<double>& grad);
+    // Adds the penalty on the radial functions' norms and overlaps, unless radial is false,
+    // and on the linear coefficients' size.
+    void add_penalty(double& loss, std::vector<double>& grad, bool radial = true);
     void orthogonalize();
+
+    // The radial functions as the rows of W, K x (species pairs * basis size), in the radial block of a coefficient vector.
+    // Row products a_k . b_k' of the radial blocks of a and b, K x K.
+    std::vector<double> radial_overlaps(const double* a, const double* b) const;
+    // Projects the radial block of v onto the tangent space at W, the radial block of w: v - sym(v W^T) W.
+    void project_tangent(const double* w, double* v) const;
+    // QR retraction: Gram-Schmidt over the rows of the radial block of c, in order, a lower-triangular change of the radial functions.
+    void retract(std::vector<double>& c) const;
 
     double energy_weight(const TrainingStructure& s) const;
     double force_weight(const TrainingStructure& s, int i) const;
