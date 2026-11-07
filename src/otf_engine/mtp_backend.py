@@ -249,6 +249,10 @@ def errors(potential: str, structures: list, title: str, first: int = 1, species
     return table
 
 
+# The trainer options that give mlp's algorithm in place of the trainer's defaults, for runs compared with mlp.
+MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "init_noise": "5"}
+
+
 def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None, balance_species: bool = True):
     """train_mtp on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
 
@@ -261,12 +265,13 @@ def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int |
 
 
 def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg", comm=None, balance_species: bool = True) -> None:
-    """Train *potential* on *training_structs* as mlip-3's `mlp train` does, and write it with an active set to *save_to*.
+    """Train *potential* on *training_structs* with otf_engine's trainer, and write it with an active set to *save_to*.
 
     *potential* may be untrained, and gains the species of *training_structs* it lacks.
 
-    settings : `mlp train` options without the leading "--", e.g. {"iteration_limit": 300, "init_random": True},
-               and "species", the species' names for the log's error tables, comma-separated
+    settings : `mlp train`'s and the trainer's options without the leading "--", e.g. {"iteration_limit": 300,
+               "init_random": True}, MLP_ALGORITHM for mlp's algorithm, and "species", the species' names for the
+               log's error tables, comma-separated
     ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the

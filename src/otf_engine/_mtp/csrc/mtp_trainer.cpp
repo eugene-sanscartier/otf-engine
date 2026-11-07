@@ -32,7 +32,9 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     coeffs.resize(n_radial + n_linear);
     potential.get_coeffs(coeffs.data());
     reg_vector.assign(n_linear, options.reg_param);
-    if (options.varpro) this->options.reg_once = true;    // a regularization that moved during BFGS would change the objective
+    // radial_only and bfgs_only step mlp's BFGS on a trained potential, without varpro or riemannian
+    if (options.radial_only || options.bfgs_only) this->options.varpro = this->options.riemannian = false;
+    if (this->options.varpro) this->options.reg_once = true;    // a regularization that moved during BFGS would change the objective
 
     // N atoms of k species, n_s of species s: each atom of s weighs N / (k n_s), its species N / k.
     if (options.balance_species)
@@ -85,8 +87,8 @@ void MTPTrainer::train() {
     const int trained = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
     if (inverse_hessian_size != 0 && inverse_hessian_size != trained)
         throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
-    if (options.riemannian && (inverse_hessian_size != 0 || options.radial_only || options.bfgs_only))
-        throw std::runtime_error("train_mtp: riemannian takes no inverse_hessian, radial_only or bfgs_only");
+    if (options.riemannian && inverse_hessian_size != 0)
+        throw std::runtime_error("train_mtp: riemannian takes no inverse_hessian; pass riemannian=false");
     log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
 
@@ -104,7 +106,7 @@ void MTPTrainer::train() {
                 for (int k = 0; k < K; k++) {
                     double* c = coeffs.data() + (p * K + k) * R;
                     for (int l = 0; l < R; l++)
-                        c[l] = 5e-7 * uniform(generator);
+                        c[l] = 1e-7 * options.init_noise * uniform(generator);
                     c[std::min(k, R - 1)] = 1e-7 * (1 + uniform(generator));
                 }
         }
@@ -134,6 +136,11 @@ void MTPTrainer::train() {
         }
 
         if (options.no_orthogonalize) orthogonalizing = false;
+        // the main fit's first linear solve rebuilds the regularization, which reg_once then keeps
+        if (options.reg_at_main) {
+            reg_built = false;
+            reg_init = true;
+        }
         if (options.riemannian)
             fit_riemannian(options.iteration_limit);
         else

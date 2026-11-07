@@ -7,7 +7,7 @@ RMSE of the trained potential under one shared evaluator.
 
 Arms:
   mlp    `mlp train` under `mpirun -np R` (plain `mlp` for R = 1)
-  port   `python -m otf_engine.train --ranks=R`, without balance_species
+  port   `python -m otf_engine.train --ranks=R` under MLP_ALGORITHM, without balance_species
 
 Exits non-zero when a port run's logged losses (`BFGS iter N: f=...`) differ from mlp's on one
 rank by more than --tol, or stop at another line. mlp's result depends on R wherever R does not
@@ -33,6 +33,7 @@ import numpy
 
 from otf_engine._mtp import MTPCalculator, PairMTP
 from otf_engine.io_cfg import read_cfg
+from otf_engine.mtp_backend import MLP_ALGORITHM
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
 BFGS_LINE = re.compile(r"BFGS iter +(\d+): +(?:f=)?(\S+)")    # mlp's, and the trainer's without f=
@@ -110,7 +111,7 @@ def main():
                 if arm == "mlp":
                     cmd = ([] if ranks == 1 else ["mpirun", "-np", str(ranks)]) + [str(MLP), "train", str(potential), str(train_cfg)] + options
                 else:
-                    cmd = [sys.executable, "-c", "import sys; from otf_engine.train import main; main(sys.argv[1:], balance_species=False)", str(potential), str(train_cfg), f"--ranks={ranks}"] + options
+                    cmd = [sys.executable, "-c", "import sys; from otf_engine.train import main; main(sys.argv[1:], balance_species=False)", str(potential), str(train_cfg), f"--ranks={ranks}"] + options + [f"--{k}={v}" for k, v in MLP_ALGORITHM.items()]
                 r = runs[arm, ranks] = run_logged(cmd, workdir)
                 steps = len(r["times"]) - 1
                 per_iter = (r["times"][-1] - r["times"][0]) / steps if steps > 0 else float("nan")

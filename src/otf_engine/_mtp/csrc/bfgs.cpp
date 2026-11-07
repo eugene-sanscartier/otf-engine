@@ -163,7 +163,10 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
     double p_dot_g = dot(g, p);
     bool loss_decrease = true;
 
-    if (f > f_start + wolfe_c1 * linesearch.x() * p_dot_g_start || std::fabs(p_dot_g) > wolfe_c2 * std::fabs(p_dot_g_start)) {
+    // the line search can settle on the line's minimum where the sufficient decrease from the start fails, and stall
+    // there; a minimum that lowers the loss is taken as the step, where mlp spins to its line search limit
+    const bool line_minimum = f < f_start && std::fabs(p_dot_g) <= 1e-4 * std::fabs(p_dot_g_start);
+    if (!line_minimum && (f > f_start + wolfe_c1 * linesearch.x() * p_dot_g_start || std::fabs(p_dot_g) > wolfe_c2 * std::fabs(p_dot_g_start))) {
         // the loss increased or decreased too little: continue the line search
         in_linesearch_ = true;
         loss_decrease = linesearch.iterate(f, p_dot_g);

@@ -50,7 +50,9 @@ struct TrainingStructure {
 // largest energy and force errors; on rank 0, and empty on the others.
 std::string error_table(PairMTP& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title);
 
-// `mlp train`'s options, under its names and with its defaults, and the trainer's own.
+// `mlp train`'s options, under its names and with its defaults, and the trainer's own, whose defaults
+// are the recipe; varpro, reg_once, no_orthogonalize, riemannian and reg_at_main false and init_noise 5
+// give mlp's algorithm.
 struct TrainerOptions {
     double energy_weight = 1.0;
     double force_weight = 0.01;
@@ -68,11 +70,13 @@ struct TrainerOptions {
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
     bool radial_only = false;       // BFGS over the radial coefficients only, species and linear ones kept, no linear fit or rescale; a trained potential
-    bool varpro = false;            // variable projection: BFGS over the radial coefficients, the linear ones solved exactly at every evaluation with the regularization built once
-    bool reg_once = false;          // build the linear regularization at the first linear fit only
-    bool no_orthogonalize = false;  // orthogonalize the radial functions in pre-training only, so a linear fit never raises the loss
-    bool riemannian = false;        // the main fit by Riemannian L-BFGS with the radial functions orthonormal (W W^T = I), no radial penalty
-    int lbfgs_memory = 10;          // the pairs riemannian's L-BFGS keeps
+    bool varpro = true;             // variable projection: the radial coefficients stepped, the linear ones solved exactly at every evaluation with the regularization built once
+    bool reg_once = true;           // build the linear regularization at the first linear fit only
+    bool reg_at_main = true;        // rebuild the linear regularization at the main fit's first linear solve, under reg_once and varpro too
+    bool no_orthogonalize = true;   // orthogonalize the radial functions in pre-training only, so a linear fit never raises the loss
+    bool riemannian = true;         // the main fit by Riemannian L-BFGS with the radial functions orthonormal (W W^T = I), no radial penalty
+    int lbfgs_memory = 1000;        // the pairs riemannian's L-BFGS keeps
+    double init_noise = 0.5;        // init_random's noise on each radial coefficient, relative to the diagonal one's 1e-7 scale
     int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
     bool balance_species = true;    // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables

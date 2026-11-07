@@ -1,9 +1,10 @@
-"""Train an MTP as `mlp train` does.
+"""Train an MTP with otf_engine's trainer.
 
-    python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=cfg|nbh] [mlp train options]
+    python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=cfg|nbh] [trainer options]
 
 Takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random, --skip_preinit,
-...). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
+...) and the trainer's own (--varpro=false, --riemannian=false, ...; mtp_backend.MLP_ALGORITHM lists
+those that give mlp's algorithm). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
 be untrained, such as an mlip-3 template, and gains the species of the training set it lacks. The
 trained potential is written to --save_to, by default over the input, with an active set built on
 the training set.

@@ -1,13 +1,14 @@
 """Fast training gate: otf_engine's trainer against mlip-3's `mlp train` on each way into a fit.
 
 Fits mlip-3's level-8 template to the first structure and to the first 8 structures of a cfg,
-with mlp on one rank and with the trainer on one rank and on one rank per structure:
+with mlp on one rank and with the trainer, under MLP_ALGORITHM, on one rank and on one rank per structure:
 
   skip_preinit  the untrained template, without pre-training
   preinit       the untrained template, with its 75-step pre-training
   add_species   a two-species potential, fitted by mlp to the structures with species 2 renamed 1
   trained       mlp's pre-trained potential, fitted further
   init_random   the untrained template with random radial coefficients, run by the trainer only
+  recipe        the same under the trainer's defaults, run by the trainer only, its constraint W W^T = I held
 
 The starting potentials come from mlp, so that they do not change with the trainer under test.
 
@@ -32,7 +33,7 @@ import numpy
 
 from bench_training import BFGS_LINE, MLP, extract_cfgs
 from otf_engine.io_cfg import read_cfg, write_cfg
-from otf_engine.mtp_backend import train
+from otf_engine.mtp_backend import MLP_ALGORITHM, train
 
 TEMPLATE = MLP.parents[1] / "MTP_templates/08.almtp"
 NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
@@ -105,7 +106,7 @@ def main():
                     with open(log, "w") as stream:
                         proc = subprocess.Popen([str(MLP), "train", str(potential), str(data), f"--save_to={out}"] + [f"--{k}={v}" for k, v in options.items()], stdout=stream, stderr=subprocess.STDOUT, cwd=workdir)
                     return lambda: (proc.wait(), log.read_text())[1]
-                train(str(potential), structs, str(out), settings=options | {"log": str(log)}, ranks=r, balance_species=False)
+                train(str(potential), structs, str(out), settings=MLP_ALGORITHM | options | {"log": str(log)}, ranks=r, balance_species=False)
                 return lambda: log.read_text()
 
             renamed = [atoms.copy() for atoms in structs]
@@ -143,6 +144,14 @@ def main():
             ok = "Random initialization of radial coefficients" in random_log and "Pre-training ended" in random_log
             failures += not ok
             print(f"{size:2d} structures  {'init_random':<12}  ranks  1: {len(BFGS_LINE.findall(random_log)):3d} losses logged — {'ran' if ok else 'FAILED'}", flush=True)
+
+            recipe_log = workdir / "recipe.log"
+            train(str(TEMPLATE), structs, str(workdir / "recipe.almtp"), settings={"iteration_limit": PREINIT_ITERATIONS, "init_random": "true", "log": str(recipe_log)}, ranks=size)
+            text = recipe_log.read_text()
+            steps = re.findall(r"^Riemann iter +\d+: .*  (\S+)$", text, re.M)
+            ok = "Pre-training ended" in text and "MTPR training ended" in text and len(steps) > 0 and max(float(v) for v in steps) < 1e-12
+            failures += not ok
+            print(f"{size:2d} structures  {'recipe':<12}  ranks {size:2d}: {len(steps):3d} Riemannian steps logged — {'ran' if ok else 'FAILED'}", flush=True)
 
     print(f"{time.perf_counter() - start_time:.1f} s")
     return 1 if failures else 0
