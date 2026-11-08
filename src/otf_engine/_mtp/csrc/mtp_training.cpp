@@ -157,6 +157,16 @@ void MTPTraining::eval_radial_basis(double dist, double* vals_out, double* ders_
     std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), ders_out);
 }
 
+void MTPTraining::grow_neighbor_rows(int jnum) {
+    if (rows_size >= jnum) return;
+    rows_size = jnum;
+    neighbor_units.resize((size_t) 4 * rows_size);
+    neighbor_angulars.resize((size_t) angular_count * rows_size);
+    neighbor_radial_funcs.resize((size_t) radial_func_count * 2 * rows_size);
+    neighbor_unit_tangents.resize((size_t) 4 * rows_size);
+    neighbor_angular_tangents.resize((size_t) angular_count * rows_size);
+}
+
 /* ----------------------------------------------------------------------
    The site-energy gradient is PairMTPExtrapolation::compute's per-neighbour
    contraction of the basic moments' adjoints into the radial coefficients.
@@ -220,12 +230,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             neighbor_radial_vals.resize((size_t) jnum * radial_basis_size);
             neighbor_radial_ders.resize((size_t) jnum * radial_basis_size);
         }
-        if (rows_size < jnum) {
-            rows_size = jnum;
-            neighbor_units.resize((size_t) 4 * rows_size);
-            neighbor_angulars.resize((size_t) angular_count * rows_size);
-            neighbor_radial_funcs.resize((size_t) radial_func_count * 2 * rows_size);
-        }
+        grow_neighbor_rows(jnum);
         if (force_grad && jac_size < jnum) {
             jac_size = jnum;
             neighbor_angular_grads.resize((size_t) angular_count * 3 * jac_size);
@@ -529,7 +534,6 @@ void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, co
 
     moment_tangents.resize(alpha_moment_count);
     moment_adjoints.resize(alpha_moment_count);
-    angular_tangents.assign(angular_count, 0.0);
     basic_adjoints_by_mu.resize(alpha_index_basic_count);
 
     int nbr_offset = 0;
@@ -554,21 +558,20 @@ void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, co
             neighbor_radial_vals.resize((size_t) jnum * radial_basis_size);
             neighbor_radial_ders.resize((size_t) jnum * radial_basis_size);
         }
-        if (w_dot_unit_r.size() < (size_t) jnum) {
-            unit_displacements.resize(jnum);
-            unit_tangents.resize(jnum);
-            w_dot_unit_r.resize(jnum);
-        }
+        grow_neighbor_rows(jnum);
+        const int N = jnum;    // a row of the neighbor arrays
 
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
         std::fill(moment_tangents.begin(), moment_tangents.end(), 0.0);
         std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
         std::fill(moment_adjoints.begin(), moment_adjoints.end(), 0.0);
 
-        // ------------ Basic moments and their tangents ------------
+        // ------------ The neighbors within the cutoff: unit displacement, its tangent and radial basis ------------
+        double* u[3] = {neighbor_units.data(), neighbor_units.data() + N, neighbor_units.data() + 2 * N};
+        double* v[3] = {neighbor_unit_tangents.data(), neighbor_unit_tangents.data() + N, neighbor_unit_tangents.data() + 2 * N};
+        double* w_dot_unit_r = neighbor_unit_tangents.data() + 3 * N;
         for (int jj = 0; jj < jnum; jj++) {
             const int j = nbrs[jj];
-            const int jtype = list.types[j];
             const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
             const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
@@ -579,10 +582,8 @@ void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, co
             const double dist = std::sqrt(rsq);
             const double inv_dist = 1.0 / dist;
             radial_basis->calc_radial_basis_ders(dist);
-            double* basis_vals = neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size;
-            double* basis_ders = neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size;
-            std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), basis_vals);
-            std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), basis_ders);
+            std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size);
+            std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size);
 
             // The loss weight of this displacement
             double w[3] = {0.0, 0.0, 0.0};
@@ -592,37 +593,66 @@ void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, co
             const double w_r = (w[0] * r[0] + w[1] * r[1] + w[2] * r[2]) * inv_dist;
             w_dot_unit_r[valid_count] = w_r;
 
-            auto& u = unit_displacements[valid_count];
-            auto& v = unit_tangents[valid_count];
             for (int d = 0; d < 3; d++) {
-                u[d] = r[d] * inv_dist;
-                v[d] = (w[d] - w_r * u[d]) * inv_dist;
+                u[d][valid_count] = r[d] * inv_dist;
+                v[d][valid_count] = (w[d] - w_r * u[d][valid_count]) * inv_dist;
             }
-            for (int k = 1; k < angular_count; k++) {
-                const int parent = angular_parent[k], axis = angular_axis[k];
-                angular_vals[k] = angular_vals[parent] * u[axis];
-                angular_tangents[k] = angular_tangents[parent] * u[axis] + angular_vals[parent] * v[axis];
-            }
+            valid_count++;
+        }
+        const int V = valid_count;
 
-            const int pair_offset = itype * species_count + jtype;
+        // ------------ The angular monomials, their tangents and the radial functions ------------
+        double* ang = neighbor_angulars.data();
+        double* tangents = neighbor_angular_tangents.data();
+        for (int jj = 0; jj < V; jj++) {
+            ang[jj] = 1.0;
+            tangents[jj] = 0.0;
+        }
+        for (int k = 1; k < angular_count; k++) {
+            const int parent = angular_parent[k], axis = angular_axis[k];
+            const double* parent_val = ang + (size_t) parent * N;
+            const double* parent_tangent = tangents + (size_t) parent * N;
+            double* out = ang + (size_t) k * N;
+            double* out_tangent = tangents + (size_t) k * N;
+            for (int jj = 0; jj < V; jj++) {
+                out[jj] = parent_val[jj] * u[axis][jj];
+                out_tangent[jj] = parent_tangent[jj] * u[axis][jj] + parent_val[jj] * v[axis][jj];
+            }
+        }
+        double* radial_funcs = neighbor_radial_funcs.data();    // value of mu at row 2 mu, derivative at 2 mu + 1
+        for (int jj = 0; jj < V; jj++) {
+            const int pair_offset = itype * species_count + list.types[cached_j[jj]];
+            const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
+            const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
             for (int mu = 0; mu < radial_func_count; mu++) {
                 double val = 0;
                 double der = 0;
                 const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
-
                 for (int ri = 0; ri < radial_basis_size; ri++) {
                     val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
                     der += radial_basis_coeffs[offset + ri] * basis_ders[ri];
                 }
-
-                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
-                    const int k = basic_by_mu[t];
-                    const double ang = angular_vals[angular_by_mu[t]];
-                    moment_tensor_vals[k] += val * ang;
-                    moment_tangents[k] += der * w_r * ang + val * angular_tangents[angular_by_mu[t]];
-                }
+                radial_funcs[(size_t) 2 * mu * N + jj] = val;
+                radial_funcs[(size_t) (2 * mu + 1) * N + jj] = der;
             }
-            valid_count++;
+        }
+
+        // ------------ Basic moments and their tangents ------------
+        for (int mu = 0; mu < radial_func_count; mu++) {
+            const double* val = radial_funcs + (size_t) 2 * mu * N;
+            const double* der = val + N;
+            for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
+                const int k = basic_by_mu[t];
+                const double* ang_k = ang + (size_t) angular_by_mu[t] * N;
+                const double* tangent_k = tangents + (size_t) angular_by_mu[t] * N;
+                double moment = moment_tensor_vals[k], tangent = moment_tangents[k];
+                for (int jj = 0; jj < V; jj++) {
+                    moment += val[jj] * ang_k[jj];
+                    tangent += der[jj] * w_dot_unit_r[jj] * ang_k[jj] + val[jj] * tangent_k[jj];
+                }
+                moment_tensor_vals[k] = moment;
+                moment_tangents[k] = tangent;
+            }
         }
 
         // ------------ Composite moments and their tangents ------------
@@ -665,14 +695,6 @@ void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, co
 
         for (int jj = 0; jj < valid_count; jj++) {
             const int jtype = list.types[cached_j[jj]];
-            const auto& u = unit_displacements[jj];
-            const auto& v = unit_tangents[jj];
-            for (int k = 1; k < angular_count; k++) {
-                const int parent = angular_parent[k], axis = angular_axis[k];
-                angular_vals[k] = angular_vals[parent] * u[axis];
-                angular_tangents[k] = angular_tangents[parent] * u[axis] + angular_vals[parent] * v[axis];
-            }
-
             const double w_r = w_dot_unit_r[jj];
             const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
             const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
@@ -681,9 +703,9 @@ void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, co
                 // adjoints of the radial function's value and derivative
                 double value_adjoint = 0.0, der_adjoint = 0.0;
                 for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
-                    const double ang = angular_vals[angular_by_mu[t]];
-                    value_adjoint += basic_adjoints_by_mu[t] * ang + basic_ders_by_mu[t] * angular_tangents[angular_by_mu[t]];
-                    der_adjoint += basic_ders_by_mu[t] * ang;
+                    const double angular = ang[(size_t) angular_by_mu[t] * N + jj];
+                    value_adjoint += basic_adjoints_by_mu[t] * angular + basic_ders_by_mu[t] * tangents[(size_t) angular_by_mu[t] * N + jj];
+                    der_adjoint += basic_ders_by_mu[t] * angular;
                 }
                 der_adjoint *= w_r;
                 for (int ri = 0; ri < radial_basis_size; ri++)

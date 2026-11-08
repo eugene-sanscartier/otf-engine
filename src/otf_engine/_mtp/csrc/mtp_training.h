@@ -48,14 +48,20 @@ class MTPTraining : public PairMTP {
     std::vector<double> neighbor_radial_vals;               // [neighbor * radial_basis_size]
     std::vector<double> neighbor_radial_ders;               // [neighbor * radial_basis_size]
 
-    // eval_grad's neighbors of the current atom, each array in rows over the neighbors: the unit displacement's three
-    // components and the inverse distance, the angular monomials, the radial functions' values and derivatives, and
-    // for the force passes the monomials' derivatives w.r.t. the displacement
+    // Grows the neighbor rows to jnum neighbors.
+    void grow_neighbor_rows(int jnum);
+
+    // The neighbors of the current atom, each array in rows over the neighbors: the unit displacement's three
+    // components and the inverse distance, the angular monomials, the radial functions' values and derivatives;
+    // eval_loss_grad's tangents of the unit displacement along the loss weight, with that weight's radial component,
+    // and the monomials' tangents; and for eval_grad's force passes the monomials' derivatives w.r.t. the displacement
     int rows_size = 0, jac_size = 0;
-    std::vector<double> neighbor_units;          // [4 * rows_size]
-    std::vector<double> neighbor_angulars;       // [angular_count * rows_size]
-    std::vector<double> neighbor_radial_funcs;   // [radial_func_count * 2 * rows_size]
-    std::vector<double> neighbor_angular_grads;  // [angular_count * 3 * jac_size]
+    std::vector<double> neighbor_units;              // [4 * rows_size]
+    std::vector<double> neighbor_angulars;           // [angular_count * rows_size]
+    std::vector<double> neighbor_radial_funcs;       // [radial_func_count * 2 * rows_size]
+    std::vector<double> neighbor_unit_tangents;      // [4 * rows_size]
+    std::vector<double> neighbor_angular_tangents;   // [angular_count * rows_size]
+    std::vector<double> neighbor_angular_grads;      // [angular_count * 3 * jac_size]
 
     std::vector<double> radial_jacobian; // [alpha_index_basic_count * species_count * radial_coeff_count_per_pair] ders of basic moments wrt radial coeffs
     std::vector<double> dM_dc;      // [alpha_moment_count * radial_coeff_count]
@@ -64,13 +70,7 @@ class MTPTraining : public PairMTP {
     std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] the basis values' rows of moment_ders, transposed
     std::vector<char> first_product;  // [alpha_index_times_count] whether the product is the first to add to its moment
 
-    // eval_loss_grad: per neighbor, the unit displacement u and its tangent
-    // along that neighbor's loss weight w; per angular monomial, its tangent;
-    // per moment, the tangent and the adjoint of the moment value.
-    std::vector<std::array<double, 3>> unit_displacements;  // [neighbor]
-    std::vector<std::array<double, 3>> unit_tangents;       // [neighbor]
-    std::vector<double> w_dot_unit_r;                       // [neighbor]
-    std::vector<double> angular_tangents;                   // [angular_count]
+    // eval_loss_grad: per moment, the tangent and the adjoint of the moment value.
     std::vector<double> moment_tangents;                    // [alpha_moment_count]
     std::vector<double> moment_adjoints;                    // [alpha_moment_count]
     std::vector<double> basic_adjoints_by_mu;               // [alpha_index_basic_count] moment_adjoints of the basic moments, grouped
