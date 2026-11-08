@@ -48,16 +48,19 @@ class MTPTraining : public PairMTP {
     std::vector<double> neighbor_radial_vals;               // [neighbor * radial_basis_size]
     std::vector<double> neighbor_radial_ders;               // [neighbor * radial_basis_size]
 
-    // eval_grad's force passes: per neighbor, the angular monomials and their
-    // derivatives w.r.t. its displacement.
-    int jac_size = 0;
-    std::vector<double> neighbor_angular_vals;                // [jac_size * angular_count]
-    std::vector<std::array<double, 3>> neighbor_angular_grads; // [jac_size * angular_count]
+    // eval_grad's neighbors of the current atom, each array in rows over the neighbors: the unit displacement's three
+    // components and the inverse distance, the angular monomials, the radial functions' values and derivatives, and
+    // for the force passes the monomials' derivatives w.r.t. the displacement
+    int rows_size = 0, jac_size = 0;
+    std::vector<double> neighbor_units;          // [4 * rows_size]
+    std::vector<double> neighbor_angulars;       // [angular_count * rows_size]
+    std::vector<double> neighbor_radial_funcs;   // [radial_func_count * 2 * rows_size]
+    std::vector<double> neighbor_angular_grads;  // [angular_count * 3 * jac_size]
 
     std::vector<double> radial_jacobian; // [alpha_index_basic_count * species_count * radial_coeff_count_per_pair] ders of basic moments wrt radial coeffs
     std::vector<double> dM_dc;      // [alpha_moment_count * radial_coeff_count]
     std::vector<double> dG;         // [alpha_moment_count * radial_coeff_count]
-    std::vector<double> moment_ders;  // [alpha_moment_count * jac_size * 3] d(moment)/d(displacement), the basic rows the moment Jacobian
+    std::vector<double> moment_ders;  // [alpha_moment_count * jac_size * 3] d(moment)/d(displacement) by component, then neighbor; the basic rows the moment Jacobian
     std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] the basis values' rows of moment_ders, transposed
     std::vector<char> first_product;  // [alpha_index_times_count] whether the product is the first to add to its moment
 

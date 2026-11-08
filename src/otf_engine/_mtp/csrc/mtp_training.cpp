@@ -220,23 +220,30 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             neighbor_radial_vals.resize((size_t) jnum * radial_basis_size);
             neighbor_radial_ders.resize((size_t) jnum * radial_basis_size);
         }
+        if (rows_size < jnum) {
+            rows_size = jnum;
+            neighbor_units.resize((size_t) 4 * rows_size);
+            neighbor_angulars.resize((size_t) angular_count * rows_size);
+            neighbor_radial_funcs.resize((size_t) radial_func_count * 2 * rows_size);
+        }
         if (force_grad && jac_size < jnum) {
             jac_size = jnum;
-            neighbor_angular_vals.resize((size_t) jac_size * angular_count);
-            neighbor_angular_grads.resize((size_t) jac_size * angular_count);
+            neighbor_angular_grads.resize((size_t) angular_count * 3 * jac_size);
             moment_ders.resize((size_t) alpha_moment_count * jac_size * 3);
         }
         const int ders_stride = 3 * jac_size;    // a row of moment_ders
+        const int N = jnum;                      // a row of the neighbor arrays
 
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
         std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
         if (need_radial_jacobian)
             std::fill(radial_jacobian.begin(), radial_jacobian.end(), 0.0);
 
-        // ------------ Calculate Basic Moments ------------
+        // ------------ The neighbors within the cutoff: unit displacement and radial basis ------------
+        double* u[3] = {neighbor_units.data(), neighbor_units.data() + N, neighbor_units.data() + 2 * N};
+        double* inv_dists = neighbor_units.data() + 3 * N;
         for (int jj = 0; jj < jnum; jj++) {
             const int j = nbrs[jj];
-            const int jtype = list.types[j];
             const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
             const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
@@ -246,62 +253,85 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
 
             const double dist = std::sqrt(rsq);
             const double inv_dist = 1.0 / dist;
-            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+            for (int a = 0; a < 3; a++) u[a][valid_count] = r[a] * inv_dist;
+            inv_dists[valid_count] = inv_dist;
             neighbor_cache[(size_t) valid_count * stride] = inv_dist;
             radial_basis->calc_radial_basis_ders(dist);
-            double* basis_vals = neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size;
-            double* basis_ders = neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size;
-            std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), basis_vals);
-            std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), basis_ders);
+            std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size);
+            std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size);
+            valid_count++;
+        }
+        const int V = valid_count;
 
-            for (int k = 1; k < angular_count; k++)
-                angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
-
-            // The monomials and their derivatives w.r.t. r, for the force passes
-            std::array<double, 3>* ang_grads = nullptr;
-            if (force_grad) {
-                double* ang_vals = neighbor_angular_vals.data() + (size_t) valid_count * angular_count;
-                ang_grads = neighbor_angular_grads.data() + (size_t) valid_count * angular_count;
-                ang_vals[0] = 1.0;
-                ang_grads[0] = {0.0, 0.0, 0.0};
-                for (int k = 1; k < angular_count; k++) {
-                    const int parent = angular_parent[k], axis = angular_axis[k];
-                    ang_vals[k] = angular_vals[k];
-                    for (int a = 0; a < 3; a++)
-                        ang_grads[k][a] = ang_grads[parent][a] * u[axis] + angular_vals[parent] * ((a == axis ? 1.0 : 0.0) - u[a] * u[axis]) * inv_dist;
+        // ------------ The angular monomials, their derivatives w.r.t. r for the force passes, and the radial functions ------------
+        double* ang = neighbor_angulars.data();
+        for (int jj = 0; jj < V; jj++) ang[jj] = 1.0;
+        for (int k = 1; k < angular_count; k++) {
+            const double* parent = ang + (size_t) angular_parent[k] * N;
+            const double* u_axis = u[angular_axis[k]];
+            double* out = ang + (size_t) k * N;
+            for (int jj = 0; jj < V; jj++) out[jj] = parent[jj] * u_axis[jj];
+        }
+        double* ang_grads = neighbor_angular_grads.data();
+        if (force_grad) {
+            for (int a = 0; a < 3; a++)
+                for (int jj = 0; jj < V; jj++) ang_grads[(size_t) a * N + jj] = 0.0;
+            for (int k = 1; k < angular_count; k++) {
+                const int parent = angular_parent[k], axis = angular_axis[k];
+                const double* parent_val = ang + (size_t) parent * N;
+                for (int a = 0; a < 3; a++) {
+                    const double* parent_grad = ang_grads + ((size_t) parent * 3 + a) * N;
+                    double* out = ang_grads + ((size_t) k * 3 + a) * N;
+                    const double delta = a == axis ? 1.0 : 0.0;
+                    for (int jj = 0; jj < V; jj++)
+                        out[jj] = parent_grad[jj] * u[axis][jj] + parent_val[jj] * (delta - u[a][jj] * u[axis][jj]) * inv_dists[jj];
                 }
             }
-
-            const int pair_offset = itype * species_count + jtype;
+        }
+        double* radial_funcs = neighbor_radial_funcs.data();    // value of mu at row 2 mu, derivative at 2 mu + 1
+        for (int jj = 0; jj < V; jj++) {
+            const int pair_offset = itype * species_count + list.types[cached_j[jj]];
+            const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
+            const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
             for (int mu = 0; mu < radial_func_count; mu++) {
                 double val = 0;
                 double der = 0;
                 const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
-
                 for (int ri = 0; ri < radial_basis_size; ri++) {
                     val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
                     der += radial_basis_coeffs[offset + ri] * basis_ders[ri];
                 }
-
-                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
-                    const int k = basic_by_mu[t];
-                    const int angular = angular_by_mu[t];
-                    const double ang = angular_vals[angular];
-                    moment_tensor_vals[k] += val * ang;
-
-                    if (force_grad) {
-                        double* jac = moment_ders.data() + (size_t) k * ders_stride + valid_count * 3;
-                        for (int a = 0; a < 3; a++)
-                            jac[a] = der * u[a] * ang + val * ang_grads[angular][a];
-                    }
-                    if (need_radial_jacobian) {
-                        double* jac_row = radial_jacobian.data() + ((size_t) k * species_count + jtype) * radial_coeff_count_per_pair + mu * radial_basis_size;
-                        for (int ri = 0; ri < radial_basis_size; ri++)
-                            jac_row[ri] += basis_vals[ri] * ang;
-                    }
-                }
+                radial_funcs[(size_t) 2 * mu * N + jj] = val;
+                radial_funcs[(size_t) (2 * mu + 1) * N + jj] = der;
             }
-            valid_count++;
+        }
+
+        // ------------ Basic moments, their Jacobian and their radial Jacobian ------------
+        for (int mu = 0; mu < radial_func_count; mu++) {
+            const double* val = radial_funcs + (size_t) 2 * mu * N;
+            const double* der = val + N;
+            for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
+                const int k = basic_by_mu[t];
+                const int angular = angular_by_mu[t];
+                const double* ang_k = ang + (size_t) angular * N;
+                double moment = moment_tensor_vals[k];
+                for (int jj = 0; jj < V; jj++) moment += val[jj] * ang_k[jj];
+                moment_tensor_vals[k] = moment;
+
+                if (force_grad)
+                    for (int a = 0; a < 3; a++) {
+                        double* jac = moment_ders.data() + (size_t) k * ders_stride + a * V;
+                        const double* grad = ang_grads + ((size_t) angular * 3 + a) * N;
+                        for (int jj = 0; jj < V; jj++) jac[jj] = der[jj] * u[a][jj] * ang_k[jj] + val[jj] * grad[jj];
+                    }
+                if (need_radial_jacobian)
+                    for (int jj = 0; jj < V; jj++) {
+                        const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
+                        double* jac_row = radial_jacobian.data() + ((size_t) k * species_count + list.types[cached_j[jj]]) * radial_coeff_count_per_pair + mu * radial_basis_size;
+                        for (int ri = 0; ri < radial_basis_size; ri++)
+                            jac_row[ri] += basis_vals[ri] * ang_k[jj];
+                    }
+            }
         }
 
         // ------------ Construct Composite Moment Values  ------------
@@ -339,20 +369,15 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             row[sp_off + itype] = 1.0;
 
             for (int jj = 0; radial && jj < valid_count; jj++) {
-                const auto& r = valid_dr[jj];
-                const double inv_dist = neighbor_cache[(size_t) jj * stride];
-                const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
                 const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
                 double* pair_ders = row + rad_off + (itype * species_count + list.types[cached_j[jj]]) * radial_coeff_count_per_pair;
-                for (int k = 1; k < angular_count; k++)
-                    angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
 
                 for (int mu = 0; mu < radial_func_count; mu++) {
                     const int end = mu_offsets[mu + 1];
                     if (mu_offsets[mu] == end) continue;
                     double radial_sum = 0;
                     for (int t = mu_offsets[mu]; t < end; t++)
-                        radial_sum += basic_ders_by_mu[t] * angular_vals[angular_by_mu[t]];
+                        radial_sum += basic_ders_by_mu[t] * ang[(size_t) angular_by_mu[t] * N + jj];
                     double* coeff_ders = pair_ders + mu * radial_basis_size;
                     for (int ri = 0; ri < radial_basis_size; ri++)
                         coeff_ders[ri] += radial_sum * basis_vals[ri];
@@ -393,7 +418,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             const auto& r = valid_dr[jj];
             const double* D[3];
             for (int d = 0; d < 3; d++) {
-                D[d] = scalar_ders.data() + (size_t) (jj * 3 + d) * n_linear;
+                D[d] = scalar_ders.data() + (size_t) (d * V + jj) * n_linear;
                 double* force_i = force_grad + ((size_t) i * 3 + d) * width + lin_off;
                 double* force_j = force_grad + ((size_t) j * 3 + d) * width + lin_off;
                 for (int s = 0; s < n_linear; s++) force_i[s] += D[d][s];
@@ -428,16 +453,14 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             const double unit_r[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
             const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
             const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
-            const double* ang_vals = neighbor_angular_vals.data() + (size_t) jj * angular_count;
-            const std::array<double, 3>* ang_grads = neighbor_angular_grads.data() + (size_t) jj * angular_count;
             const int pair_off = itype * species_count + jtype;
 
             for (int k = 0; k < alpha_index_basic_count; k++) {
                 const double G_k = nbh_energy_ders_wrt_moments[k];
                 if (G_k == 0.0) continue;
                 const int mu = alpha_index_basic[k][0];
-                const double angular_factor = ang_vals[basic_to_angular[k]];
-                const std::array<double, 3>& angular_jacobian = ang_grads[basic_to_angular[k]];
+                const double angular_factor = ang[(size_t) basic_to_angular[k] * N + jj];
+                const double angular_jacobian[3] = {ang_grads[((size_t) basic_to_angular[k] * 3 + 0) * N + jj], ang_grads[((size_t) basic_to_angular[k] * 3 + 1) * N + jj], ang_grads[((size_t) basic_to_angular[k] * 3 + 2) * N + jj]};
                 const int coeff_offset = rad_off + (pair_off * radial_func_count + mu) * radial_basis_size;
 
                 for (int d = 0; d < 3; d++) {
@@ -458,9 +481,9 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             const auto& r = valid_dr[jj];
             for (int k = 0; k < alpha_index_basic_count; k++) {
                 const double* dG_k = dG.data() + (size_t) k * n_radial;
-                const double* jac_k = moment_ders.data() + (size_t) k * ders_stride + jj * 3;
+                const double* jac_k = moment_ders.data() + (size_t) k * ders_stride + jj;
                 for (int d = 0; d < 3; d++) {
-                    const double jkd = jac_k[d];
+                    const double jkd = jac_k[d * V];
                     if (jkd == 0.0) continue;
                     const size_t i_base = ((size_t) i * 3 + d) * width + rad_off;
                     const size_t j_base = ((size_t) j * 3 + d) * width + rad_off;
