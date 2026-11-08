@@ -52,7 +52,7 @@ pybind11_add_module(_mtp_ext
     ${MTP_CSRC}/mtp_trainer_bindings.cpp
     ${MTP_CSRC}/maxvol_bindings.cpp
 )
-target_link_libraries(_mtp_ext PRIVATE mtp_core Threads::Threads)
+target_link_libraries(_mtp_ext PRIVATE mtp_core Threads::Threads Eigen3::Eigen)
 install(TARGETS _mtp_ext DESTINATION otf_engine/_mtp)
 
 # The trainer and the MaxVol search over MPI, which use _mtp_ext's classes
@@ -63,5 +63,5 @@ pybind11_add_module(_mtp_mpi
     ${MTP_CSRC}/maxvol_bindings.cpp
 )
 target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
-target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX)
+target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX Eigen3::Eigen)
 install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)

@@ -6,6 +6,8 @@
 
 #include "mtp_trainer.h"
 
+#include <Eigen/Dense>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -745,7 +747,15 @@ void MTPTrainer::assemble_linear() {
     lin_matrix.assign((size_t) n * n, 0.0);
     lin_vector.assign(n, 0.0);
 
-    std::vector<double> energy_cmpnts(n), force_weights;
+    Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> matrix(lin_matrix.data(), n, n);
+    Eigen::Map<Eigen::VectorXd> vector(lin_vector.data(), n);
+
+    // E, F and virial are linear in these coefficients, with the gradients as components: a structure's equations are
+    // the components of each value it has, and its references the values, each scaled by the square root of its weight
+    int most_atoms = 0;
+    for (const TrainingStructure& s : structures) most_atoms = std::max(most_atoms, (int) s.ilist.size());
+    Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> equations(1 + 3 * most_atoms + 9, n);
+    Eigen::VectorXd references(equations.rows());
     for (const TrainingStructure& s : structures) {
         const NeighList list = s.list();
         site_energy_grad.resize((size_t) list.inum * width);
@@ -753,55 +763,35 @@ void MTPTrainer::assemble_linear() {
         virial_grad.resize(6 * (size_t) width);
         potential.eval_grad(list, site_energy_grad.data(), force_grad.data(), virial_grad.data(), false);
 
-        // E, F and virial are linear in these coefficients, with the gradients as components
-        std::fill(energy_cmpnts.begin(), energy_cmpnts.end(), 0.0);
-        for (int ii = 0; ii < list.inum; ii++)
-            for (int k = 0; k < n; k++)
-                energy_cmpnts[k] += site_energy_grad[(size_t) ii * width + n_radial + k];
-        auto force_cmpnt = [&](int atom, int k, int a) { return force_grad[((size_t) atom * 3 + a) * width + n_radial + k]; };
-        auto stress_cmpnt = [&](int k, int a, int b) { return virial_grad[(size_t) VIRIAL_INDEX[a][b] * width + n_radial + k]; };
-
+        auto component = [&](const std::vector<double>& grad, size_t row) { return Eigen::Map<const Eigen::RowVectorXd>(&grad[row * width + n_radial], n); };
+        int m = 0;
         if (s.has_energy) {
-            const double wgt = energy_weight(s);
-            for (int i = 0; i < n; i++)
-                for (int j = i; j < n; j++)
-                    lin_matrix[i * n + j] += wgt * energy_cmpnts[i] * energy_cmpnts[j];
-            for (int i = 0; i < n; i++)
-                lin_vector[i] += wgt * energy_cmpnts[i] * s.energy;
+            const double root = std::sqrt(energy_weight(s));
+            equations.row(m).setZero();
+            for (int ii = 0; ii < list.inum; ii++) equations.row(m) += component(site_energy_grad, ii);
+            equations.row(m) *= root;
+            references[m++] = root * s.energy;
         }
-
-        if (options.force_weight != 0 && s.has_forces) {
-            force_weights.resize(list.inum);
-            for (int ii = 0; ii < list.inum; ii++)
-                force_weights[ii] = force_weight(s, list.ilist[ii]);
-
-            for (int i = 0; i < n; i++)
-                for (int j = i; j < n; j++)
-                    for (int ii = 0; ii < list.inum; ii++)
-                        for (int a = 0; a < 3; a++)
-                            lin_matrix[i * n + j] += force_weights[ii] * force_cmpnt(list.ilist[ii], i, a) * force_cmpnt(list.ilist[ii], j, a);
-
+        if (options.force_weight != 0 && s.has_forces)
             for (int ii = 0; ii < list.inum; ii++) {
                 const int atom = list.ilist[ii];
-                for (int i = 0; i < n; i++)
-                    for (int a = 0; a < 3; a++)
-                        lin_vector[i] += force_weights[ii] * force_cmpnt(atom, i, a) * s.forces[atom * 3 + a];
+                const double root = std::sqrt(force_weight(s, atom));
+                for (int a = 0; a < 3; a++) {
+                    equations.row(m) = root * component(force_grad, (size_t) atom * 3 + a);
+                    references[m++] = root * s.forces[atom * 3 + a];
+                }
             }
-        }
-
         if (options.stress_weight != 0 && s.has_virial) {
-            const double wgt = stress_weight(s);
-            for (int i = 0; i < n; i++)
-                for (int j = i; j < n; j++)
-                    for (int a = 0; a < 3; a++)
-                        for (int b = 0; b < 3; b++)
-                            lin_matrix[i * n + j] += wgt * stress_cmpnt(i, a, b) * stress_cmpnt(j, a, b);
-
-            for (int i = 0; i < n; i++)
-                for (int a = 0; a < 3; a++)
-                    for (int b = 0; b < 3; b++)
-                        lin_vector[i] += wgt * stress_cmpnt(i, a, b) * s.virial[VIRIAL_INDEX[a][b]];
+            const double root = std::sqrt(stress_weight(s));
+            for (int a = 0; a < 3; a++)
+                for (int b = 0; b < 3; b++) {
+                    equations.row(m) = root * component(virial_grad, VIRIAL_INDEX[a][b]);
+                    references[m++] = root * s.virial[VIRIAL_INDEX[a][b]];
+                }
         }
+
+        matrix.selfadjointView<Eigen::Upper>().rankUpdate(equations.topRows(m).transpose());
+        vector.noalias() += equations.topRows(m).transpose() * references.head(m);
     }
 
     std::vector<double> matrix_sum(rank == 0 ? (size_t) n * n : 0), vector_sum(rank == 0 ? n : 0);
