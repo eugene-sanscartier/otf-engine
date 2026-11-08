@@ -7,6 +7,13 @@
 
 #include <cmath>
 
+// A function built for x86-64-v3 (AVX2, FMA) beside the portable build, the one the CPU runs picked at load time
+#if defined(__x86_64__) && defined(__GNUC__) && !defined(__clang__)
+#define X86_64_V3_CLONE __attribute__((target_clones("arch=x86-64-v3", "default")))
+#else
+#define X86_64_V3_CLONE
+#endif
+
 // Accumulate the virial components of a pair force's direction d, as
 // PairMTP::compute tallies them.
 static inline void accumulate_virial_grad(double* virial_grad, int width, int d, int col, double contrib, const std::array<double, 3>& r) {
@@ -158,7 +165,7 @@ void MTPTraining::eval_radial_basis(double dist, double* vals_out, double* ders_
    products. The angular monomials' derivatives follow the shared tree, with
    du_b/dr_a = (delta_ab - u_a u_b) / |r|.
 ------------------------------------------------------------------------- */
-void MTPTraining::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool radial) {
+X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool radial) {
     const int width = coeff_count();
     const int n_radial = radial_coeff_count;
     const int n_linear = alpha_scalar_count;
