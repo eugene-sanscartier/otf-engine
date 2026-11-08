@@ -169,7 +169,13 @@ class MTPTrainer {
     double* inverse_hessian = nullptr;    // where BFGS starts from and leaves its inverse Hessian, on rank 0
     int inverse_hessian_size = 0;         // its n, on every rank; 0 starts from the identity
 
+    // Under varpro, each structure's energy, forces and virial as linear in the species and linear coefficients, the
+    // rows assemble_linear last built (energy, 3 per atom, the 6 virial components), at the radial coefficients and
+    // scaling in linear_rows_at; loss_grad takes the values from them at those coefficients in place of PairMTP::compute
+    std::vector<std::vector<double>> linear_rows;    // per structure, [(1 + 3 n_atoms + 6) * n_linear]
+    std::vector<double> linear_rows_at;              // [n_radial radial coefficients | scaling]
+
     // Per-structure scratch, and evaluate's gradient on this rank
-    std::vector<double> dloss_dforces, local_grad;
+    std::vector<double> dloss_dforces, local_grad, linear_values;
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };

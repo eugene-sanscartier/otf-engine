@@ -756,20 +756,30 @@ void MTPTrainer::assemble_linear() {
     for (const TrainingStructure& s : structures) most_atoms = std::max(most_atoms, (int) s.ilist.size());
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> equations(1 + 3 * most_atoms + 9, n);
     Eigen::VectorXd references(equations.rows());
-    for (const TrainingStructure& s : structures) {
+    std::vector<double> scratch_rows;
+    if (options.varpro) linear_rows.resize(structures.size());
+    for (size_t index = 0; index < structures.size(); index++) {
+        const TrainingStructure& s = structures[index];
         const NeighList list = s.list();
         site_energy_grad.resize((size_t) list.inum * width);
         force_grad.resize((size_t) list.n_atoms * 3 * width);
         virial_grad.resize(6 * (size_t) width);
         potential.eval_grad(list, site_energy_grad.data(), force_grad.data(), virial_grad.data(), false);
 
+        // the energy, force and virial rows, kept under varpro
+        std::vector<double>& row_store = options.varpro ? linear_rows[index] : scratch_rows;
+        row_store.resize((size_t) (1 + 3 * list.n_atoms + 6) * n);
+        Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> rows(row_store.data(), 1 + 3 * list.n_atoms + 6, n);
         auto component = [&](const std::vector<double>& grad, size_t row) { return Eigen::Map<const Eigen::RowVectorXd>(&grad[row * width + n_radial], n); };
+        rows.row(0).setZero();
+        for (int ii = 0; ii < list.inum; ii++) rows.row(0) += component(site_energy_grad, ii);
+        for (int q = 0; q < 3 * list.n_atoms; q++) rows.row(1 + q) = component(force_grad, q);
+        for (int k = 0; k < 6; k++) rows.row(1 + 3 * list.n_atoms + k) = component(virial_grad, k);
+
         int m = 0;
         if (s.has_energy) {
             const double root = std::sqrt(energy_weight(s));
-            equations.row(m).setZero();
-            for (int ii = 0; ii < list.inum; ii++) equations.row(m) += component(site_energy_grad, ii);
-            equations.row(m) *= root;
+            equations.row(m) = root * rows.row(0);
             references[m++] = root * s.energy;
         }
         if (options.force_weight != 0 && s.has_forces)
@@ -777,7 +787,7 @@ void MTPTrainer::assemble_linear() {
                 const int atom = list.ilist[ii];
                 const double root = std::sqrt(force_weight(s, atom));
                 for (int a = 0; a < 3; a++) {
-                    equations.row(m) = root * component(force_grad, (size_t) atom * 3 + a);
+                    equations.row(m) = root * rows.row(1 + atom * 3 + a);
                     references[m++] = root * s.forces[atom * 3 + a];
                 }
             }
@@ -785,13 +795,17 @@ void MTPTrainer::assemble_linear() {
             const double root = std::sqrt(stress_weight(s));
             for (int a = 0; a < 3; a++)
                 for (int b = 0; b < 3; b++) {
-                    equations.row(m) = root * component(virial_grad, VIRIAL_INDEX[a][b]);
+                    equations.row(m) = root * rows.row(1 + 3 * list.n_atoms + VIRIAL_INDEX[a][b]);
                     references[m++] = root * s.virial[VIRIAL_INDEX[a][b]];
                 }
         }
 
         matrix.selfadjointView<Eigen::Upper>().rankUpdate(equations.topRows(m).transpose());
         vector.noalias() += equations.topRows(m).transpose() * references.head(m);
+    }
+    if (options.varpro) {
+        linear_rows_at.assign(coeffs.begin(), coeffs.begin() + n_radial);
+        linear_rows_at.push_back(potential.get_scaling());
     }
 
     std::vector<double> matrix_sum(rank == 0 ? (size_t) n * n : 0), vector_sum(rank == 0 ? n : 0);
@@ -993,13 +1007,26 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
     std::fill(grad.begin(), grad.end(), 0.0);
     double loss = 0.0;
     std::fill_n(loss_terms, 3, 0.0);
+    const bool from_rows = linear_rows.size() == structures.size() && linear_rows_at.size() == (size_t) n_radial + 1 && std::equal(coeffs.begin(), coeffs.begin() + n_radial, linear_rows_at.begin()) && linear_rows_at[n_radial] == potential.get_scaling();
 
-    for (const TrainingStructure& s : structures) {
+    for (size_t index = 0; index < structures.size(); index++) {
+        const TrainingStructure& s = structures[index];
         const NeighList list = s.list();
-        potential.compute(list);
-        const double energy = potential.get_energy();
-        const double* forces = potential.get_forces();
-        const double* virial = potential.get_virial();
+        double energy;
+        const double *forces, *virial;
+        if (from_rows) {
+            const int m = 1 + 3 * list.n_atoms + 6;
+            linear_values.resize(m);
+            Eigen::Map<Eigen::VectorXd>(linear_values.data(), m).noalias() = Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(linear_rows[index].data(), m, n_linear) * Eigen::Map<const Eigen::VectorXd>(coeffs.data() + n_radial, n_linear);
+            energy = linear_values[0];
+            forces = linear_values.data() + 1;
+            virial = linear_values.data() + 1 + 3 * list.n_atoms;
+        } else {
+            potential.compute(list);
+            energy = potential.get_energy();
+            forces = potential.get_forces();
+            virial = potential.get_virial();
+        }
 
         dloss_dforces.assign((size_t) list.n_atoms * 3, 0.0);
         double dloss_dvirial[6] = {};
