@@ -19,6 +19,11 @@
 // Virial component of each entry of the symmetric 3x3 stress.
 static const int VIRIAL_INDEX[3][3] = {{0, 3, 4}, {3, 1, 5}, {4, 5, 2}};
 
+// Whether mlp's BFGS refits the linear coefficients before this step.
+static bool linear_fit_step(int step) {
+    return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
+}
+
 MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const TrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
     : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log), checkpoint(std::move(checkpoint)) {
     MPI_Comm_rank(comm, &rank);
@@ -433,7 +438,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
     // BFGS steps the leading n coefficients: all of them, or the radial block
     const int n = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
-    std::vector<double> grad(coeffs.size()), bfgs_g(n);
+    std::vector<double> bfgs_g(n);
     double bfgs_f = 0.0, bfgs_terms[4] = {};
 
     if (rank == 0) {
@@ -457,7 +462,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             curr_line_search = 0;
             if (rank == 0) bfgs.set_x(coeffs.data(), n);
 
-            if (!options.radial_only && !options.bfgs_only && !options.varpro && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
+            if (!options.radial_only && !options.bfgs_only && !options.varpro && linear_fit_step(num_step)) {
                 fit_linear();
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian
@@ -475,19 +480,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
         if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
         MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
-        if (options.varpro) fit_linear(false);    // the linear coefficients at their optimum for these radial ones
-
-        double loss = loss_grad(grad) / structure_count;
-        for (double& g : grad) g /= structure_count;
-        // the energy, force, stress and penalty terms, for the log
-        double terms[4] = {loss_terms[0] / structure_count, loss_terms[1] / structure_count, loss_terms[2] / structure_count, loss};
-        if (rank == 0) add_penalty(loss, grad);
-        terms[3] = loss - terms[3];
-
-        MPI_Barrier(comm);
-        MPI_Reduce(&loss, &bfgs_f, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
-        MPI_Reduce(terms, bfgs_terms, 4, MPI_DOUBLE, MPI_SUM, 0, comm);
-        MPI_Reduce(grad.data(), bfgs_g.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
+        bfgs_f = evaluate(bfgs_g, n, true, bfgs_terms);
 
         if (rank == 0) {
             if (!bfgs.iterate(bfgs_f, bfgs_g))
@@ -537,7 +530,6 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             }
         }
 
-        MPI_Barrier(comm);
         MPI_Bcast(&converge, 1, MPI_C_BOOL, 0, comm);
         MPI_Bcast(&linesearch, 1, MPI_C_BOOL, 0, comm);
         MPI_Bcast(&num_step, 1, MPI_INT, 0, comm);
@@ -582,7 +574,7 @@ void MTPTrainer::fit_riemannian(int max_iter) {
     // the coordinates stepped: the radial block, and the linear one without varpro
     const int n = options.varpro ? n_radial : (int) coeffs.size();
     const int K = potential.get_radial_func_count();
-    std::vector<double> grad(coeffs.size()), g(n), g_new(n), p(n), x0(n);
+    std::vector<double> g(n), g_new(n), p(n), x0(n);
     std::deque<std::vector<double>> s_memory, y_memory;    // tangent at the current point
     double terms[4] = {};
     int evaluations = 0;
@@ -593,24 +585,14 @@ void MTPTrainer::fit_riemannian(int max_iter) {
     };
 
     // the loss at coeffs, and its Riemannian gradient into out, on every rank
-    auto evaluate = [&](std::vector<double>& out) {
+    auto evaluate_tangent = [&](std::vector<double>& out) {
         MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
-        if (options.varpro) fit_linear(false);
-        double loss = loss_grad(grad) / structure_count;
-        for (double& x : grad) x /= structure_count;
-        double local[4] = {loss_terms[0] / structure_count, loss_terms[1] / structure_count, loss_terms[2] / structure_count, loss};
-        if (rank == 0) add_penalty(loss, grad, false);
-        local[3] = loss - local[3];
-
-        double total = 0.0;
-        MPI_Reduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
-        MPI_Reduce(local, terms, 4, MPI_DOUBLE, MPI_SUM, 0, comm);
-        MPI_Reduce(grad.data(), out.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
-        MPI_Bcast(&total, 1, MPI_DOUBLE, 0, comm);
+        double loss = evaluate(out, n, false, terms);
+        MPI_Bcast(&loss, 1, MPI_DOUBLE, 0, comm);
         MPI_Bcast(out.data(), n, MPI_DOUBLE, 0, comm);
         project_tangent(coeffs.data(), out.data());
         evaluations++;
-        return total;
+        return loss;
     };
 
     // the start on the manifold, a lower-triangular change of the radial functions, with the linear coefficients refitted
@@ -619,14 +601,14 @@ void MTPTrainer::fit_riemannian(int max_iter) {
         fit_linear(false);
         reg_init = false;
     }
-    double f = evaluate(g);
+    double f = evaluate_tangent(g);
 
     int num_step = 0;
     double linf = 9e99;    // the loss 50 steps ago
     while (true) {
-        if (!options.varpro && (num_step == 25 || num_step == 70 || num_step == 100 || num_step == 150 || num_step == 250 || num_step == 400)) {
+        if (!options.varpro && linear_fit_step(num_step)) {
             fit_linear(false);
-            f = evaluate(g);
+            f = evaluate_tangent(g);
             // a new regularization invalidates the memory
             if (reg_init) {
                 s_memory.clear();
@@ -696,12 +678,12 @@ void MTPTrainer::fit_riemannian(int max_iter) {
         for (; halvings <= 40; halvings++, t *= 0.5) {
             for (int j = 0; j < n; j++) coeffs[j] = x0[j] + t * p[j];
             retract(coeffs);
-            f_new = evaluate(g_new);
+            f_new = evaluate_tangent(g_new);
             if (f_new <= f + 1e-4 * t * slope) break;
         }
         if (halvings > 40) {
             std::copy(x0.begin(), x0.end(), coeffs.begin());
-            f = evaluate(g);
+            f = evaluate_tangent(g);
             if (log) *log << "L-BFGS line search failed" << std::endl;
             break;
         }
@@ -788,7 +770,7 @@ void MTPTrainer::assemble_linear() {
                 lin_vector[i] += wgt * energy_cmpnts[i] * s.energy;
         }
 
-        if (options.force_weight > 0 && s.has_forces) {
+        if (options.force_weight != 0 && s.has_forces) {
             force_weights.resize(list.inum);
             for (int ii = 0; ii < list.inum; ii++)
                 force_weights[ii] = force_weight(s, list.ilist[ii]);
@@ -807,7 +789,7 @@ void MTPTrainer::assemble_linear() {
             }
         }
 
-        if (options.stress_weight > 0 && s.has_virial) {
+        if (options.stress_weight != 0 && s.has_virial) {
             const double wgt = stress_weight(s);
             for (int i = 0; i < n; i++)
                 for (int j = i; j < n; j++)
@@ -987,20 +969,31 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
     // fixes the regularization at the potential's own radial coefficients, where BFGS's first evaluation fixes it
     if (options.varpro) fit_linear(false);
     std::copy(at.begin(), at.end(), coeffs.begin());
-    if (options.varpro) fit_linear(false);
-    std::vector<double> local(coeffs.size());
-    double loss = loss_grad(local) / structure_count;
-    for (double& g : local) g /= structure_count;
-    if (rank == 0) add_penalty(loss, local, !options.riemannian);
-
-    double total = 0.0;
+    double terms[4];
     grad.assign(coeffs.size(), 0.0);
-    MPI_Allreduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, comm);
-    MPI_Allreduce(local.data(), grad.data(), (int) grad.size(), MPI_DOUBLE, MPI_SUM, comm);
+    double total = evaluate(grad, (int) grad.size(), !options.riemannian, terms);
+    MPI_Bcast(&total, 1, MPI_DOUBLE, 0, comm);
+    MPI_Bcast(grad.data(), (int) grad.size(), MPI_DOUBLE, 0, comm);
     // the linear coefficients are a function of the radial ones: their partial gradient is zero at the optimum
     if (options.varpro) std::fill(grad.begin() + n_radial, grad.end(), 0.0);
     // under riemannian, the Riemannian gradient at the radial functions in at, which must be orthonormal
     if (options.riemannian) project_tangent(coeffs.data(), grad.data());
+    return total;
+}
+
+double MTPTrainer::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]) {
+    if (options.varpro) fit_linear(false);    // the linear coefficients at their optimum for these radial ones
+    local_grad.resize(coeffs.size());
+    double loss = loss_grad(local_grad) / structure_count;
+    for (double& g : local_grad) g /= structure_count;
+    double local_terms[4] = {loss_terms[0] / structure_count, loss_terms[1] / structure_count, loss_terms[2] / structure_count, loss};
+    if (rank == 0) add_penalty(loss, local_grad, radial);
+    local_terms[3] = loss - local_terms[3];
+
+    double total = 0.0;
+    MPI_Reduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
+    MPI_Reduce(local_terms, terms, 4, MPI_DOUBLE, MPI_SUM, 0, comm);
+    MPI_Reduce(local_grad.data(), grad.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
     return total;
 }
 
@@ -1062,44 +1055,23 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
 }
 
 void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad, bool radial) {
-    const int C = potential.get_species_count();
     const int K = potential.get_radial_func_count();
-    const int R = potential.get_radial_basis_size();
     const double coeff = options.penalty_weight;
 
     // the norm of each radial function over all species pairs, towards 1
     for (int k = 0; radial && k < K; k++) {
-        double norm = 0;
-        for (int p = 0; p < C * C; p++)
-            for (int l = 0; l < R; l++) {
-                const int idx = p * K * R + k * R + l;
-                norm += coeffs[idx] * coeffs[idx];
-            }
-
+        const double norm = row_dot(coeffs.data(), k, coeffs.data(), k);
         loss += coeff * (norm - 1) * (norm - 1);
-        for (int p = 0; p < C * C; p++)
-            for (int l = 0; l < R; l++) {
-                const int idx = p * K * R + k * R + l;
-                grad[idx] += coeff * 4 * (norm - 1) * coeffs[idx];
-            }
+        row_axpy(grad.data(), k, coeff * 4 * (norm - 1), coeffs.data(), k);
     }
 
     // the overlap of each two radial functions, towards 0
     for (int k1 = 0; radial && k1 < K; k1++)
         for (int k2 = k1 + 1; k2 < K; k2++) {
-            double scal = 0;
-            for (int p = 0; p < C * C; p++)
-                for (int l = 0; l < R; l++)
-                    scal += coeffs[p * K * R + k1 * R + l] * coeffs[p * K * R + k2 * R + l];
-
+            const double scal = row_dot(coeffs.data(), k1, coeffs.data(), k2);
             loss += coeff * scal * scal;
-            for (int p = 0; p < C * C; p++)
-                for (int l = 0; l < R; l++) {
-                    const int idx1 = p * K * R + k1 * R + l;
-                    const int idx2 = p * K * R + k2 * R + l;
-                    grad[idx1] += coeff * 2 * scal * coeffs[idx2];
-                    grad[idx2] += coeff * 2 * scal * coeffs[idx1];
-                }
+            row_axpy(grad.data(), k1, coeff * 2 * scal, coeffs.data(), k2);
+            row_axpy(grad.data(), k2, coeff * 2 * scal, coeffs.data(), k1);
         }
 
     // the regularization of the linear fit
@@ -1121,18 +1093,8 @@ void MTPTrainer::orthogonalize() {
 
     for (int k = 0; k < K; k++) {
         for (int k2 = 0; k2 < k; k2++) {
-            double norm = 0;
-            for (int p = 0; p < C * C; p++)
-                for (int l = 0; l < R; l++) {
-                    const int idx = p * K * R + k * R + l;
-                    norm += coeffs[idx] * coeffs[idx];
-                }
-
-            double scal = 0;
-            for (int p = 0; p < C * C; p++)
-                for (int l = 0; l < R; l++)
-                    scal += coeffs[p * K * R + k * R + l] * coeffs[p * K * R + k2 * R + l];
-
+            const double norm = row_dot(coeffs.data(), k, coeffs.data(), k);
+            const double scal = row_dot(coeffs.data(), k, coeffs.data(), k2);
             for (int p = 0; p < C * C; p++)
                 for (int l = 0; l < R; l++)
                     coeffs[p * K * R + k * R + l] -= coeffs[p * K * R + k2 * R + l] * scal / norm;
@@ -1151,51 +1113,49 @@ void MTPTrainer::orthogonalize() {
     }
 }
 
-std::vector<double> MTPTrainer::radial_overlaps(const double* a, const double* b) const {
+double MTPTrainer::row_dot(const double* a, int k1, const double* b, int k2) const {
     const int P = potential.get_species_count() * potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
-    std::vector<double> overlaps(K * K, 0.0);
+    double sum = 0.0;
     for (int p = 0; p < P; p++)
-        for (int k1 = 0; k1 < K; k1++)
-            for (int k2 = 0; k2 < K; k2++)
-                for (int l = 0; l < R; l++)
-                    overlaps[k1 * K + k2] += a[(p * K + k1) * R + l] * b[(p * K + k2) * R + l];
+        for (int l = 0; l < R; l++) sum += a[(p * K + k1) * R + l] * b[(p * K + k2) * R + l];
+    return sum;
+}
+
+void MTPTrainer::row_axpy(double* y, int k1, double factor, const double* x, int k2) const {
+    const int P = potential.get_species_count() * potential.get_species_count();
+    const int K = potential.get_radial_func_count();
+    const int R = potential.get_radial_basis_size();
+    for (int p = 0; p < P; p++)
+        for (int l = 0; l < R; l++) y[(p * K + k1) * R + l] += factor * x[(p * K + k2) * R + l];
+}
+
+std::vector<double> MTPTrainer::radial_overlaps(const double* a, const double* b) const {
+    const int K = potential.get_radial_func_count();
+    std::vector<double> overlaps(K * K);
+    for (int k1 = 0; k1 < K; k1++)
+        for (int k2 = 0; k2 < K; k2++) overlaps[k1 * K + k2] = row_dot(a, k1, b, k2);
     return overlaps;
 }
 
 void MTPTrainer::project_tangent(const double* w, double* v) const {
-    const int P = potential.get_species_count() * potential.get_species_count();
     const int K = potential.get_radial_func_count();
-    const int R = potential.get_radial_basis_size();
     const std::vector<double> overlaps = radial_overlaps(v, w);
-    for (int p = 0; p < P; p++)
-        for (int k1 = 0; k1 < K; k1++)
-            for (int k2 = 0; k2 < K; k2++)
-                for (int l = 0; l < R; l++)
-                    v[(p * K + k1) * R + l] -= 0.5 * (overlaps[k1 * K + k2] + overlaps[k2 * K + k1]) * w[(p * K + k2) * R + l];
+    for (int k1 = 0; k1 < K; k1++)
+        for (int k2 = 0; k2 < K; k2++) row_axpy(v, k1, -0.5 * (overlaps[k1 * K + k2] + overlaps[k2 * K + k1]), w, k2);
 }
 
 void MTPTrainer::retract(std::vector<double>& c) const {
     const int P = potential.get_species_count() * potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
-    auto row_dot = [&](int k1, int k2) {
-        double sum = 0.0;
-        for (int p = 0; p < P; p++)
-            for (int l = 0; l < R; l++) sum += c[(p * K + k1) * R + l] * c[(p * K + k2) * R + l];
-        return sum;
-    };
 
     // modified Gram-Schmidt, twice for orthonormality to rounding
     for (int pass = 0; pass < 2; pass++)
         for (int k = 0; k < K; k++) {
-            for (int k2 = 0; k2 < k; k2++) {
-                const double overlap = row_dot(k, k2);
-                for (int p = 0; p < P; p++)
-                    for (int l = 0; l < R; l++) c[(p * K + k) * R + l] -= overlap * c[(p * K + k2) * R + l];
-            }
-            const double norm = std::sqrt(row_dot(k, k));
+            for (int k2 = 0; k2 < k; k2++) row_axpy(c.data(), k, -row_dot(c.data(), k, c.data(), k2), c.data(), k2);
+            const double norm = std::sqrt(row_dot(c.data(), k, c.data(), k));
             for (int p = 0; p < P; p++)
                 for (int l = 0; l < R; l++) c[(p * K + k) * R + l] /= norm;
         }
@@ -1218,5 +1178,5 @@ double MTPTrainer::force_weight(const TrainingStructure& s, int i) const {
 }
 
 double MTPTrainer::stress_weight(const TrainingStructure& s) const {
-    return options.stress_weight / std::pow(s.ilist.size(), 1) * options.select_factor;
+    return options.stress_weight / s.ilist.size() * options.select_factor;
 }

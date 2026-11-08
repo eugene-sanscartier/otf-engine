@@ -113,6 +113,10 @@ class MTPTrainer {
     void broadcast_linear();
     void rescale();
 
+    // The loss at coeffs, penalty included (the radial one if radial), on rank 0, with its gradient over the first n
+    // coefficients in grad and its energy, force, stress and penalty terms in terms, summed over the ranks onto rank 0.
+    // Under varpro the linear coefficients are solved for coeffs first.
+    double evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]);
     // Loss and dL/dc over this rank's structures, without the penalty.
     double loss_grad(std::vector<double>& grad);
     // Adds the penalty on the radial functions' norms and overlaps, unless radial is false,
@@ -121,6 +125,10 @@ class MTPTrainer {
     void orthogonalize();
 
     // The radial functions as the rows of W, K x (species pairs * basis size), in the radial block of a coefficient vector.
+    // The row product a_k1 . b_k2 of the radial blocks of a and b.
+    double row_dot(const double* a, int k1, const double* b, int k2) const;
+    // Adds factor times row k2 of the radial block of x to row k1 of that of y.
+    void row_axpy(double* y, int k1, double factor, const double* x, int k2) const;
     // Row products a_k . b_k' of the radial blocks of a and b, K x K.
     std::vector<double> radial_overlaps(const double* a, const double* b) const;
     // Projects the radial block of v onto the tangent space at W, the radial block of w: v - sym(v W^T) W.
@@ -161,7 +169,7 @@ class MTPTrainer {
     double* inverse_hessian = nullptr;    // where BFGS starts from and leaves its inverse Hessian, on rank 0
     int inverse_hessian_size = 0;         // its n, on every rank; 0 starts from the identity
 
-    // Per-structure scratch
-    std::vector<double> dloss_dforces;
+    // Per-structure scratch, and evaluate's gradient on this rank
+    std::vector<double> dloss_dforces, local_grad;
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };
