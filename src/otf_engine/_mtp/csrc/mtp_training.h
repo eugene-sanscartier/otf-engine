@@ -48,17 +48,18 @@ class MTPTraining : public PairMTP {
     std::vector<double> neighbor_radial_vals;               // [neighbor * radial_basis_size]
     std::vector<double> neighbor_radial_ders;               // [neighbor * radial_basis_size]
 
-    // eval_grad's force passes: per neighbor, the angular monomials, their
-    // derivatives w.r.t. its displacement, and the moment Jacobian.
+    // eval_grad's force passes: per neighbor, the angular monomials and their
+    // derivatives w.r.t. its displacement.
     int jac_size = 0;
     std::vector<double> neighbor_angular_vals;                // [jac_size * angular_count]
     std::vector<std::array<double, 3>> neighbor_angular_grads; // [jac_size * angular_count]
-    std::vector<std::array<double, 3>> moment_jacobian;       // [jac_size * alpha_index_basic_count]
 
     std::vector<double> radial_jacobian; // [alpha_index_basic_count * species_count * radial_coeff_count_per_pair] ders of basic moments wrt radial coeffs
     std::vector<double> dM_dc;      // [alpha_moment_count * radial_coeff_count]
     std::vector<double> dG;         // [alpha_moment_count * radial_coeff_count]
-    std::vector<double> moment_ders; // [alpha_moment_count * neighbor * 3] d(moment)/d(displacement)
+    std::vector<double> moment_ders;  // [alpha_moment_count * jac_size * 3] d(moment)/d(displacement), the basic rows the moment Jacobian
+    std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] the basis values' rows of moment_ders, transposed
+    std::vector<char> first_product;  // [alpha_index_times_count] whether the product is the first to add to its moment
 
     // eval_loss_grad: per neighbor, the unit displacement u and its tangent
     // along that neighbor's loss weight w; per angular monomial, its tangent;
