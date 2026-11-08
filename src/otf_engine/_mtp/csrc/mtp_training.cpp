@@ -515,7 +515,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
    shared tree, and their tangents follow the same tree along
    v = (w - (w.u) u) / |r|, the tangent of u.
 ------------------------------------------------------------------------- */
-void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
+X86_64_V3_CLONE void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
     const int sp_off = n_radial;
     const int lin_off = n_radial + species_count;
