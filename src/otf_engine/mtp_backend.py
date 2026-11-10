@@ -264,7 +264,7 @@ def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int |
     return _mtp_mpi.train_mtp(potential, structures, options, comm, checkpoint=checkpoint, inverse_hessian=inverse_hessian, balance_species=balance_species)
 
 
-def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "cfg", comm=None, balance_species: bool = True) -> None:
+def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None, balance_species: bool = True) -> None:
     """Train *potential* on *training_structs* with otf_engine's trainer, and write it with an active set to *save_to*.
 
     *potential* may be untrained, and gains the species of *training_structs* it lacks.

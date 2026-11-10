@@ -1,6 +1,6 @@
 """Train an MTP with otf_engine's trainer.
 
-    python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=cfg|nbh] [trainer options]
+    python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=nbh|cfg] [trainer options]
 
 Takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random, --skip_preinit,
 ...) and the trainer's own (--varpro=false, --riemannian=false, ...; mtp_backend.MLP_ALGORITHM lists
@@ -26,7 +26,7 @@ def main(argv=None, balance_species: bool = True):
 
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s")
     ranks = int(options.pop("ranks")) if "ranks" in options else None
-    al_mode = options.pop("al_mode", "cfg")
+    al_mode = options.pop("al_mode", "nbh")
     save_to = options.pop("save_to", potential)
 
     with open(training_set) as f:
