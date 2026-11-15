@@ -64,6 +64,8 @@ class MTPTrainer : public Trainer<MTPTraining, MTPTrainerOptions> {
     double objective(const std::vector<double>& at, std::vector<double>& grad);
 
   private:
+    friend class MTPTrainerStages;    // _mtp_testing runs the stages one at a time
+
     void add_species();
     void update_min_dist();
     void fit_nonlinear(int max_iter);

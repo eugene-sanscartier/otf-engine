@@ -92,6 +92,17 @@ target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
 target_link_libraries(_mtp_mpi PRIVATE mtp MPI::MPI_CXX Eigen3::Eigen)
 install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)
 
+# MTPTrainer's stages one at a time, for the tests
+pybind11_add_module(_mtp_testing
+    ${CORE_CSRC}/thread_mpi.cpp
+    ${MTP_CSRC}/bfgs.cpp
+    ${MTP_CSRC}/mtp_trainer.cpp
+    ${MTP_CSRC}/mtp_trainer_bindings.cpp
+    ${MTP_CSRC}/mtp_testing_bindings.cpp
+)
+target_link_libraries(_mtp_testing PRIVATE mtp Threads::Threads Eigen3::Eigen)
+install(TARGETS _mtp_testing DESTINATION otf_engine/_mtp)
+
 # The ETN potential classes, linked into both ETN modules
 add_library(etn STATIC
     ${ETN_CSRC}/etn_harmonics.cpp

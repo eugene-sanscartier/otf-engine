@@ -1,4 +1,4 @@
-"""Training gate and benchmark: otf_engine's trainer against mlip-3's `mlp train`.
+"""Training benchmark: otf_engine's trainer against mlip-3's `mlp train`.
 
 Trains the same starting potential on the first N structures of a cfg file with each arm and
 reports, per run: wall time per BFGS iteration, time to the end of the nonlinear fit, total time
@@ -16,7 +16,7 @@ less: rounding differences grow through the BFGS, and past about 45 steps they s
 mlp on 1 rank from mlp on 4 ranks, which fit the same loss.
 
 An untrained potential (an mlip-3 template) logs 75 pre-training steps first, over which
-rounding separates even mlp's runs; tests/check_mtp_training.py gates the untrained paths.
+rounding separates even mlp's runs; tests/test_mtp_trainer.py tests the untrained paths.
 
     python tests/bench_mtp.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
 """

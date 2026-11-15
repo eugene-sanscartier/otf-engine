@@ -29,6 +29,14 @@ dependencies = [
   "wrapt",
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
+markers = ["mpi: runs mpirun in a subprocess"]
+
 [project.scripts]
 create-otf-state = "otf_engine.create_otf_state:main"
 otf-engine = "otf_engine.__main__:main"
