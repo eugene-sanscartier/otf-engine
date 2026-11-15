@@ -18,6 +18,8 @@
        scaling S            sets the scaling
        reg_vector N V...    sets the regularization vector
        print                the coefficients, the scaling, the radial basis' min_dist and the regularization vector
+       efs                  CalcEFS on each structure: its energy, forces, stresses (row-major) and site energies
+       radial R             the radial basis' values and derivatives at distance R
 
    Each result goes to stdout as "@ NAME N : V..." to 17 digits. The second
    form runs mlip-3's BFGS on the N-dimensional Rosenbrock function from
@@ -133,6 +135,28 @@ int main(int argc, char** argv) {
             words >> n;
             mtp.reg_vector.resize(n);
             for (int i = 0; i < n; i++) words >> mtp.reg_vector[i];
+        } else if (command == "efs") {
+            for (Configuration structure : structures) {
+                mtp.CalcEFS(structure);
+                const int n = structure.size();
+                std::vector<double> forces(3 * n), stresses(9), sites;
+                for (int i = 0; i < n; i++)
+                    for (int a = 0; a < 3; a++) forces[3 * i + a] = structure.force(i, a);
+                for (int a = 0; a < 3; a++)
+                    for (int b = 0; b < 3; b++) stresses[3 * a + b] = structure.stresses[a][b];
+                if (structure.has_site_energies())
+                    for (int i = 0; i < n; i++) sites.push_back(structure.site_energy(i));
+                put("energy", &structure.energy, 1);
+                put("forces", forces.data(), 3 * n);
+                put("stresses", stresses.data(), 9);
+                put("site_energies", sites.data(), (int) sites.size());
+            }
+        } else if (command == "radial") {
+            double r;
+            words >> r;
+            mtp.p_RadialBasis->CalcDers(r);
+            put("radial_vals", mtp.p_RadialBasis->vals.data(), mtp.p_RadialBasis->size);
+            put("radial_ders", mtp.p_RadialBasis->ders.data(), mtp.p_RadialBasis->size);
         } else if (command == "print") {
             put("coeffs", mtp.Coeff(), mtp.CoeffCount());
             put("scaling", &mtp.scaling, 1);

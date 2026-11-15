@@ -39,6 +39,17 @@ def candidates():
     return read_structures("candidates.cfg")
 
 
+def two_species(structures):
+    """The structures with species 2 renamed 1, which data/two-species-08.mtp takes."""
+    out = []
+    for atoms in structures:
+        copy = atoms.copy()
+        copy.calc = atoms.calc
+        copy.arrays["type_index"] = numpy.minimum(atoms.arrays["type_index"], 1)
+        out += [copy]
+    return out
+
+
 @pytest.fixture(scope="session")
 def recapture(request):
     return request.config.getoption("--recapture")

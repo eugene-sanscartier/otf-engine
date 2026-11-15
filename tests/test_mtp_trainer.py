@@ -142,18 +142,19 @@ BFGS_LINE = re.compile(r"BFGS iter +\d+: +(?:f=)?(\S+)")    # mlp's, and the tra
 TRAINER_LINE = re.compile(r"^\d+ coefficients \(|^ +loss +energy |^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: |^min_dist = |^Minimal interatomic distance ")
 LOSS_TERMS = re.compile(r"( +\S+ \( *\d+%\)){4}$")    # the trainer's terms of the loss, after mlp's loss
 
-# name: (potential, options); the options are mlp's
+# name: (potential, options, the log's last line compared); the options are mlp's. After the 200 steps to the tolerance
+# stop, rounding has moved the coefficients enough to flip the rescaling's choice between close condition numbers.
 FITS = {
-    "preinit": (MTP_REFERENCE / "template-08.almtp", {"iteration_limit": "30"}),
-    "tolerance": (DATA / "two-species-08.mtp", {"iteration_limit": "400", "tolerance": "1"}),
+    "preinit": (MTP_REFERENCE / "template-08.almtp", {"iteration_limit": "30"}, "Rescaling to"),
+    "tolerance": (DATA / "two-species-08.mtp", {"iteration_limit": "400", "tolerance": "1"}, "MTPR training ended"),
 }
 
 
-def fit_log(text):
-    """The lines of a log that mlp writes too, from the training-set count to the last rescaling, with single spaces."""
+def fit_log(text, last):
+    """The lines of a log that mlp writes too, from the training-set count to the last one starting with last, with single spaces."""
     lines = [" ".join(LOSS_TERMS.sub("", line).replace(": f=", ": ").split()) for line in text.splitlines() if not TRAINER_LINE.search(line)]
     start = next(i for i, line in enumerate(lines) if "configurations found" in line)
-    end = max(i for i, line in enumerate(lines) if line.startswith("Rescaling to"))
+    end = max(i for i, line in enumerate(lines) if line.startswith(last))
     return lines[start:end + 1]
 
 
@@ -162,15 +163,15 @@ def test_fit_log(name, structures, stored, recapture, mlip3, tmp_path):
     """A whole fit logs mlp's stages in mlp's order, and its first 5 losses to 1e-6: rounding grows through the BFGS."""
     from otf_engine._mtp._mtp_testing import MTPTrainerStages
 
-    potential, options = FITS[name]
+    potential, options, last = FITS[name]
     if recapture:
         cmd = [str(mlip3 / "bin" / "mlp"), "train", str(potential), str(DATA / "structures.cfg"), "--log=stdout", f"--save_to={tmp_path / 'out.mtp'}"] + [f"--{k}={v}" for k, v in options.items()]
         printed = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=tmp_path).stdout
-        stored[f"fit_{name}/log"] = numpy.array(fit_log(printed))
+        stored[f"fit_{name}/log"] = numpy.array(fit_log(printed, last))
 
     stages = MTPTrainerStages(str(potential), [training_structure(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
     stages.train()
-    ours, theirs = fit_log(stages.log), list(stored[f"fit_{name}/log"])
+    ours, theirs = fit_log(stages.log, last), list(stored[f"fit_{name}/log"])
 
     assert [NUMBER.sub("#", line) for line in ours] == [NUMBER.sub("#", line) for line in theirs]
     a = numpy.array([float(m.group(1)) for line in ours if (m := BFGS_LINE.search(line))][:5])
