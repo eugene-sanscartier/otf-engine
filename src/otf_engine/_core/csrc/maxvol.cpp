@@ -3,10 +3,15 @@
 ------------------------------------------------------------------------- */
 
 #include "maxvol.h"
-#include "maxvol_sweep.h"
 
 #include <algorithm>
 #include <cmath>
+
+#define EIGEN_DONT_PARALLELIZE
+#include <Eigen/Core>
+
+// The number of equations grade multiplies by invA^T in one product
+constexpr int grade_block_rows = 1024;
 
 // ---------------------------------------------------------------------------
 // Equations
@@ -80,12 +85,16 @@ MaxVol::MaxVol(int n, const double* A, const double* invA, double threshold, std
     : n(n), threshold(threshold), threshold_swap(threshold_swap), A(A, A + (size_t) n * n), invA(invA, invA + (size_t) n * n), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {}
 
 void MaxVol::grade(const double* rows, int count, double* grades) {
-    block.resize((size_t) std::min(sweep_block_rows, count) * n);
-#ifdef MTP_SWEEP_V3
-    static const bool v3 = __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
-    if (v3) return sweep_grades_v3(rows, count, invA.data(), n, block.data(), grades);
-#endif
-    sweep_grades_portable(rows, count, invA.data(), n, block.data(), grades);
+    using RowMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+    block.resize((size_t) std::min(grade_block_rows, count) * n);
+
+    const Eigen::Map<const RowMatrix> inverse(invA.data(), n, n);
+    for (int start = 0; start < count; start += grade_block_rows) {
+        const int b = std::min(grade_block_rows, count - start);
+        Eigen::Map<RowMatrix> product(block.data(), b, n);
+        product.noalias() = Eigen::Map<const RowMatrix>(rows + (size_t) start * n, b, n) * inverse.transpose();
+        Eigen::Map<Eigen::VectorXd>(grades + start, b) = product.cwiseAbs().rowwise().maxCoeff();
+    }
 }
 
 void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps, PoolRanks* ranks) {

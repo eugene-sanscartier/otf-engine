@@ -9,8 +9,8 @@
    against the active set A is max_i |v . invA[i]|, with invA = A^-T stored
    row-major, as lammps-mtp's pair_mtp_extrapolation grades.
 
-   Grading multiplies blocks of equations by invA^T on one thread (see
-   maxvol_sweep.h).
+   Grading multiplies blocks of equations by invA^T on one thread, through
+   Eigen.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -109,6 +109,6 @@ class MaxVol {
     bool try_swap(const double* v, double bound, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index);
 
     std::vector<double> w, dv, buf3, row_k;     // [n] try_swap's
-    std::vector<double> block;                  // [sweep_block_rows * n] grade's product block
+    std::vector<double> block;                  // [grade_block_rows * n] grade's product block
     std::vector<double> sweep_grades;           // [pool size] maximize_volume's
 };

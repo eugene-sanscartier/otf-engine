@@ -23,8 +23,6 @@ class MTPTraining : public PairMTP {
     //   site_energy_grad : [inum * coeff_count]      per-atom dE_i/dc
     //   force_grad       : [n_atoms * 3 * coeff_count]
     //   virial_grad      : [6 * coeff_count], only with force_grad
-    // The kernels are built for x86-64-v3 beside the portable build, which GCC
-    // does for no virtual function: the overrides call them.
     void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad, bool radial);
     void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad) override { eval_grad(list, site_energy_grad, force_grad, virial_grad, true); }
 

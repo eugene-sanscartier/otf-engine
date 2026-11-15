@@ -4,13 +4,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Every target is built for the CPU of the machine that builds it
+add_compile_options(-march=native)
+
 find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
 find_package(MPI REQUIRED COMPONENTS CXX)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
 set(CORE_CSRC src/otf_engine/_core/csrc)
 set(MTP_CSRC src/otf_engine/_mtp/csrc)
 set(ETN_CSRC src/otf_engine/_etn/csrc)
+
+# mlp's BFGS, and the test function it is compared on, reproduced to the bit: no multiply-add fused where mlp has none
+set_source_files_properties(${MTP_CSRC}/bfgs.cpp ${MTP_CSRC}/mtp_testing_bindings.cpp PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 
 # What the MTP and the ETN share: Pair, the file reader, the radial bases and MaxVol, linked into every module
 add_library(core STATIC
@@ -21,26 +28,8 @@ add_library(core STATIC
     ${CORE_CSRC}/maxvol.cpp
 )
 target_include_directories(core PUBLIC ${CORE_CSRC})
+target_link_libraries(core PRIVATE Eigen3::Eigen)
 set_target_properties(core PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
-
-# MaxVol's sweep through Eigen, built portable and, on x86-64, for x86-64-v3 as well; each build
-# names the Eigen namespace its own, so the two share no instantiation.
-find_package(Eigen3 3.3 REQUIRED NO_MODULE)
-add_library(maxvol_sweep_portable OBJECT ${CORE_CSRC}/maxvol_sweep.cpp)
-target_compile_definitions(maxvol_sweep_portable PRIVATE SWEEP_GRADES=sweep_grades_portable Eigen=Eigen_sweep_portable)
-set(MAXVOL_SWEEPS maxvol_sweep_portable)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-    add_library(maxvol_sweep_v3 OBJECT ${CORE_CSRC}/maxvol_sweep.cpp)
-    target_compile_definitions(maxvol_sweep_v3 PRIVATE SWEEP_GRADES=sweep_grades_v3 Eigen=Eigen_sweep_v3)
-    target_compile_options(maxvol_sweep_v3 PRIVATE -march=x86-64-v3)
-    target_compile_definitions(core PUBLIC MTP_SWEEP_V3)
-    list(APPEND MAXVOL_SWEEPS maxvol_sweep_v3)
-endif()
-foreach(sweep ${MAXVOL_SWEEPS})
-    target_link_libraries(${sweep} PRIVATE Eigen3::Eigen)
-    set_target_properties(${sweep} PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
-    target_sources(core PRIVATE $<TARGET_OBJECTS:${sweep}>)
-endforeach()
 
 pybind11_add_module(_core_ext
     ${CORE_CSRC}/thread_mpi.cpp
