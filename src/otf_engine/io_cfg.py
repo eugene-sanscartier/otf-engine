@@ -4,6 +4,8 @@ import ase
 import collections
 from typing import IO
 
+from ._core.neighbors import species_indices
+
 
 def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, int] | None = None):
     """Read one or more CFG structures.
@@ -99,16 +101,6 @@ def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, i
 
 
 def write_cfg(fileobj: IO[str], images: list[ase.Atoms]):
-
-    def map2ranks(arr):
-        seen, types = set(), []
-        for x in arr:
-            if x not in seen:
-                seen.add(x)
-                types.append(x)
-        rank_map = {val: i for i, val in enumerate(types)}
-        return [rank_map[x] for x in arr]
-
     output = []
 
     for atoms in images:
@@ -129,10 +121,7 @@ def write_cfg(fileobj: IO[str], images: list[ase.Atoms]):
         if has_nbh:
             fields += ["nbh_grades"]
 
-        if "type_index" in atoms.arrays:
-            type_ranks = atoms.arrays["type_index"].tolist()
-        else:
-            type_ranks = map2ranks(atoms.get_chemical_symbols())
+        type_ranks = species_indices(atoms).tolist()
         positions = atoms.get_positions()
         forces = atoms.calc.results["forces"] if has_forces else None
         nbh = atoms.arrays["nbh_grades"] if has_nbh else None

@@ -65,32 +65,6 @@ def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndar
     return weights, A, invA, end_pos
 
 
-def _read_links_and_cfgs(data: bytes, n: int, end_pos: int) -> tuple[ndarray, ndarray, list]:
-    from .io_cfg import read_cfg
-
-    pos = end_pos + len(_END_MARKER)
-    active_cfg_indices = numpy.full(n, -1, dtype=intp)
-    active_eqn_indices = numpy.full(n, -1, dtype=intp)
-    for i in range(n):
-        nl = data.find(b"\n", pos)
-        if nl == -1:
-            raise ValueError("Unexpected EOF while reading active-set link table")
-        line = data[pos:nl].decode().strip()
-        pos = nl + 1
-        if not line:
-            continue
-        cfg_idx, eqn_idx = line.split(None, 1)
-        active_cfg_indices[i] = int(cfg_idx)
-        active_eqn_indices[i] = int(eqn_idx)
-
-    if data[pos:pos + 2] != b"#\n":
-        raise ValueError("Active-set link terminator '#\\n' not found after link table")
-
-    cfg_text = data[pos + 2:].decode()
-    selected_cfgs = [] if not cfg_text.strip() else read_cfg(StringIO(cfg_text))
-    return active_cfg_indices, active_eqn_indices, selected_cfgs
-
-
 def read_mvs_header(almtp_path: str) -> tuple[dict, MaxVol]:
     """The selection weights and the active set stored in *almtp_path*, without the stored structures or the rows' provenance."""
     with open(almtp_path, "rb") as f:
@@ -108,6 +82,8 @@ def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, lis
 
     An active row linked to a stored structure gets *pool_id* as its pool and the structure's index in the returned list.
     """
+    from .io_cfg import read_cfg
+
     with open(almtp_path, "rb") as f:
         data = f.read()
 
@@ -116,7 +92,27 @@ def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, lis
     except RuntimeError as exc:
         raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
 
-    active_cfg_indices, active_eqn_indices, selected_cfgs = _read_links_and_cfgs(data, A.shape[0], end_pos)
+    # The link table, a structure index and an equation index per row of A, then the stored structures
+    n = A.shape[0]
+    pos = end_pos + len(_END_MARKER)
+    active_cfg_indices = numpy.full(n, -1, dtype=intp)
+    active_eqn_indices = numpy.full(n, -1, dtype=intp)
+    for i in range(n):
+        nl = data.find(b"\n", pos)
+        if nl == -1:
+            raise ValueError("Unexpected EOF while reading active-set link table")
+        line = data[pos:nl].decode().strip()
+        pos = nl + 1
+        if not line:
+            continue
+        cfg_idx, eqn_idx = line.split(None, 1)
+        active_cfg_indices[i] = int(cfg_idx)
+        active_eqn_indices[i] = int(eqn_idx)
+    if data[pos:pos + 2] != b"#\n":
+        raise ValueError("Active-set link terminator '#\\n' not found after link table")
+    cfg_text = data[pos + 2:].decode()
+    selected_cfgs = [] if not cfg_text.strip() else read_cfg(StringIO(cfg_text))
+
     active_set = MaxVol(A, invA)
     active_set.restore_active(active_cfg_indices, active_eqn_indices, pool_id)
     return weights, active_set, selected_cfgs

@@ -27,57 +27,6 @@ static inline void accumulate_virial_grad(double* virial_grad, int width, int d,
 }
 
 /* ----------------------------------------------------------------------
-   dM_dc columns are global radial coefficient indices; radial_jacobian
-   columns are per-pair ones within the row of the central species.
-------------------------------------------------------------------------- */
-void MTPTraining::scatter_radial_jacobian(int itype) {
-    const int n_radial = radial_coeff_count;
-    std::fill(dM_dc.begin(), dM_dc.begin() + (size_t) alpha_moment_count * n_radial, 0.0);
-
-    for (int k = 0; k < alpha_index_basic_count; k++) {
-        for (int jtype = 0; jtype < species_count; jtype++) {
-            const double* src = radial_jacobian.data() + ((size_t) k * species_count + jtype) * radial_coeff_count_per_pair;
-            double* dst = dM_dc.data() + (size_t) k * n_radial + (itype * species_count + jtype) * radial_coeff_count_per_pair;
-            std::copy(src, src + radial_coeff_count_per_pair, dst);
-        }
-    }
-}
-
-void MTPTraining::propagate_radial_moment_ders() {
-    const int n_radial = radial_coeff_count;
-
-    // Forward propagate dM through the composite moments
-    for (int k = 0; k < alpha_index_times_count; k++) {
-        const int i0 = alpha_index_times[k][0], i1 = alpha_index_times[k][1];
-        const int mul = alpha_index_times[k][2], i3 = alpha_index_times[k][3];
-        const double M_i0 = moment_tensor_vals[i0], M_i1 = moment_tensor_vals[i1];
-        const double* dM_i0 = dM_dc.data() + (size_t) i0 * n_radial;
-        const double* dM_i1 = dM_dc.data() + (size_t) i1 * n_radial;
-        double* dM_i3 = dM_dc.data() + (size_t) i3 * n_radial;
-        for (int r = 0; r < n_radial; r++)
-            dM_i3[r] += mul * (dM_i0[r] * M_i1 + M_i0 * dM_i1[r]);
-    }
-
-    // Back propagate dG = d(dE/dM_k)/dc
-    std::fill(dG.begin(), dG.begin() + (size_t) alpha_moment_count * n_radial, 0.0);
-    for (int k = alpha_index_times_count - 1; k >= 0; k--) {
-        const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
-        const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-        const double G_a3 = nbh_energy_ders_wrt_moments[a3];
-        const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
-        const double* dM_a0 = dM_dc.data() + (size_t) a0 * n_radial;
-        const double* dM_a1 = dM_dc.data() + (size_t) a1 * n_radial;
-        const double* dG_a3 = dG.data() + (size_t) a3 * n_radial;
-        double* dG_a0 = dG.data() + (size_t) a0 * n_radial;
-        double* dG_a1 = dG.data() + (size_t) a1 * n_radial;
-        for (int r = 0; r < n_radial; r++) {
-            dG_a0[r] += G_a3 * mul * dM_a1[r] + dG_a3[r] * mul * M_a1;
-            dG_a1[r] += G_a3 * mul * dM_a0[r] + dG_a3[r] * mul * M_a0;
-        }
-    }
-}
-
-/* ----------------------------------------------------------------------
    Basis values per central atom, before the linear coefficients are applied
 ------------------------------------------------------------------------- */
 void MTPTraining::eval_basis(const NeighList& list, double* basis_out) {
@@ -426,8 +375,45 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             continue;
 
         // ---- Radial force / virial gradient ----
-        scatter_radial_jacobian(itype);
-        propagate_radial_moment_ders();
+        // radial_jacobian into dM_dc, whose columns are global radial coefficient indices, where radial_jacobian's
+        // are per-pair ones within the row of the central species
+        std::fill(dM_dc.begin(), dM_dc.begin() + (size_t) alpha_moment_count * n_radial, 0.0);
+        for (int k = 0; k < alpha_index_basic_count; k++)
+            for (int jtype = 0; jtype < species_count; jtype++) {
+                const double* src = radial_jacobian.data() + ((size_t) k * species_count + jtype) * radial_coeff_count_per_pair;
+                double* dst = dM_dc.data() + (size_t) k * n_radial + (itype * species_count + jtype) * radial_coeff_count_per_pair;
+                std::copy(src, src + radial_coeff_count_per_pair, dst);
+            }
+
+        // Forward propagate dM through the composite moments
+        for (int k = 0; k < alpha_index_times_count; k++) {
+            const int i0 = alpha_index_times[k][0], i1 = alpha_index_times[k][1];
+            const int mul = alpha_index_times[k][2], i3 = alpha_index_times[k][3];
+            const double M_i0 = moment_tensor_vals[i0], M_i1 = moment_tensor_vals[i1];
+            const double* dM_i0 = dM_dc.data() + (size_t) i0 * n_radial;
+            const double* dM_i1 = dM_dc.data() + (size_t) i1 * n_radial;
+            double* dM_i3 = dM_dc.data() + (size_t) i3 * n_radial;
+            for (int r = 0; r < n_radial; r++)
+                dM_i3[r] += mul * (dM_i0[r] * M_i1 + M_i0 * dM_i1[r]);
+        }
+
+        // Back propagate dG = d(dE/dM_k)/dc
+        std::fill(dG.begin(), dG.begin() + (size_t) alpha_moment_count * n_radial, 0.0);
+        for (int k = alpha_index_times_count - 1; k >= 0; k--) {
+            const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
+            const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
+            const double G_a3 = nbh_energy_ders_wrt_moments[a3];
+            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            const double* dM_a0 = dM_dc.data() + (size_t) a0 * n_radial;
+            const double* dM_a1 = dM_dc.data() + (size_t) a1 * n_radial;
+            const double* dG_a3 = dG.data() + (size_t) a3 * n_radial;
+            double* dG_a0 = dG.data() + (size_t) a0 * n_radial;
+            double* dG_a1 = dG.data() + (size_t) a1 * n_radial;
+            for (int r = 0; r < n_radial; r++) {
+                dG_a0[r] += G_a3 * mul * dM_a1[r] + dG_a3[r] * mul * M_a1;
+                dG_a1[r] += G_a3 * mul * dM_a0[r] + dG_a3[r] * mul * M_a0;
+            }
+        }
 
         // Term 2: the radial basis itself depends on the coefficients.
         for (int jj = 0; jj < valid_count; jj++) {

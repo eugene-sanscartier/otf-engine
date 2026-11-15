@@ -12,13 +12,6 @@
 #include <cstdio>
 #include <stdexcept>
 
-// A loss as the log writes it, to 17 significant digits.
-static std::string full_precision(double x) {
-    char buffer[32];
-    std::snprintf(buffer, sizeof buffer, "%.17g", x);
-    return buffer;
-}
-
 ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
     : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
 
@@ -150,7 +143,11 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
         const double loss = total[0] * inv_cfg_count;
         for (int i = 0; i < n; i++) bfgs_g[i] = total[1 + i] * inv_cfg_count;
         bfgs_f = loss;
-        if (log) *log << '\t' << full_precision(loss);
+        if (log) {
+            char loss_text[32];    // the loss to 17 significant digits
+            std::snprintf(loss_text, sizeof loss_text, "%.17g", loss);
+            *log << '\t' << loss_text;
+        }
 
         bool loss_decrease;
         if (attempted_rescale) {

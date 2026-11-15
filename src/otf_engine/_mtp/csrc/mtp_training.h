@@ -35,12 +35,6 @@ class MTPTraining : public PairMTP {
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override { add_loss_grad(list, dloss_denergy, dloss_dforces, dloss_dvirial, loss_grad); }
 
   private:
-    // Scatters radial_jacobian into dM_dc, whose columns are global radial
-    // coefficient indices rather than per-pair ones.
-    void scatter_radial_jacobian(int itype);
-    // Propagates dM_dc through the composite moments, then back-propagates dG.
-    void propagate_radial_moment_ders();
-
     // Per neighbor, the radial basis at its distance
     std::vector<double> neighbor_radial_vals;               // [neighbor * radial_basis_size]
     std::vector<double> neighbor_radial_ders;               // [neighbor * radial_basis_size]
