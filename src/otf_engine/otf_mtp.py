@@ -17,7 +17,8 @@ import ase.io.extxyz
 import ase.io.lammpsrun
 
 from .io_cfg import read_cfg, write_cfg
-from .mtp_backend import calculate_grade, errors, select_add, update_active_set
+from .selection import calculate_grade, select_add, update_active_set
+from .train import errors
 from .almtp_io import read_mvs_state
 from .cycles import CYCLE_PREFIX, LOG_FILE, LOG_FORMAT, TRAIN_LOG, archive_cycle, next_cycle_dir
 from .launchers import Launcher, JobTimedOut, JobOutOfMemory

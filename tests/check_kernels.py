@@ -21,7 +21,7 @@ from ase import Atoms
 from numpy import float64, int32
 
 from otf_engine._mtp import MTPTraining, PairMTPExtrapolation
-from otf_engine._mtp.neighbors import neighbors
+from otf_engine._core import neighbors
 
 REFERENCE = Path(__file__).parent / "kernel_reference"
 POTENTIAL = REFERENCE / "potential-16.mtp"

@@ -3,15 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
 
-
-def _format_floats(values: Iterable[float]) -> str:
-    return ", ".join(f"{float(value):.17g}" for value in values)
-
-
-def _format_ints(values: Iterable[int]) -> str:
-    return ", ".join(str(int(value)) for value in values)
+from .._core.io import format_floats, format_ints
 
 
 def write_mtp(potential, filename, template_filename=None):
@@ -60,15 +53,15 @@ def write_mtp(potential, filename, template_filename=None):
             block = radial_basis_coeffs[pair_index]
             for row in range(radial_func_count):
                 values = block[row]
-                stream.write(f"\t\t\t{{{_format_floats(values)}}}\n")
+                stream.write(f"\t\t\t{{{format_floats(values)}}}\n")
 
         stream.write(f"alpha_moments_count = {potential.get_alpha_moment_count()}\n")
         stream.write(f"alpha_index_basic_count = {potential.get_alpha_index_basic_count()}\n")
-        stream.write("alpha_index_basic = {" + ", ".join("{" + _format_ints(row) + "}" for row in alpha_index_basic) + "}\n")
+        stream.write("alpha_index_basic = {" + ", ".join("{" + format_ints(row) + "}" for row in alpha_index_basic) + "}\n")
         stream.write(f"alpha_index_times_count = {potential.get_alpha_index_times_count()}\n")
-        stream.write("alpha_index_times = {" + ", ".join("{" + _format_ints(row) + "}" for row in alpha_index_times) + "}\n")
+        stream.write("alpha_index_times = {" + ", ".join("{" + format_ints(row) + "}" for row in alpha_index_times) + "}\n")
         stream.write(f"alpha_scalar_moments = {potential.get_alpha_scalar_count()}\n")
-        stream.write("alpha_moment_mapping = {" + _format_ints(alpha_moment_mapping) + "}\n")
+        stream.write("alpha_moment_mapping = {" + format_ints(alpha_moment_mapping) + "}\n")
         if trained:
-            stream.write("species_coeffs = {" + _format_floats(species_coeffs) + "}\n")
-            stream.write("moment_coeffs = {" + _format_floats(linear_coeffs) + "}\n")
+            stream.write("species_coeffs = {" + format_floats(species_coeffs) + "}\n")
+            stream.write("moment_coeffs = {" + format_floats(linear_coeffs) + "}\n")

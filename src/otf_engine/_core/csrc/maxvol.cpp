@@ -23,7 +23,7 @@ void Equations::append(const double* grad, double factor, int structure, int equ
     equation_indices.push_back(equation);
 }
 
-void Equations::add(MTPTraining& pot, const NeighList& list, int structure) {
+void Equations::add(Pair& pot, const NeighList& list, int structure) {
     const bool stress = stress_weight != 0.0;
     site_energy_grad.resize((size_t) list.inum * coeff_count);
     if (needs_forces()) force_grad.resize((size_t) list.n_atoms * 3 * coeff_count);

@@ -4,15 +4,13 @@ The binary implementation lives in otf_engine._mtp._mtp_ext. This wrapper keeps
 the public import path source-backed so Pylance can resolve it without
 suppressing diagnostics.
 
-The three classes mirror the C++ hierarchy:
-    PairMTP                 energy, forces, virial
-    PairMTPExtrapolation    + extrapolation grades           (a PairMTP)
+The three classes mirror the C++ hierarchy, on _core's Pair:
+    PairMTP                 energy, forces, virial       (a Pair)
+    PairMTPExtrapolation    + extrapolation grades       (a PairMTP)
     MTPTraining             + basis values and derivatives
-                              w.r.t. the coefficients        (a PairMTP)
+                              w.r.t. the coefficients    (a PairMTP)
 
-train_mtp fits an MTPTraining as mlip-3's `mlp train` does, and error_table
-tabulates a potential's errors as it logs them. Equations and
-MaxVol select and grade against an active set as mlip-3's MaxVol does.
+train_mtp fits an MTPTraining as mlip-3's `mlp train` does.
 """
 
 from importlib import import_module as _import_module
@@ -22,10 +20,6 @@ _ext = _import_module("._mtp_ext", __package__)
 PairMTP = _ext.PairMTP
 PairMTPExtrapolation = _ext.PairMTPExtrapolation
 MTPTraining = _ext.MTPTraining
-NeighList = _ext.NeighList
 train_mtp = _ext.train_mtp
-error_table = _ext.error_table
-Equations = _ext.Equations
-MaxVol = _ext.MaxVol
 
-__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "NeighList", "train_mtp", "error_table", "Equations", "MaxVol"]
+__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "train_mtp"]

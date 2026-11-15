@@ -1,10 +1,11 @@
 /* -*- c++ -*- ----------------------------------------------------------
    The errors of a potential on training structures, as MTPTrainer and
-   ETNTrainer log them; Potential is PairMTP or PairETN.
+   ETNTrainer log them.
 ------------------------------------------------------------------------- */
 
 #pragma once
 
+#include "pair.h"
 #include "training_structure.h"
 
 #ifdef MTP_MPI
@@ -33,8 +34,7 @@
    the structures with the largest energy and force errors; on rank 0, and
    empty on the others.
 ------------------------------------------------------------------------- */
-template <class Potential>
-std::string error_table(Potential& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title) {
+inline std::string error_table(Pair& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title) {
     enum { ENE, EPA, FRC, VIR, KINDS };    // then the forces of each species
     const int species_count = potential.get_species_count();
     const int rows = KINDS + species_count;

@@ -9,7 +9,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 
 from otf_engine.io_cfg import read_cfg, write_cfg
-from otf_engine.mtp_backend import calculate_grade, select_add
+from otf_engine.selection import calculate_grade, select_add
 
 
 def _default_splits(count):

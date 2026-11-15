@@ -1,21 +1,103 @@
-"""Train an MTP or an ETN with otf_engine's trainer.
+"""fit, train and errors: training an MTP or an ETN with otf_engine's trainers, on ASE structures.
+
+As a command line:
 
     python -m otf_engine.train potential.almtp|potential.etn train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=nbh|cfg] [trainer options]
 
 For an MTP, takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random,
 --skip_preinit, ...) and the trainer's own (--varpro=false, --riemannian=false, ...;
-mtp_backend.MLP_ALGORITHM lists those that give mlp's algorithm); for an ETN, mlip-4's training
+MLP_ALGORITHM lists those that give mlp's algorithm); for an ETN, mlip-4's training
 settings (--max_iter_count=300, --pretrain=false, ...). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
 be untrained, such as an mlip-3 template; an MTP gains the species of the training set it lacks. The
 trained potential is written to --save_to, by default over the input, with an active set built on
 the training set.
 """
 
+from __future__ import annotations
+
 import logging
+import os
 import sys
 
+import numpy
+from numpy import float64
+
+from ._core import error_table, neighbors
+from .almtp_io import read_mvs_header
 from .io_cfg import read_cfg
-from .mtp_backend import train
+from .models import model_of
+from .selection import DEFAULT_SELECTION_WEIGHTS, update_active_set
+
+
+def training_structure(atoms, cutoff: float, number: int) -> tuple:
+    """*atoms* as train_mtp and error_table take a structure: its neighbor list, its energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz), None where absent, and *number*."""
+    results = atoms.calc.results
+    forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
+    virial = None
+    if "stress" in results:
+        # read_cfg divides PlusStress by -det(cell); ASE's Voigt order is xx yy zz yz xz xy.
+        v = -numpy.asarray(results["stress"], dtype=float64) * numpy.linalg.det(atoms.cell.array)
+        virial = v[[0, 1, 2, 5, 4, 3]]
+    return neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number
+
+
+def errors(potential: str, structures: list, title: str, first: int = 1, species: list | None = None) -> str:
+    """The errors of *potential* on the labelled *structures*, numbered from *first*, as the table training logs, under *title*."""
+    pot = model_of(potential).training(potential)
+    cutoff = pot.get_max_cutoff()
+    table = error_table(pot, [training_structure(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
+    return table
+
+
+# The trainer options that give mlp's algorithm in place of the trainer's defaults, for runs compared with mlp.
+MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "init_noise": "5"}
+
+
+def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None, balance_species: bool = True):
+    """train_mtp or train_etn, as the file *potential* holds, on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
+
+    inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's; an MTP's only
+    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp and mlip-4 do
+    """
+    model = model_of(potential)
+    extra = {} if inverse_hessian is None else {"inverse_hessian": inverse_hessian}
+    if comm is None: return model.train_on_threads(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, balance_species=balance_species, **extra)
+    return model.train_over_mpi()(potential, structures, options, comm, checkpoint=checkpoint, balance_species=balance_species, **extra)
+
+
+def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None, balance_species: bool = True) -> None:
+    """Train *potential* on *training_structs* with otf_engine's trainer, and write it with an active set to *save_to*.
+
+    *potential* may be untrained; an MTP gains the species of *training_structs* it lacks.
+
+    settings : the trainer's options. For an MTP, `mlp train`'s and the trainer's own without the leading "--", e.g.
+               {"iteration_limit": 300, "init_random": True}, MLP_ALGORITHM for mlp's algorithm; for an ETN, mlip-4's
+               training settings, e.g. {"max_iter_count": 300, "pretrain": False}; and "species", the species' names
+               for the log's error tables, comma-separated
+    ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
+    al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
+    comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
+               same *training_structs*, and rank 0 writes *save_to*.
+    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp does
+    """
+    try:
+        weights = read_mvs_header(potential)[0]
+    except RuntimeError:
+        weights = dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
+
+    model = model_of(potential)
+    cutoff = model.training(potential).get_max_cutoff()
+    # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
+    rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
+    structures = (training_structure(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
+    options = {key: str(value) for key, value in (settings or {}).items()}
+    pot = fit(potential, structures, options, checkpoint=lambda pot: model.write(pot, save_to), ranks=ranks, comm=comm, balance_species=balance_species)
+
+    if rank == 0: model.write(pot, save_to)
+    if comm is not None: comm.Barrier()    # every rank reads save_to back
+
+    # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with
+    if pot.is_trained(): update_active_set(save_to, training_structs, weights=weights, comm=comm)
 
 
 def main(argv=None, balance_species: bool = True):

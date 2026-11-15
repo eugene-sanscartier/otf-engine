@@ -3,13 +3,13 @@
 Under `mpirun -n R+1`, pyKMC's ManagerFactory puts the manager on rank 0 and R workers in sessions
 of --session-size ranks, with otf_pool's operations as extra_ops. On one dump of MD output and the
 first N structures of a cfg:
-  update_active_set as a global operation, must leave the active set of mtp_backend.update_active_set
+  update_active_set as a global operation, must leave the active set of selection.update_active_set
                    in this process: the same active equations, and A to 1e-12 relatively
   grade_dump       submitted to a session, must give the grades of otf_mtp.grade_dump
   select_add       as a global operation, offered the dump's 24 highest-graded structures against
-                   the active set update_active_set left, must select those mtp_backend.select_add
+                   the active set update_active_set left, must select those selection.select_add
                    selects in this process
-  train_potential  as a global operation, must log the losses mtp_backend.train logs on R threads,
+  train_potential  as a global operation, must log the losses train.train logs on R threads,
                    to --tol relatively, and leave the active set update_active_set finds on one
                    rank from the same fit. Under varpro every loss goes through the linear solve,
                    whose conditioning turns the reductions' order into 6e-7 relatively
@@ -109,7 +109,8 @@ def main():
     from otf_engine._mtp import MTPTraining, write_mtp
     from otf_engine.almtp_io import read_mvs_header, read_mvs_state
     from otf_engine.io_cfg import read_cfg
-    from otf_engine.mtp_backend import select_add, train, update_active_set
+    from otf_engine.selection import select_add, update_active_set
+    from otf_engine.train import train
     from otf_engine.otf_mtp import grade_dump
 
     def same_active_set(mpi_set, serial_set):

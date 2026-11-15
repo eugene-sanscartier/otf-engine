@@ -1,4 +1,4 @@
-"""Neighbor lists for the MTP kernels."""
+"""Neighbor lists for the kernels of a Pair."""
 
 import itertools
 
@@ -6,11 +6,11 @@ import numpy
 from numpy import int32, ndarray
 from scipy.spatial import cKDTree
 
-from ._mtp import NeighList
+from ._core import NeighList
 
 
-def mtp_types(atoms) -> ndarray:
-    """Return the 0-indexed MTP species array for *atoms*.
+def species_indices(atoms) -> ndarray:
+    """Return the 0-indexed species array for *atoms*.
 
     Uses ``atoms.arrays["type_index"]`` when present; otherwise assigns indices
     by order of first appearance of chemical symbols.
@@ -26,14 +26,14 @@ def mtp_types(atoms) -> ndarray:
 
 
 def neighbors(atoms, cutoff: float, types: ndarray | None = None) -> NeighList:
-    """Build the MTP neighbor list for *atoms* within *cutoff*.
+    """Build the neighbor list for *atoms* within *cutoff*.
 
     Every pair is listed in both directions — equivalent to LAMMPS REQ_FULL —
     and the displacements carry the PBC shift, ``D = r_j - r_i + S @ cell``.
     Any cell shape works, including triclinic cells and cells shorter than *cutoff*.
     """
     if types is None:
-        types = mtp_types(atoms)
+        types = species_indices(atoms)
 
     n_atoms = len(atoms)
     inv_cell = numpy.linalg.inv(atoms.cell.array)

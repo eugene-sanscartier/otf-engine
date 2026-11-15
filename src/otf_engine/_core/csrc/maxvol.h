@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
    MaxVol (maximum-volume) D-optimality selection and extrapolation grading.
    Algorithm of mlip-3's MaxVol (mlip-3/src/maxvol.{h,cpp}) and of
-   cfg_selection.cpp's PrepareMatrix, on MTPTraining's kernels.
+   cfg_selection.cpp's PrepareMatrix, on a Pair's gradients.
    Copyright (c) 2023, Alexander Shapeev (Skoltech). BSD 2-Clause, see LICENSE.mlip-3.
 
    One equation is one row of mlip-3's matrix B: the gradient of an
@@ -15,7 +15,7 @@
 
 #pragma once
 
-#include "mtp_training.h"
+#include "pair.h"
 
 #include <optional>
 #include <vector>
@@ -31,7 +31,7 @@ class Equations {
     //                           force_weight, the 9 stress components times stress_weight / n_atoms^(weight_scaling/2)
     //   site_en_weight > 0    : the raw site energies, last
     // structure numbers it; by default the next after the highest so far.
-    void add(MTPTraining& pot, const NeighList& list, int structure = -1);
+    void add(Pair& pot, const NeighList& list, int structure = -1);
     // The same from the gradients of the site energies [inum * coeff_count] and, when needs_forces(),
     // of the forces [n_atoms * 3 * coeff_count] and of the virial [6 * coeff_count].
     void add(const NeighList& list, const double* site_energy_grad, const double* force_grad, const double* virial_grad, int structure = -1);

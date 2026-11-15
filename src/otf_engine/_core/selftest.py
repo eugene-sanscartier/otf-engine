@@ -1,10 +1,10 @@
-"""Finite-difference checks of the MTP analytical derivatives.
+"""Finite-difference checks of a potential's analytical derivatives.
 
 Every check returns the largest relative discrepancy between an analytical
 derivative and its central-difference estimate. Values around 1e-6 are what
 a correct implementation gives at the default step; anything above ``tol``
 indicates a real disagreement. check_forces, check_virial and check_invariance
-take any potential whose compute takes a NeighList, PairETN as well.
+take any Pair; the checks on the coefficient blocks take an MTPTraining.
 """
 
 import numpy

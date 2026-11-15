@@ -33,7 +33,7 @@ import numpy
 
 from otf_engine._mtp import MTPCalculator, PairMTP
 from otf_engine.io_cfg import read_cfg
-from otf_engine.mtp_backend import MLP_ALGORITHM
+from otf_engine.train import MLP_ALGORITHM
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
 BFGS_LINE = re.compile(r"BFGS iter +(\d+): +(?:f=)?(\S+)")    # mlp's, and the trainer's without f=

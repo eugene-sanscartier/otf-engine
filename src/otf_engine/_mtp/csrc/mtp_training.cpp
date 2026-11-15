@@ -77,19 +77,6 @@ void MTPTraining::propagate_radial_moment_ders() {
     }
 }
 
-/* ---------------------------------------------------------------------- */
-void MTPTraining::get_coeffs(double* c) const {
-    std::copy(radial_basis_coeffs.begin(), radial_basis_coeffs.end(), c);
-    std::copy(species_coeffs.begin(), species_coeffs.end(), c + radial_coeff_count);
-    std::copy(linear_coeffs.begin(), linear_coeffs.end(), c + radial_coeff_count + species_count);
-}
-
-void MTPTraining::set_coeffs(const double* c) {
-    set_radial_basis_coeffs(c);
-    set_species_coeffs(c + radial_coeff_count);
-    set_linear_coeffs(c + radial_coeff_count + species_count);
-}
-
 /* ----------------------------------------------------------------------
    Basis values per central atom, before the linear coefficients are applied
 ------------------------------------------------------------------------- */
@@ -151,12 +138,6 @@ void MTPTraining::eval_basis(const NeighList& list, double* basis_out) {
 }
 
 /* ---------------------------------------------------------------------- */
-void MTPTraining::eval_radial_basis(double dist, double* vals_out, double* ders_out) {
-    radial_basis->calc_radial_basis_ders(dist);
-    std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), vals_out);
-    std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), ders_out);
-}
-
 void MTPTraining::grow_neighbor_rows(int jnum) {
     if (rows_size >= jnum) return;
     rows_size = jnum;
@@ -515,7 +496,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
    shared tree, and their tangents follow the same tree along
    v = (w - (w.u) u) / |r|, the tangent of u.
 ------------------------------------------------------------------------- */
-X86_64_V3_CLONE void MTPTraining::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
+X86_64_V3_CLONE void MTPTraining::add_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
     const int sp_off = n_radial;
     const int lin_off = n_radial + species_count;

@@ -28,9 +28,9 @@ import numpy
 import check_etn_kernels as kernels
 import check_etn_training as training
 from otf_engine._etn import ETNTraining, train_etn
-from otf_engine._mtp.neighbors import neighbors
+from otf_engine._core import neighbors
 from otf_engine.io_cfg import read_cfg
-from otf_engine.mtp_backend import _labelled
+from otf_engine.train import training_structure
 
 BENCH_SOURCE = kernels.REFERENCE / "mlip4_bench.cpp"
 
@@ -90,7 +90,7 @@ def main():
         trainer = kernels.compile_probe(args.mlip4_build, workdir, training.PROBE_SOURCE)
         for name in args.potentials:
             pot = ETNTraining(str(kernels.REFERENCE / f"{name}.etn"))
-            labelled = [(atoms, _labelled(atoms, pot.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
+            labelled = [(atoms, training_structure(atoms, pot.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
             settings = dict(training.SETTINGS, pretrain=False, max_iter_count=args.iterations)
             training_file = Path(workdir) / f"{name}.txt"
             training.write_training_file(training_file, pot, labelled, settings)

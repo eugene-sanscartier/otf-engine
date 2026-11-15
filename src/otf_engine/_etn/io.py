@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .._mtp.io import _format_floats, _format_ints
+from .._core.io import format_floats, format_ints
 
 
 def write_etn(potential, filename):
@@ -29,28 +29,28 @@ def write_etn(potential, filename):
         stream.write(f"\tmin_dist = {potential.get_min_cutoff():.17g}\n")
         stream.write(f"\tmax_dist = {potential.get_max_cutoff():.17g}\n")
         stream.write(f"\tradial_basis_size = {potential.get_radial_basis_size()}\n")
-        stream.write("species_ranks = {" + _format_ints(potential.get_species_ranks()) + "}\n")
-        stream.write("radial_funcs_counts = {" + _format_ints(potential.get_radial_funcs_counts()) + "}\n")
-        stream.write("radial_ranks = {" + _format_ints(potential.get_radial_ranks()) + "}\n")
+        stream.write("species_ranks = {" + format_ints(potential.get_species_ranks()) + "}\n")
+        stream.write("radial_funcs_counts = {" + format_ints(potential.get_radial_funcs_counts()) + "}\n")
+        stream.write("radial_ranks = {" + format_ints(potential.get_radial_ranks()) + "}\n")
         stream.write(f"core_count = {core_count}\n")
         stream.write("bond_ranks\n")
         for ranks in potential.get_bond_ranks():
-            stream.write("\t{" + _format_ints(ranks) + "}\n")
+            stream.write("\t{" + format_ints(ranks) + "}\n")
 
         if not potential.is_trained():
             return
 
         stream.write("radial_coeffs\n")
         for l in range(l_count):
-            stream.write("\t{" + _format_floats(potential.get_radial_coeffs(l)) + "}\n")
+            stream.write("\t{" + format_floats(potential.get_radial_coeffs(l)) + "}\n")
         stream.write("species_pair_coeffs\n")
         for l in range(l_count):
-            stream.write("\t{" + _format_floats(potential.get_species_pair_coeffs(l)) + "}\n")
+            stream.write("\t{" + format_floats(potential.get_species_pair_coeffs(l)) + "}\n")
         stream.write("core_coeffs\n")
         for i in range(core_count):
-            stream.write("\t{" + _format_floats(potential.get_core_coeffs(i)) + "}\n")
+            stream.write("\t{" + format_floats(potential.get_core_coeffs(i)) + "}\n")
         if core_count > 3:
             stream.write("core_coeffs_im\n")
             for i in range(1, core_count - 1):
-                stream.write("\t{" + _format_floats(potential.get_core_coeffs(i, imaginary=True)) + "}\n")
-        stream.write("species_coeffs = {" + _format_floats(potential.get_species_coeffs()) + "}\n")
+                stream.write("\t{" + format_floats(potential.get_core_coeffs(i, imaginary=True)) + "}\n")
+        stream.write("species_coeffs = {" + format_floats(potential.get_species_coeffs()) + "}\n")

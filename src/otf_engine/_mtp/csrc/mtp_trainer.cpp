@@ -23,25 +23,14 @@ static bool linear_fit_step(int step) {
     return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
 }
 
-MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const TrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
-    : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log), checkpoint(std::move(checkpoint)) {
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm_size(comm, &size);
-
-    int local_count = (int) this->structures.size();
-    MPI_Allreduce(&local_count, &structure_count, 1, MPI_INT, MPI_SUM, comm);
-
+MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+    : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
     n_radial = potential.get_radial_coeff_count();
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();
-    coeffs.resize(n_radial + n_linear);
-    potential.get_coeffs(coeffs.data());
     reg_vector.assign(n_linear, options.reg_param);
     // radial_only and bfgs_only step mlp's BFGS on a trained potential, without varpro or riemannian
     if (options.radial_only || options.bfgs_only) this->options.varpro = this->options.riemannian = false;
     if (this->options.varpro) this->options.reg_once = true;    // a regularization that moved during BFGS would change the objective
-
-    if (options.balance_species)
-        for (TrainingStructure& s : this->structures) s.balance_species();
 
     // A basic moment has degree 1, a product the sum of its factors'.
     std::vector<int> moment_degree(potential.get_alpha_moment_count(), 0);
@@ -64,13 +53,6 @@ void MTPTrainer::train() {
     MPI_Barrier(comm);
     if (log) *log << structure_count << " configurations found in the training set" << std::endl;
 
-    auto log_errors = [&](const std::string& title) {
-        if (!potential.is_trained()) return;
-        potential.set_coeffs(coeffs.data());
-        const std::string table = error_table(potential, structures, options.species, comm, title);
-        if (log) *log << table;
-    };
-
     add_species();
     if (log) *log << coeffs.size() << " coefficients (" << n_radial << " radial, " << n_linear << " linear)" << std::endl;
 
@@ -78,9 +60,9 @@ void MTPTrainer::train() {
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
         throw std::runtime_error("train_mtp: radial_only and bfgs_only need a trained potential");
     const int trained = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
-    if (inverse_hessian_size != 0 && inverse_hessian_size != trained)
+    if (options.inverse_hessian_size != 0 && options.inverse_hessian_size != trained)
         throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
-    if (options.riemannian && inverse_hessian_size != 0)
+    if (options.riemannian && options.inverse_hessian_size != 0)
         throw std::runtime_error("train_mtp: riemannian takes no inverse_hessian; pass riemannian=false");
     log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
@@ -270,8 +252,8 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 
     if (rank == 0) {
         bfgs.set_x(coeffs.data(), n);
-        if (inverse_hessian)
-            bfgs.set_inverse_hessian(inverse_hessian);
+        if (options.inverse_hessian)
+            bfgs.set_inverse_hessian(options.inverse_hessian);
         else
             bfgs.reset_hessian();
     }
@@ -362,8 +344,8 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
         MPI_Bcast(&num_step, 1, MPI_INT, 0, comm);
     }
 
-    if (rank == 0 && inverse_hessian)
-        std::copy(bfgs.inverse_hessian().begin(), bfgs.inverse_hessian().end(), inverse_hessian);
+    if (rank == 0 && options.inverse_hessian)
+        std::copy(bfgs.inverse_hessian().begin(), bfgs.inverse_hessian().end(), options.inverse_hessian);
 
     // the potential counts as trained from its first fit on
     potential.set_trained(true);

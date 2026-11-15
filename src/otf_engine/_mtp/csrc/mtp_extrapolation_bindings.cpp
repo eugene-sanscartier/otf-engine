@@ -3,6 +3,7 @@
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
+#include "mtp_extrapolation.h"
 
 // --- ported from PairMTPExtrapolation --------------------------------------
 

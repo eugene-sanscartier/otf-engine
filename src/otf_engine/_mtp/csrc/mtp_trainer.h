@@ -5,37 +5,22 @@
    Orthogonalize in mtpr.cpp), on MTPTraining's kernels.
    Copyright (c) 2023, Alexander Shapeev (Skoltech). BSD 2-Clause, see LICENSE.mlip-3.
 
-   The trainer is SPMD: every rank of a communicator holds a copy of the
-   potential and a share of the structures, and the MPI collectives combine
-   them. Built with MTP_MPI it uses <mpi.h>; otherwise thread_mpi.h, whose
-   ranks are threads.
+   SPMD over the ranks of a communicator, as every Trainer is (see trainer.h).
 ------------------------------------------------------------------------- */
 
 #pragma once
 
 #include "bfgs.h"
-#include "error_table.h"
 #include "mtp_training.h"
-#include "training_structure.h"
+#include "trainer.h"
 
-#ifdef MTP_MPI
-#include <mpi.h>
-#else
-#include "thread_mpi.h"
-#endif
-
-#include <functional>
-#include <ostream>
 #include <string>
 #include <vector>
 
 // `mlp train`'s options, under its names and with its defaults, and the trainer's own, whose defaults
 // are the recipe; varpro, reg_once, no_orthogonalize, riemannian and reg_at_main false and init_noise 5
 // give mlp's algorithm.
-struct TrainerOptions {
-    double energy_weight = 1.0;
-    double force_weight = 0.01;
-    double stress_weight = 0.001;
+struct MTPTrainerOptions : TrainerOptions {
     double penalty_weight = 1e-6;
     double reg_param = 1e-10;       // the linear coefficients' regularization, times max(1, A_ii) / N once the first linear fit builds it
     double scale_by_force = 0.0;    // > 0 weighs each force by scale_by_force / (|F|^2 + scale_by_force)
@@ -57,25 +42,22 @@ struct TrainerOptions {
     int lbfgs_memory = 1000;        // the pairs riemannian's L-BFGS keeps
     double init_noise = 0.5;        // init_random's noise on each radial coefficient, relative to the diagonal one's 1e-7 scale
     int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
-    bool balance_species = true;    // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
-    std::vector<std::string> species;    // the species' names in the error tables
+    // n x n for the n coefficients BFGS trains: where it starts from and leaves its final inverse Hessian,
+    // on rank 0. Every rank gives n; 0 starts from the identity.
+    double* inverse_hessian = nullptr;
+    int inverse_hessian_size = 0;
 };
 
-class MTPTrainer {
+class MTPTrainer : public Trainer<MTPTraining, MTPTrainerOptions> {
   public:
     // log receives mlp's fit log on the rank given one; checkpoint is called
     // on rank 0 wherever mlp saves the potential during the fit.
-    MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const TrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, with the
     // species of the training set it lacked added, and logs the errors on the
     // training set before and after.
     void train();
-
-    // BFGS starts from the inverse Hessian in h, n x n for the n coefficients it
-    // trains, and leaves its final inverse Hessian there. Every rank gives n;
-    // only rank 0 gives h.
-    void set_inverse_hessian(double* h, int n) { inverse_hessian = h; inverse_hessian_size = n; }
 
     // The loss BFGS minimizes, penalty included, and its gradient over every coefficient,
     // at coeffs, summed over the ranks, on every rank. For tests of the gradient.
@@ -119,18 +101,9 @@ class MTPTrainer {
     double force_weight(const TrainingStructure& s, int i) const;
     double stress_weight(const TrainingStructure& s) const;
 
-    MTPTraining& potential;
-    std::vector<TrainingStructure> structures;
-    TrainerOptions options;
-    MPI_Comm comm;
-    int rank = 0, size = 1;
-    int structure_count = 0;    // over all ranks
-    std::ostream* log;
-    std::function<void()> checkpoint;
     double loss_terms[3] = {};    // the energy, force and stress terms of the last loss_grad
 
-    int n_radial, n_linear;       // coefficients before the species block, and from it on
-    std::vector<double> coeffs;   // [n_radial | species | linear], what potential holds
+    int n_radial, n_linear;       // coefficients before the species block, and from it on; coeffs is [n_radial | species | linear]
 
     // Linear least squares for the species and linear coefficients
     std::vector<double> lin_matrix, lin_vector;
@@ -145,8 +118,6 @@ class MTPTrainer {
     bool scalable = true;
 
     BFGS bfgs;
-    double* inverse_hessian = nullptr;    // where BFGS starts from and leaves its inverse Hessian, on rank 0
-    int inverse_hessian_size = 0;         // its n, on every rank; 0 starts from the identity
 
     // Under varpro, each structure's energy, forces and virial as linear in the species and linear coefficients, the
     // rows assemble_linear last built (energy, 3 per atom, the 6 virial components), at the radial coefficients and
@@ -155,6 +126,6 @@ class MTPTrainer {
     std::vector<double> linear_rows_at;              // [n_radial radial coefficients | scaling]
 
     // Per-structure scratch, and evaluate's gradient on this rank
-    std::vector<double> dloss_dforces, local_grad, linear_values;
+    std::vector<double> local_grad, linear_values;
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };

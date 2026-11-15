@@ -17,7 +17,7 @@ import numpy
 
 from otf_engine._mtp import MTPTraining, _mtp_ext
 from otf_engine.io_cfg import read_cfg
-from otf_engine.mtp_backend import _labelled
+from otf_engine.train import training_structure
 
 # name: (options, tolerance)
 OPTION_SETS = {
@@ -37,7 +37,7 @@ def main():
     pot = MTPTraining(args.potential)
     with open(args.cfg) as f:
         structures = list(read_cfg(f, args.species))[:8]
-    labelled = [_labelled(a, pot.get_max_cutoff(), k + 1) for k, a in enumerate(structures)]
+    labelled = [training_structure(a, pot.get_max_cutoff(), k + 1) for k, a in enumerate(structures)]
     radial = numpy.asarray(pot.get_radial_basis_coeffs())
     P, K, R = radial.shape
     n_radial = radial.size

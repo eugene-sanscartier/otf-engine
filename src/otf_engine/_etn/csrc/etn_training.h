@@ -11,17 +11,14 @@ class ETNTraining : public PairETN {
   public:
     explicit ETNTraining(const std::string& filename);
 
-    // The coefficients as one vector in mlip-4's params order, of coeff_count().
-    void get_coeffs(double* c) const;
-    void set_coeffs(const double* c);
-
-    // dE_i/dc per central atom: [inum * coeff_count]; row ii for atom ilist[ii].
-    void eval_grad(const NeighList& list, double* site_energy_grad);
+    // dE_i/dc per central atom: [inum * coeff_count]; row ii for atom ilist[ii]. Throws when
+    // given force_grad, since the ETN has no force gradients here.
+    void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad) override;
 
     // Adds dL/dc to loss_grad [coeff_count], for a loss L whose derivatives
     // with respect to the energy, forces and virial of this structure are
     // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
-    void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad);
+    void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
   private:
     // Adds to grad the derivative of energy_weight * E_i, plus that of E_i's derivative along the

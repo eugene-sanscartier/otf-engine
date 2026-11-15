@@ -17,10 +17,8 @@ __all__ = [
 ]
 
 try:
-    from .mtp_backend import (
-        calculate_grade,
-        select_add,
-        train as train_mtp)
+    from .selection import calculate_grade, select_add
+    from .train import train as train_mtp
     __all__ += ["calculate_grade", "select_add", "train_mtp"]
 except ImportError:
     pass

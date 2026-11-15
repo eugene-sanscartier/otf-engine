@@ -8,47 +8,12 @@
 
 #include "mtp_trainer.h"
 
-#include <fstream>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <numeric>
-#include <sstream>
-#include <thread>
-
-// mlp train's options; log is where the fit log goes.
-static TrainerOptions parse_options(const std::map<std::string, std::string>& options, std::string& log) {
-    TrainerOptions o;
-    const std::map<std::string, double*> doubles = {
-        {"energy_weight", &o.energy_weight}, {"force_weight", &o.force_weight}, {"stress_weight", &o.stress_weight},
-        {"penalty_weight", &o.penalty_weight}, {"scale_by_force", &o.scale_by_force}, {"select_factor", &o.select_factor},
-        {"tolerance", &o.tolerance}, {"reg_param", &o.reg_param}, {"init_noise", &o.init_noise}};
-    const std::map<std::string, int*> ints = {
-        {"weight_scaling", &o.weight_scaling}, {"weight_scaling_forces", &o.weight_scaling_forces}, {"iteration_limit", &o.iteration_limit}, {"random_seed", &o.random_seed}, {"lbfgs_memory", &o.lbfgs_memory}};
-    const std::map<std::string, bool*> bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}, {"reg_once", &o.reg_once}, {"reg_at_main", &o.reg_at_main}, {"varpro", &o.varpro}, {"no_orthogonalize", &o.no_orthogonalize}, {"riemannian", &o.riemannian}};
-
-    for (const auto& [key, value] : options) {
-        if (key == "log")
-            log = value;
-        else if (key == "species") {
-            std::stringstream names(value);
-            for (std::string name; std::getline(names, name, ',');)
-                o.species.push_back(name);
-        } else if (doubles.count(key))
-            *doubles.at(key) = std::stod(value);
-        else if (ints.count(key))
-            *ints.at(key) = std::stoi(value);
-        else if (bools.count(key)) {
-            if (value == "true" || value == "True" || value == "TRUE")
-                *bools.at(key) = true;
-            else if (value == "false" || value == "False" || value == "FALSE")
-                *bools.at(key) = false;
-            else
-                throw std::runtime_error("train_mtp: " + key + "=" + value + " is not true or false");
-        } else
-            throw std::runtime_error("train_mtp: unknown option '" + key + "'");
-    }
-    return o;
+// mlp train's options beside the weights, and the trainer's own.
+void add_option_fields(MTPTrainerOptions& o, OptionFields& fields) {
+    fields.doubles.insert({{"penalty_weight", &o.penalty_weight}, {"scale_by_force", &o.scale_by_force}, {"select_factor", &o.select_factor},
+                           {"tolerance", &o.tolerance}, {"reg_param", &o.reg_param}, {"init_noise", &o.init_noise}});
+    fields.ints = {{"weight_scaling", &o.weight_scaling}, {"weight_scaling_forces", &o.weight_scaling_forces}, {"iteration_limit", &o.iteration_limit}, {"random_seed", &o.random_seed}, {"lbfgs_memory", &o.lbfgs_memory}};
+    fields.bools = {{"no_mindist_update", &o.no_mindist_update}, {"init_random", &o.init_random}, {"skip_preinit", &o.skip_preinit}, {"radial_only", &o.radial_only}, {"bfgs_only", &o.bfgs_only}, {"reg_once", &o.reg_once}, {"reg_at_main", &o.reg_at_main}, {"varpro", &o.varpro}, {"no_orthogonalize", &o.no_orthogonalize}, {"riemannian", &o.riemannian}};
 }
 
 // The buffer of inverse_hessian, a writable C-contiguous (n, n) float64 array, and its n; nullptr and 0 for None.
@@ -67,68 +32,18 @@ static double* inverse_hessian_buffer(py::object inverse_hessian, int& n) {
 #ifdef MTP_MPI
 
 static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::object comm_object, py::object checkpoint, py::object inverse_hessian, bool balance_species) {
-    const MPI_Comm comm = MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>());
-    int rank = 0;
-    MPI_Comm_rank(comm, &rank);
-
-    // A rank failing to set up fails every rank, before the trainer's first collective.
-    std::string error;
-    TrainerOptions trainer_options;
-    std::vector<TrainingStructure> share;
-    std::ofstream log_file;
-    std::ostream* log = nullptr;
-    py::object potential;
-    double* hessian = nullptr;
-    int hessian_size = 0;
-    try {
-        std::string log_target = "stdout";
-        trainer_options = parse_options(options, log_target);
-        trainer_options.balance_species = balance_species;
-        for (py::handle item : structures)
-            share.push_back(make_structure(item));
-        if (rank == 0) log = open_log(log_target, log_file);
-        potential = py::cast(std::make_unique<MTPTraining>(filename));
-        hessian = inverse_hessian_buffer(inverse_hessian, hessian_size);
-    } catch (const std::exception& e) {
-        error = e.what();
-    }
-    raise_together(comm, error);
-
-    MTPTraining& potential_ref = potential.cast<MTPTraining&>();
-    std::string checkpoint_error;    // the first failed checkpoint, which ends checkpointing
-    std::function<void()> save;
-    if (rank == 0 && !checkpoint.is_none())
-        save = [&]() {
-            if (!checkpoint_error.empty()) return;
-            py::gil_scoped_acquire gil;
-            try {
-                checkpoint(potential);
-            } catch (const std::exception& e) {
-                checkpoint_error = std::string("train_mtp: checkpoint failed: ") + e.what();
-            }
-        };
-
-    {
-        py::gil_scoped_release unlocked;
-        try {
-            MTPTrainer trainer(potential_ref, std::move(share), trainer_options, comm, log, save);
-            trainer.set_inverse_hessian(rank == 0 ? hessian : nullptr, hessian_size);
-            trainer.train();
-        } catch (const std::runtime_error& e) {
-            error = e.what();    // MTPTrainer raises its errors on every rank together
-        } catch (...) {
-            MPI_Abort(comm, 1);    // the other ranks are left waiting in a collective
-        }
-    }
-    raise_together(comm, error);
-    raise_together(comm, checkpoint_error);
-    return potential;
+    auto make_options = [&](std::string& log_target) {
+        MTPTrainerOptions o = parse_options<MTPTrainerOptions>("train_mtp", options, log_target);
+        o.balance_species = balance_species;
+        o.inverse_hessian = inverse_hessian_buffer(inverse_hessian, o.inverse_hessian_size);
+        return o;
+    };
+    return train_over_mpi<MTPTrainer>("train_mtp", filename, structures, make_options, comm_object, checkpoint);
 }
 
 PYBIND11_MODULE(_mtp_mpi, m) {
     m.doc() = "MTPTrainer over MPI.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining, NeighList, Equations and MaxVol
-    bind_maxvol(m);
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining
 
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename as mlip-3's `mlp train` does, over the ranks of comm, and return it.
@@ -156,75 +71,16 @@ balance_species : give every species of a structure an equal share of its force 
 
 static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, int ranks, py::object checkpoint, py::object inverse_hessian, bool balance_species) {
     std::string log_target = "stdout";
-    TrainerOptions trainer_options = parse_options(options, log_target);
-    trainer_options.balance_species = balance_species;
-    if (ranks < 1)
-        throw std::runtime_error("train_mtp: ranks must be at least 1");
-    int hessian_size = 0;
-    double* hessian = inverse_hessian_buffer(inverse_hessian, hessian_size);
-
-    // Dealt round-robin, as mlp's MPI_LoadCfgs deals a file
-    std::vector<std::vector<TrainingStructure>> shares(ranks);
-    int count = 0;
-    for (py::handle item : structures)
-        shares[count++ % ranks].push_back(make_structure(item));
-    if (count == 0)
-        throw std::runtime_error("train_mtp: no training structures");
-
-    std::ofstream log_file;
-    std::ostream* log = open_log(log_target, log_file);
-
-    // Rank 0 trains the potential that is returned, and hands it to checkpoint.
-    py::object potential = py::cast(std::make_unique<MTPTraining>(filename));
-    MTPTraining& potential_ref = potential.cast<MTPTraining&>();
-    std::function<void()> save;
-    if (!checkpoint.is_none())
-        save = [&]() {
-            py::gil_scoped_acquire gil;
-            checkpoint(potential);
-        };
-
-    ThreadGroup group(ranks);
-    std::vector<ThreadComm> comms(ranks);
-    for (int r = 0; r < ranks; r++)
-        comms[r] = ThreadComm{&group, r};
-
-    std::exception_ptr failure;
-    std::mutex failure_mutex;
-    auto run_rank = [&](int r) {
-        try {
-            std::unique_ptr<MTPTraining> own;
-            if (r != 0) own = std::make_unique<MTPTraining>(filename);
-            MTPTraining& pot = r == 0 ? potential_ref : *own;
-            MTPTrainer trainer(pot, std::move(shares[r]), trainer_options, &comms[r], r == 0 ? log : nullptr, r == 0 ? save : nullptr);
-            trainer.set_inverse_hessian(r == 0 ? hessian : nullptr, hessian_size);
-            trainer.train();
-        } catch (const CommAborted&) {
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(failure_mutex);
-            if (!failure) failure = std::current_exception();
-            group.abort();
-        }
-    };
-
-    {
-        py::gil_scoped_release unlocked;
-        std::vector<std::thread> threads;
-        for (int r = 1; r < ranks; r++)
-            threads.emplace_back(run_rank, r);
-        run_rank(0);
-        for (std::thread& t : threads)
-            t.join();
-    }
-
-    if (failure) std::rethrow_exception(failure);
-    return potential;
+    MTPTrainerOptions o = parse_options<MTPTrainerOptions>("train_mtp", options, log_target);
+    o.balance_species = balance_species;
+    o.inverse_hessian = inverse_hessian_buffer(inverse_hessian, o.inverse_hessian_size);
+    return train_on_threads<MTPTrainer>("train_mtp", filename, structures, o, log_target, ranks, checkpoint);
 }
 
 // The trainer's objective and its gradient at coeffs, on one thread.
 static py::tuple objective(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::array_t<double, py::array::c_style | py::array::forcecast> coeffs, bool balance_species) {
     std::string log_target;
-    TrainerOptions trainer_options = parse_options(options, log_target);
+    MTPTrainerOptions trainer_options = parse_options<MTPTrainerOptions>("train_mtp", options, log_target);
     trainer_options.balance_species = balance_species;
     std::vector<TrainingStructure> share;
     for (py::handle item : structures)
@@ -256,21 +112,6 @@ inverse_hessian : (n, n) float64 array, n the coefficients BFGS trains (the radi
              there. None starts from the identity
 balance_species : give every species of a structure an equal share of its force weight; False
              weighs every force alike, as mlp does
-)doc");
-
-    m.def("error_table", [](PairMTP& potential, py::iterable structures, const std::vector<std::string>& species, const std::string& title) {
-        std::vector<TrainingStructure> share;
-        for (py::handle item : structures)
-            share.push_back(make_structure(item));
-        ThreadGroup group(1);
-        ThreadComm comm{&group, 0};
-        py::gil_scoped_release unlocked;
-        return error_table(potential, share, species, &comm, title);
-    }, py::arg("potential"), py::arg("structures"), py::arg("species"), py::arg("title"), R"doc(
-The errors of potential on the structures, as the table train_mtp logs, under title.
-
-structures : as train_mtp's
-species    : the species' names
 )doc");
 }
 

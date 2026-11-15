@@ -30,10 +30,6 @@ PairETN::PairETN(const std::string& filename) {
     PairETN::read_file(f);
 }
 
-PairETN::~PairETN() {
-    delete radial_basis;
-}
-
 /* ----------------------------------------------------------------------
    Main Computation Function
    ---------------------------------------------------------------------- */
@@ -286,10 +282,20 @@ void PairETN::contract_adjoint(const Core& core, const double* c, const Covarian
     }
 }
 
-void PairETN::eval_radial_basis(double dist, double* vals_out, double* ders_out) {
-    radial_basis->calc_radial_basis_ders(dist);
-    std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), vals_out);
-    std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), ders_out);
+void PairETN::get_coeffs(double* c) const {
+    for (const auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
+        for (const auto& block : *blocks) c = std::copy(block.begin(), block.end(), c);
+    std::copy(species_coeffs.begin(), species_coeffs.end(), c);
+}
+
+void PairETN::set_coeffs(const double* c) {
+    for (auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
+        for (auto& block : *blocks) {
+            std::copy(c, c + block.size(), block.begin());
+            c += block.size();
+        }
+    std::copy(c, c + species_count, species_coeffs.begin());
+    prepare_radial_mixing();
 }
 
 int PairETN::coeff_count() const {

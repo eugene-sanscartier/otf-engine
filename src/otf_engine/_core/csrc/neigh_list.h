@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Neighbor list passed to PairMTP::compute.
+   Neighbor list passed to Pair::compute.
    Stands in for LAMMPS NeighList + Atom, which the reference reads through
    `list->` and `atom->`.
 ------------------------------------------------------------------------- */
@@ -14,7 +14,7 @@
 // from ghost-atom positions, so there is no minimum-image convention here.
 struct NeighList {
     int n_atoms;                  // total number of atoms
-    const int* types;             // [n_atoms] 0-indexed MTP species
+    const int* types;             // [n_atoms] 0-indexed species
     int inum;                     // number of central atoms
     const int* ilist;             // [inum] indices of central atoms
     const int* numneigh;          // [inum] neighbor count per central atom

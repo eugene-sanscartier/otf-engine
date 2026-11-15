@@ -35,8 +35,8 @@ from ase import Atoms
 from numpy import float64, int32
 
 from otf_engine._etn import ETNTraining, PairETN, real_harmonics, real_wigner_3j, write_etn
-from otf_engine._mtp.neighbors import neighbors
-from otf_engine._mtp.selftest import check_forces, check_invariance, check_virial
+from otf_engine._core import neighbors
+from otf_engine._core.selftest import check_forces, check_invariance, check_virial
 
 REFERENCE = Path(__file__).parent / "etn_reference"
 GOLDEN = REFERENCE / "kernels.npz"

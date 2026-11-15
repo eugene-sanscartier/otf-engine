@@ -1,58 +1,26 @@
-"""calculate_grade, select_add, update_active_set and train, in place of mlip-3's `mlp` commands.
+"""calculate_grade, select_add and update_active_set, in place of mlip-3's `mlp` commands.
 
-All functions take ASE Atoms objects — no intermediate files. A potential is an MTP (.mtp, .almtp)
-or an ETN (.etn), told apart by its file's first line.
+All functions take ASE Atoms objects, with no intermediate files, and a potential of either model.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-from importlib import import_module
-from typing import Callable, NamedTuple
 
 import numpy
 from numpy import intp, float64
 
 logger = logging.getLogger(__name__)
 
-from ._etn import ETNTraining, train_etn, write_etn
-from ._etn import error_table as etn_error_table
-from ._mtp import Equations, MaxVol, MTPTraining, PotentialCalculator, error_table, train_mtp, write_mtp
-from ._mtp.neighbors import mtp_types, neighbors
+from ._core import Equations, MaxVol, PotentialCalculator, species_indices
 from .almtp_io import MVSState, read_mvs_header, read_mvs_state, write_mvs_state
-
-
-class PotentialClasses(NamedTuple):
-    """What the functions here call for one kind of potential."""
-
-    training: type                 # MTPTraining or ETNTraining, constructed from a file
-    write: Callable                # write_mtp or write_etn
-    error_table: Callable
-    train: Callable                # the trainer on threads
-    mpi_module: str                # the module of the trainer over MPI, loaded only under a communicator
-    mpi_train: str                 # its name there
-
-
-_MTP = PotentialClasses(MTPTraining, write_mtp, error_table, train_mtp, "otf_engine._mtp._mtp_mpi", "train_mtp")
-_ETN = PotentialClasses(ETNTraining, write_etn, etn_error_table, train_etn, "otf_engine._etn._etn_mpi", "train_etn")
-
-# mlip-4's MaximizeVol goes on swapping, once a search has swapped, while a grade exceeds this.
-_MLIP4_THRESHOLD_SWAP = 1.00001
-
-
-def potential_classes(path: str) -> PotentialClasses:
-    """The classes of the potential in *path*: an ETN's if its first line is ETN, else an MTP's."""
-    with open(path, "rb") as f:    # the #MVS_v1.1 section is binary
-        etn = f.readline().strip() == b"ETN"
-    classes = _ETN if etn else _MTP
-    return classes
+from .models import model_of
 
 # ---------------------------------------------------------------------------
 # Selection equations
 # ---------------------------------------------------------------------------
 
-_DEFAULT_SELECTION_WEIGHTS = {
+DEFAULT_SELECTION_WEIGHTS = {
     "cfg": {
         "energy_weight": 1.0,
         "force_weight": 0.0,
@@ -89,21 +57,21 @@ def selection_equations(calc: PotentialCalculator, structures: list, weights: di
 def maximize_volume(mv: MaxVol, equations: Equations, pool_id: int, comm=None) -> None:
     """mv.maximize_volume over *equations*, or with an mpi4py communicator over its ranks, each holding the equations of its share."""
     if comm is None: return mv.maximize_volume(equations, pool_id=pool_id)
-    from ._mtp import _mtp_mpi    # only under a communicator, so a process without one never loads the MPI library
-    _mtp_mpi.maximize_volume(mv, equations, pool_id, comm)
+    from ._core import _core_mpi    # only under a communicator, so a process without one never loads the MPI library
+    _core_mpi.maximize_volume(mv, equations, pool_id, comm)
 
 
 def _open_calculator(potential) -> tuple[PotentialCalculator, str | None]:
     """Accept either a potential path or a preloaded calculator."""
     if isinstance(potential, str):
-        return PotentialCalculator(potential_classes(potential).training(potential)), potential
+        return PotentialCalculator(model_of(potential).training(potential)), potential
     return potential, None
 
 
 def _maxvol(pot, *args, **kwargs) -> MaxVol:
-    """A MaxVol for the potential object *pot*, with mlip-4's selection rules for an ETN."""
+    """A MaxVol for the potential object *pot*, under its model's selection rules."""
     mv = MaxVol(*args, **kwargs)
-    if isinstance(pot, ETNTraining): mv.threshold_swap = _MLIP4_THRESHOLD_SWAP
+    mv.threshold_swap = model_of(pot).threshold_swap
     return mv
 
 
@@ -236,7 +204,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
         mv.restore_active(state.active_cfg_indices, state.active_eqn_indices, _POOL_SAVED)
     else:
         if weights is None:
-            weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
+            weights = dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
         mv = _maxvol(pot, n, threshold=threshold)
 
     if train_eqns is None:
@@ -244,14 +212,13 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     cand_eqns = selection_equations(calc, candidate_structs, weights, comm)
 
     # This three-pass sequence matches mlip-3 select_add and must stay ordered:
-    # training rebuild at 1.001, candidate selection at threshold, training pass again.
-    # mlip-4's CfgCalc, an ETN's, makes no training pass after the candidates.
+    # training rebuild at 1.001, candidate selection at threshold, training pass again, if the model makes it.
     mv.threshold = 1.001
     maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
     initial = MaxVol(mv.A, mv.invA)
     mv.threshold = threshold
     maximize_volume(mv, cand_eqns, _POOL_CAND, comm)
-    if not isinstance(pot, ETNTraining): maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
+    if model_of(pot).retrain_pass: maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
 
     active_indices = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0})
     selected_structs = [candidate_structs[i] for i in active_indices]
@@ -262,84 +229,6 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
         logger.info(f"  selected structure[{i}]: extrapolation grade (gamma) = {grade:.4f}")
 
     return selected_structs, (weights, mv.A, mv.invA)
-
-
-# ---------------------------------------------------------------------------
-# train
-# ---------------------------------------------------------------------------
-
-
-def _labelled(atoms, cutoff: float, number: int) -> tuple:
-    """*atoms* as train_mtp and error_table take a structure: its neighbor list, its energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz), None where absent, and *number*."""
-    results = atoms.calc.results
-    forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
-    virial = None
-    if "stress" in results:
-        # read_cfg divides PlusStress by -det(cell); ASE's Voigt order is xx yy zz yz xz xy.
-        v = -numpy.asarray(results["stress"], dtype=float64) * numpy.linalg.det(atoms.cell.array)
-        virial = v[[0, 1, 2, 5, 4, 3]]
-    return neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number
-
-
-def errors(potential: str, structures: list, title: str, first: int = 1, species: list | None = None) -> str:
-    """The errors of *potential* on the labelled *structures*, numbered from *first*, as the table training logs, under *title*."""
-    classes = potential_classes(potential)
-    pot = classes.training(potential)
-    cutoff = pot.get_max_cutoff()
-    table = classes.error_table(pot, [_labelled(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
-    return table
-
-
-# The trainer options that give mlp's algorithm in place of the trainer's defaults, for runs compared with mlp.
-MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "init_noise": "5"}
-
-
-def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None, balance_species: bool = True):
-    """train_mtp or train_etn, as the file *potential* holds, on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
-
-    inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's; an MTP's only
-    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp and mlip-4 do
-    """
-    classes = potential_classes(potential)
-    extra = {} if inverse_hessian is None else {"inverse_hessian": inverse_hessian}
-    if comm is None: return classes.train(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, balance_species=balance_species, **extra)
-    trainer = getattr(import_module(classes.mpi_module), classes.mpi_train)    # only under a communicator, so a process without one never loads the MPI library
-    return trainer(potential, structures, options, comm, checkpoint=checkpoint, balance_species=balance_species, **extra)
-
-
-def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None, balance_species: bool = True) -> None:
-    """Train *potential* on *training_structs* with otf_engine's trainer, and write it with an active set to *save_to*.
-
-    *potential* may be untrained; an MTP gains the species of *training_structs* it lacks.
-
-    settings : the trainer's options. For an MTP, `mlp train`'s and the trainer's own without the leading "--", e.g.
-               {"iteration_limit": 300, "init_random": True}, MLP_ALGORITHM for mlp's algorithm; for an ETN, mlip-4's
-               training settings, e.g. {"max_iter_count": 300, "pretrain": False}; and "species", the species' names
-               for the log's error tables, comma-separated
-    ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
-    al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
-    comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
-               same *training_structs*, and rank 0 writes *save_to*.
-    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp does
-    """
-    try:
-        weights = read_mvs_header(potential)[0]
-    except RuntimeError:
-        weights = dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
-
-    classes = potential_classes(potential)
-    cutoff = classes.training(potential).get_max_cutoff()
-    # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
-    rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
-    structures = (_labelled(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
-    options = {key: str(value) for key, value in (settings or {}).items()}
-    pot = fit(potential, structures, options, checkpoint=lambda pot: classes.write(pot, save_to), ranks=ranks, comm=comm, balance_species=balance_species)
-
-    if rank == 0: classes.write(pot, save_to)
-    if comm is not None: comm.Barrier()    # every rank reads save_to back
-
-    # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with
-    if pot.is_trained(): update_active_set(save_to, training_structs, weights=weights, comm=comm)
 
 
 def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh", comm=None) -> Equations:
@@ -357,7 +246,7 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     except RuntimeError:
         saved = None
     if weights is None:
-        weights = saved.weights if saved is not None else dict(_DEFAULT_SELECTION_WEIGHTS[al_mode])
+        weights = saved.weights if saved is not None else dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
 
     train_eqns = selection_equations(calc, training_structs, weights, comm)
 
@@ -365,7 +254,7 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     # rather than the stored A: stored rows may predate the coefficients, and the search never re-grades an active row.
     saved_rows = set()
     if saved is not None:
-        def key(atoms): return mtp_types(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
+        def key(atoms): return species_indices(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
         index_of = {key(atoms): i for i, atoms in enumerate(training_structs)}
         match = [index_of.get(key(cfg)) for cfg in saved.selected_cfgs]
         saved_rows = {(match[c], e) for c, e in zip(saved.active_cfg_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if c >= 0 and match[c] is not None}

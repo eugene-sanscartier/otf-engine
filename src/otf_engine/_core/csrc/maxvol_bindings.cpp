@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
    Python bindings for Equations and MaxVol (see maxvol.h). Built into
-   _mtp_ext, they bind both classes; built with MTP_MPI, into _mtp_mpi, the
+   _core_ext, they bind both classes; built with MTP_MPI, into _core_mpi, the
    search over the ranks of an mpi4py communicator.
 ------------------------------------------------------------------------- */
 
@@ -69,7 +69,7 @@ void bind_maxvol(py::module_& m) {
         .def(py::init<int, double, double, double, double, int>(),
              py::arg("coeff_count"), py::arg("energy_weight"), py::arg("force_weight"), py::arg("stress_weight"), py::arg("site_en_weight"), py::arg("weight_scaling"))
         .def("add",
-             [](Equations& self, MTPTraining& pot, const PyNeighbors& nb, int structure) {
+             [](Equations& self, Pair& pot, const PyNeighbors& nb, int structure) {
                  check_species(pot, nb);
                  if (pot.coeff_count() != self.coeff_count)
                      throw std::runtime_error("Equations: a potential of " + std::to_string(pot.coeff_count()) + " coefficients, not " + std::to_string(self.coeff_count));

@@ -3,6 +3,7 @@
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
+#include "mtp_potential.h"
 
 // --- ported from PairMTP --------------------------------------------------
 
@@ -15,7 +16,7 @@ static py::dict compute(PairMTP& self, const PyNeighbors& nb) {
 }
 
 void bind_potential(py::module_& m) {
-    auto cls = py::class_<PairMTP>(m, "PairMTP", "Energy, forces and virial for an MTP potential file.")
+    auto cls = py::class_<PairMTP, Pair>(m, "PairMTP", "Energy, forces and virial for an MTP potential file.")
                    .def(py::init<const std::string&>(), py::arg("filename"), "Load an MTP potential from a .mtp file (version 1.1.0).");
 
     // ---- ported from PairMTP ----
@@ -29,25 +30,15 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
 
     // ---- no counterpart in the reference ----
     // PairMTP exposes no parameter accessors: LAMMPS owns the object and never
-    // reads it back. Everything below exists to serve the Python boundary.
-    cls.def("get_coeff_count", &PairMTP::coeff_count, "radial_coeff_count + species_count + alpha_scalar_count")
-        .def("get_species_count", &PairMTP::get_species_count)
-        .def("get_radial_func_count", &PairMTP::get_radial_func_count)
-        .def("get_radial_basis_size", &PairMTP::get_radial_basis_size)
+    // reads it back. Everything below and in Pair exists to serve the Python boundary.
+    cls.def("get_radial_func_count", &PairMTP::get_radial_func_count)
         .def("get_radial_coeff_count", &PairMTP::get_radial_coeff_count, "species^2 * radial_func_count * radial_basis_size")
         .def("get_alpha_scalar_count", &PairMTP::get_alpha_scalar_count)
         .def("get_alpha_moment_count", &PairMTP::get_alpha_moment_count)
         .def("get_alpha_index_basic_count", &PairMTP::get_alpha_index_basic_count)
         .def("get_alpha_index_times_count", &PairMTP::get_alpha_index_times_count)
-        .def("get_min_cutoff", &PairMTP::get_min_cutoff)
-        .def("get_max_cutoff", &PairMTP::get_max_cutoff)
         .def("set_min_cutoff", &PairMTP::set_min_cutoff, py::arg("d"),
              "Update radial basis minimum distance. Mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(training distances).")
-        .def("get_scaling", &PairMTP::get_scaling)
-        .def("set_scaling", &PairMTP::set_scaling, py::arg("scaling"), "Set the global scaling parameter.")
-        .def("is_trained", &PairMTP::is_trained, "False for a file without coefficients, which holds mlip-3's defaults.")
-        .def("get_potential_name", &PairMTP::get_potential_name)
-        .def("get_radial_basis_type", &PairMTP::get_radial_basis_type)
 
         .def("get_radial_basis_coeffs",
              [](const PairMTP& self) {
@@ -66,9 +57,6 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
         .def("get_linear_coeffs",
              [](const PairMTP& self) { return DoubleArray({self.get_alpha_scalar_count()}, self.get_linear_coeffs()); },
              "ndarray float64 (alpha_scalar_count)  — moment tensor basis coefficients")
-        .def("get_species_coeffs",
-             [](const PairMTP& self) { return DoubleArray({self.get_species_count()}, self.get_species_coeffs()); },
-             "ndarray float64 (species_count)  — per-species reference energies")
 
         .def("set_linear_coeffs",
              [](PairMTP& self, DoubleArray arr) {
@@ -77,13 +65,6 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
                  self.set_linear_coeffs(arr.data());
              },
              py::arg("coeffs"), "Set linear (moment tensor) coefficients. Shape: (alpha_scalar_count,)")
-        .def("set_species_coeffs",
-             [](PairMTP& self, DoubleArray arr) {
-                 if (arr.size() != self.get_species_count())
-                     throw std::runtime_error("set_species_coeffs: expected length " + std::to_string(self.get_species_count()));
-                 self.set_species_coeffs(arr.data());
-             },
-             py::arg("coeffs"), "Set per-species reference energies. Shape: (species_count,)")
         .def("set_radial_basis_coeffs",
              [](PairMTP& self, DoubleArray arr) {
                  if (arr.size() != self.get_radial_coeff_count())

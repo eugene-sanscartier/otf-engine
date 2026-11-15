@@ -20,8 +20,16 @@ PairMTP::PairMTP(const std::string& filename) {
     PairMTP::read_file(f);
 }
 
-PairMTP::~PairMTP() {
-    delete radial_basis;
+void PairMTP::get_coeffs(double* c) const {
+    std::copy(radial_basis_coeffs.begin(), radial_basis_coeffs.end(), c);
+    std::copy(species_coeffs.begin(), species_coeffs.end(), c + radial_coeff_count);
+    std::copy(linear_coeffs.begin(), linear_coeffs.end(), c + radial_coeff_count + species_count);
+}
+
+void PairMTP::set_coeffs(const double* c) {
+    set_radial_basis_coeffs(c);
+    set_species_coeffs(c + radial_coeff_count);
+    set_linear_coeffs(c + radial_coeff_count + species_count);
 }
 
 /* ----------------------------------------------------------------------

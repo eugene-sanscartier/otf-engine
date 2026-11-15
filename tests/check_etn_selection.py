@@ -1,4 +1,4 @@
-"""Selection gate: the ETN's active learning in mtp_backend against mlip-4's CfgCalc, in seconds.
+"""Selection gate: the ETN's active learning in otf_engine.selection against mlip-4's CfgCalc, in seconds.
 
 On the 3-core potential of check_etn_kernels (etn_reference/etn-3.etn), in nbh and cfg modes,
 compares with mlip-4's CfgCalc, run once and stored in etn_reference/selection.npz:
@@ -11,7 +11,7 @@ compares with mlip-4's CfgCalc, run once and stored in etn_reference/selection.n
                per-atom grades
   selection    select_add of the candidates: the selected ones, exactly, and log |det A| after
 
-then trains the untrained 3-core potential with mtp_backend.train, which writes its active set
+then trains the untrained 3-core potential with train.train, which writes its active set
 into the .etn, and grades the training structures with the written file, below mlip-4's
 threshold_swap. A run fails when a number differs from mlip-4's by more than --tol relatively.
 
@@ -37,10 +37,11 @@ from ase.calculators.singlepoint import SinglePointCalculator
 
 import check_etn_kernels as kernels
 from otf_engine._etn import ETNTraining, PairETN
-from otf_engine._mtp import PotentialCalculator
-from otf_engine._mtp.neighbors import neighbors
+from otf_engine._core import PotentialCalculator
+from otf_engine._core import neighbors
 from otf_engine.almtp_io import read_mvs_state
-from otf_engine.mtp_backend import calculate_grade, select_add, train, update_active_set
+from otf_engine.selection import calculate_grade, select_add, update_active_set
+from otf_engine.train import train
 
 PROBE_SOURCE = kernels.REFERENCE / "mlip4_selection.cpp"
 GOLDEN = kernels.REFERENCE / "selection.npz"

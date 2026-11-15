@@ -33,7 +33,7 @@ import numpy
 
 from bench_training import BFGS_LINE, MLP, extract_cfgs
 from otf_engine.io_cfg import read_cfg, write_cfg
-from otf_engine.mtp_backend import MLP_ALGORITHM, train
+from otf_engine.train import MLP_ALGORITHM, train
 
 TEMPLATE = MLP.parents[1] / "MTP_templates/08.almtp"
 NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")

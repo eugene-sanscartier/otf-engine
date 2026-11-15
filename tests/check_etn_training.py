@@ -10,7 +10,7 @@ with the fits of mlip-4's Train stored in etn_reference/training.npz:
                  mlip-4's JIT-compiled code already takes another path than its VM at step 7
   imaginary      the 5-core potential, whose middle cores have imaginary parts, on both structures
   threads        skip_pretrain on one thread per structure, against mlip-4 on one process
-  mpi            skip_pretrain through mtp_backend.fit under mpirun, one rank per structure
+  mpi            skip_pretrain through train.fit under mpirun, one rank per structure
 
 A run fails when its log, numbers aside, differs from mlip-4's; when a logged loss differs from
 mlip-4's by more than --tol relatively, mlip-4's log holding 6 significant digits; or when the
@@ -40,8 +40,8 @@ from ase.calculators.singlepoint import SinglePointCalculator
 
 import check_etn_kernels as kernels
 from otf_engine._etn import ETNTraining, train_etn
-from otf_engine._mtp.neighbors import neighbors
-from otf_engine.mtp_backend import _labelled
+from otf_engine._core import neighbors
+from otf_engine.train import training_structure
 
 PROBE_SOURCE = kernels.REFERENCE / "mlip4_train.cpp"
 GOLDEN = kernels.REFERENCE / "training.npz"
@@ -116,7 +116,7 @@ def case_inputs(name, cells, workdir):
     template = Path(workdir) / f"{potential}.etn"
     template.write_text(kernels.template(potential))
     settings = dict(SETTINGS, **overrides)
-    labelled = [(cells[k], _labelled(cells[k], ETNTraining(str(template)).get_max_cutoff(), k + 1)) for k in chosen]
+    labelled = [(cells[k], training_structure(cells[k], ETNTraining(str(template)).get_max_cutoff(), k + 1)) for k in chosen]
     return template, settings, labelled
 
 
@@ -138,7 +138,7 @@ def run_case(name, golden, cells, workdir, tol, tensor_tol):
     options = {key: str(value) for key, value in dict(settings, **WEIGHTS).items()} | {"log": str(log_file)}
     start = time.perf_counter()
     if ranks == "mpi":
-        # mtp_backend.fit over mpirun's ranks, each passing its share; rank 0 saves the coefficients
+        # train.fit over mpirun's ranks, each passing its share; rank 0 saves the coefficients
         subprocess.run(["mpirun", "-n", str(len(labelled)), sys.executable, str(Path(__file__).resolve()), "--mpi-worker", name, workdir], check=True)
         trained = ETNTraining(str(template))
         trained.set_coeffs(numpy.load(Path(workdir) / f"{name}-coeffs.npy"))
@@ -181,10 +181,10 @@ def run_case(name, golden, cells, workdir, tol, tensor_tol):
 
 
 def mpi_worker(name, workdir):
-    """A case's fit through mtp_backend.fit over MPI.COMM_WORLD, the coefficients saved by rank 0."""
+    """A case's fit through train.fit over MPI.COMM_WORLD, the coefficients saved by rank 0."""
     from mpi4py import MPI
 
-    from otf_engine.mtp_backend import fit
+    from otf_engine.train import fit
 
     comm = MPI.COMM_WORLD
     template, settings, labelled = case_inputs(name, structures(numpy.load(GOLDEN)), workdir)

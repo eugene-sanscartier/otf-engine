@@ -6,8 +6,7 @@
 
 #pragma once
 
-#include "mtp_radial_basis.h"
-#include "neigh_list.h"
+#include "pair.h"
 
 #include <algorithm>
 #include <array>
@@ -15,38 +14,28 @@
 #include <string>
 #include <vector>
 
-class PairMTP {
+// The members PairMTP shares with PairETN are Pair's.
+class PairMTP : public Pair {
   public:
     // Reads an MTP potential file (version 1.1.0).
     explicit PairMTP(const std::string& filename);
-    virtual ~PairMTP();
 
     // Energy, per-atom energies, forces and virial of the central atoms in list,
     // left in the members below.
-    void compute(const NeighList& list);
-
-    double get_energy() const { return energy; }
-    const double* get_eatom() const { return eatom.data(); }      // [n_atoms]
-    const double* get_forces() const { return forces.data(); }    // [n_atoms * 3]
-    const double* get_virial() const { return virial; }           // [6] xx,yy,zz,xy,xz,yz
+    void compute(const NeighList& list) override;
 
     // Length of the coefficient vector [radial | species | linear].
-    int coeff_count() const { return radial_coeff_count + species_count + alpha_scalar_count; }
-    int get_species_count() const { return species_count; }
+    int coeff_count() const override { return radial_coeff_count + species_count + alpha_scalar_count; }
+    // The coefficients as one vector c = [c_radial | c_species | beta_linear].
+    void get_coeffs(double* c) const override;
+    void set_coeffs(const double* c) override;
+
     int get_radial_func_count() const { return radial_func_count; }
-    int get_radial_basis_size() const { return radial_basis_size; }
     int get_radial_coeff_count() const { return radial_coeff_count; }
     int get_alpha_scalar_count() const { return alpha_scalar_count; }
     int get_alpha_moment_count() const { return alpha_moment_count; }
     int get_alpha_index_basic_count() const { return alpha_index_basic_count; }
     int get_alpha_index_times_count() const { return alpha_index_times_count; }
-    double get_min_cutoff() const { return min_cutoff; }
-    double get_max_cutoff() const { return max_cutoff; }
-    double get_scaling() const { return scaling; }
-    // False for a file without coefficients, which holds mlip-3's defaults.
-    bool is_trained() const { return trained; }
-    const std::string& get_potential_name() const { return potential_name; }
-    const std::string& get_radial_basis_type() const { return radial_basis_type; }
 
     // radial_basis_coeffs: flat [species^2 * radial_func_count * radial_basis_size]
     const double* get_radial_basis_coeffs() const { return radial_basis_coeffs.data(); }
@@ -56,15 +45,11 @@ class PairMTP {
     const int* get_alpha_index_times() const { return alpha_index_times[0].data(); }
     const int* get_alpha_moment_mapping() const { return alpha_moment_mapping.data(); }
     const double* get_linear_coeffs() const { return linear_coeffs.data(); }
-    const double* get_species_coeffs() const { return species_coeffs.data(); }
 
     void set_linear_coeffs(const double* c) { std::copy(c, c + alpha_scalar_count, linear_coeffs.begin()); }
-    void set_species_coeffs(const double* c) { std::copy(c, c + species_count, species_coeffs.begin()); }
     void set_radial_basis_coeffs(const double* c) { std::copy(c, c + radial_coeff_count, radial_basis_coeffs.begin()); }
-    void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
     // Mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(training distances).
     void set_min_cutoff(double d) { min_cutoff = d; radial_basis->min_cutoff = d; }
-    void set_trained(bool t) { trained = t; }
     // Sizes the coefficients for n species; set them afterwards.
     void set_species_count(int n) {
         species_count = n;
@@ -77,29 +62,15 @@ class PairMTP {
     void read_file(std::istream& is);
     void prepare_angular();
 
-    std::string potential_name = "Untitled";
     std::string potential_tag;
-    std::string radial_basis_type;
-
-    int species_count = 0;
-    double scaling = 1.0;
-    bool trained = true;
 
     // Radial basis
-    RadialMTPBasis* radial_basis = nullptr;
     int radial_func_count = 0;           // Number of radial bases (mu_max)
-    int radial_basis_size = 0;           // Number of elements in bases
     int radial_coeff_count = 0;          // Number of total radial coeffs
     int radial_coeff_count_per_pair = 0; // Number of coeffs for species pair
 
-    // The MTP only supports one cutoff set for all species combinations
-    double min_cutoff = 0.0;
-    double max_cutoff = 0.0;
-    double max_cutoff_sq = 0.0;
-
     std::vector<double> radial_basis_coeffs; // radial basis coeffs (c)
     std::vector<double> linear_coeffs;       // moment tensor basis coeffs (xi)
-    std::vector<double> species_coeffs;      // 0th rank moment tensor coeffs
 
     int alpha_moment_count = 0;
     int alpha_index_basic_count = 0;
@@ -125,16 +96,5 @@ class PairMTP {
     // Graph traversal, forwards and backwards pass
     std::vector<double> moment_tensor_vals;          // the moments
     std::vector<double> nbh_energy_ders_wrt_moments; // same, for ders
-
-    // Results of compute
-    double energy = 0.0;
-    std::vector<double> eatom;   // [n_atoms] site energies
-    std::vector<double> forces;  // [n_atoms * 3]
-    double virial[6] = {};       // xx,yy,zz,xy,xz,yz
-
-    // Cache values between forwards and backwards pass
-    int cache_size = 0;
-    std::vector<int> cached_j;                    // [cache_size]
-    std::vector<std::array<double, 3>> valid_dr;  // [cache_size] displacement of each cached neighbor
-    std::vector<double> neighbor_cache;           // [cache_size * (1 + 2 * radial_func_count)] 1/dist, radial vals, radial ders
+    // neighbor_cache's stride is 1 + 2 * radial_func_count: 1/dist, radial vals, radial ders
 };

@@ -15,7 +15,7 @@ class PairMTPExtrapolation : public PairMTP {
     // PairMTP::compute's results, plus the extrapolation grade of each
     // neighborhood (neighborhood mode) and the largest grade, left in the
     // members below.
-    void compute(const NeighList& list);
+    void compute(const NeighList& list) override;
 
     double get_max_grade() const { return max_grade; }
     const double* get_nbh_extrapolation_grades() const { return nbh_extrapolation_grades.data(); }    // [n_atoms]

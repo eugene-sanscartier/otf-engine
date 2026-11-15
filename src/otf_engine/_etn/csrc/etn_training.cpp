@@ -5,6 +5,8 @@
 
 #include "etn_training.h"
 
+#include <stdexcept>
+
 ETNTraining::ETNTraining(const std::string& filename) : PairETN(filename) {
     const int l_count = (int) species_ranks.size();
     const int core_count = get_core_count();
@@ -30,23 +32,9 @@ ETNTraining::ETNTraining(const std::string& filename) : PairETN(filename) {
     for (int l = 0; l < l_count; l++) mixing_adj[l].resize(radial_mixing[l].size());
 }
 
-void ETNTraining::get_coeffs(double* c) const {
-    for (const auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
-        for (const auto& block : *blocks) c = std::copy(block.begin(), block.end(), c);
-    std::copy(species_coeffs.begin(), species_coeffs.end(), c);
-}
-
-void ETNTraining::set_coeffs(const double* c) {
-    for (auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
-        for (auto& block : *blocks) {
-            std::copy(c, c + block.size(), block.begin());
-            c += block.size();
-        }
-    std::copy(c, c + species_count, species_coeffs.begin());
-    prepare_radial_mixing();
-}
-
-void ETNTraining::eval_grad(const NeighList& list, double* site_energy_grad) {
+void ETNTraining::eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double*) {
+    if (force_grad)
+        throw std::runtime_error("eval_grad: an ETN has no force gradients");
     const int width = coeff_count();
     int nbr_offset = 0;
     for (int ii = 0; ii < list.inum; ii++) {

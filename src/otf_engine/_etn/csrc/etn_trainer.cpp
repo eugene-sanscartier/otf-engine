@@ -20,20 +20,13 @@ static std::string full_precision(double x) {
 }
 
 ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
-    : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log), checkpoint(std::move(checkpoint)) {
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm_size(comm, &size);
-
-    if (options.balance_species)
-        for (TrainingStructure& s : this->structures) s.balance_species();
-
-    int local_count = (int) this->structures.size();
-    MPI_Allreduce(&local_count, &structure_count, 1, MPI_INT, MPI_SUM, comm);
-    if (structure_count == 0)
-        throw std::runtime_error("ETNTrainer: no training structures");    // on every rank together
-
-    coeffs.resize(potential.coeff_count());
-    potential.get_coeffs(coeffs.data());
+    : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
+    int local_largest = -1, largest = -1;
+    for (const TrainingStructure& s : this->structures)
+        for (int t : s.types) local_largest = std::max(local_largest, t);
+    MPI_Allreduce(&local_largest, &largest, 1, MPI_INT, MPI_MAX, comm);
+    if (largest >= potential.get_species_count())
+        throw std::runtime_error("train_etn: a training structure has species " + std::to_string(largest) + ", outside the potential's " + std::to_string(potential.get_species_count()));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -41,12 +34,6 @@ void ETNTrainer::train() {
     const auto start = std::chrono::steady_clock::now();
     MPI_Barrier(comm);
 
-    auto log_errors = [&](const std::string& title) {
-        if (!potential.is_trained()) return;
-        potential.set_coeffs(coeffs.data());
-        const std::string table = error_table(potential, structures, options.species, comm, title);
-        if (log) *log << table;
-    };
     log_errors("Training set errors before training:");
 
     // mlip-4's pre-training keeps linstop and rescale, and takes the other settings' defaults
