@@ -2,12 +2,14 @@
    mlip-4's ETN tensors for check_etn_kernels.py --capture.
 
    Reads a probe file (written by check_etn_kernels.py) holding the ETN's
-   shape and params, probe distances and structures, and prints every tensor
-   mlip-4 computes for them: the radial basis, the real 3-j tables, and per
-   atom the input vector, the bond vectors and the site energy, then forces
-   and virial. The input and bond vectors come from mlip-4's own program,
-   recomposed by ETNProbe below as ETN::ComposeETTProgram composes it, with
-   the bond vectors kept as outputs.
+   shape and params, probe distances, directions and structures, and prints
+   every tensor mlip-4 computes for them: the radial basis, the real 3-j
+   tables, the real harmonics and their gradients, and per structure the
+   energy, forces and stress of mlip-4's CalcCfg, each atom's site energy,
+   and the first atoms' input and bond vectors. Those come from mlip-4's own
+   program, recomposed by ETNProbe below as ETN::ComposeETTProgram composes
+   it with the bond vectors kept as outputs; the probe fails if a site
+   energy of the recomposed program departs from the original's.
 
    Build against a compiled mlip-4 (see check_etn_kernels.py).
 ------------------------------------------------------------------------- */
@@ -15,6 +17,7 @@
 #include "pch.h"
 #include <pots/etn/etn.h>
 #include <pots/radial_basis/cinf/rb_cinf.h>
+#include <simulations/simulation.h>
 #include <variables/var_equiv_tensor.h>
 
 #include <cstdio>
@@ -32,7 +35,6 @@ class ETNProbe : public ETN {
 
     double* param_data() { return &params_[0]; }
     size_t input_size() { return var_ett_input_gvector.n_elem(); }
-    AnyTwoLevelExecutable& energy_ders_executable() { return *exe_energy_ders; }
 
     // ETN::PrepareForCalc's program, composed once, with ComposeETTProgram's bond vectors kept.
     void build() {
@@ -212,6 +214,60 @@ static void print(const std::string& name, const std::vector<size_t>& shape, con
     std::cout << '\n';
 }
 
+// Y_lm and their gradients at each unit vector, from mlip-4's AngularBasis program run by its VM;
+// at a unit vector the gradient of Y_lm(r / |r|) is tangent to the sphere.
+static void print_harmonics(size_t l_count, const std::vector<std::array<double, 3>>& directions) {
+    const size_t count = l_count * l_count;
+    Variable x = Variable::New<VarFloat>("x", VarFlags::EXTERN);
+    Variable y = Variable::New<VarFloat>("y", VarFlags::EXTERN);
+    Variable z = Variable::New<VarFloat>("z", VarFlags::EXTERN);
+    Variable r_sq = Variable::New<VarFloat>("r_sq");
+    r_sq += x * x;
+    r_sq += y * y;
+    r_sq += z * z;
+    Variable r_inv = Variable::New<VarFloat>("r_inv");
+    r_inv += pow(r_sq, -0.5);
+    AngularBasis angular(l_count);
+    std::vector<Variable> ylm = angular.ComposeProgram(x, y, z, r_inv);
+
+    std::vector<Variable> weights(count), grads = {Variable::New<VarFloat>("dx"), Variable::New<VarFloat>("dy"), Variable::New<VarFloat>("dz")};
+    for (size_t k = 0; k < count; k++) weights[k] = Variable::New<VarFloat>("weight", VarFlags::EXTERN | VarFlags::AGGREGATE);
+    DifferentiateLincomb({x, y, z}, ylm, weights, grads);
+
+    std::vector<Variable> outs = ylm;
+    outs.insert(outs.end(), grads.begin(), grads.end());
+    Simplify(outs);
+    std::vector<Variable> in_vars = weights;
+    in_vars.insert(in_vars.end(), {x, y, z});
+    VmTwoLevelExecutable exe;
+    exe.Construct(in_vars, outs);
+
+    // Output k sits at index k among the outputs of its level
+    std::vector<size_t> out_index(outs.size());
+    size_t n_aggregate = 0, n_component = 0;
+    for (size_t k = 0; k < outs.size(); k++)
+        out_index[k] = outs[k].level() == AnyTwoLevelExecutable::Level::Aggregate ? n_aggregate++ : n_component++;
+    auto value = [&](size_t k) {
+        return outs[k].level() == AnyTwoLevelExecutable::Level::Aggregate ? exe.out_aggregate_vars(out_index[k]) : exe.out_component_vars(0, out_index[k]);
+    };
+
+    for (size_t d = 0; d < directions.size(); d++) {
+        std::vector<double> vals(count), grad_vals(count * 3);
+        for (size_t k = 0; k <= count; k++) {
+            exe.Prepare(1);
+            for (size_t w = 0; w < count; w++) exe.in_aggregate_vars(w) = (w == k) ? 1.0 : 0.0;
+            for (int a = 0; a < 3; a++) exe.in_component_vars(0, a) = directions[d][a];
+            exe.Run();
+            if (k == count)
+                for (size_t q = 0; q < count; q++) vals[q] = value(q);
+            else
+                for (int a = 0; a < 3; a++) grad_vals[k * 3 + a] = value(count + a);
+        }
+        print("ylm/" + std::to_string(d) + "/vals", {count}, vals);
+        print("ylm/" + std::to_string(d) + "/grads", {count, 3}, grad_vals);
+    }
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) {
         std::cerr << "usage: mlip4_probe PROBE_FILE\n";
@@ -240,6 +296,7 @@ int main(int argc, char** argv) {
 
     auto basis = std::make_shared<RadialBasisCinf>(rb_size, min_dist, max_dist);
     ETNProbe etn(shape, ett_ranks, basis, SpeciesOrder(species), false);
+    auto plain = std::make_shared<ETN>(shape, ett_ranks, basis, SpeciesOrder(species), false);
 
     size_t param_count;
     in >> param_count;
@@ -248,6 +305,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     for (size_t p = 0; p < param_count; p++) in >> etn.param_data()[p];
+    std::copy(etn.param_data(), etn.param_data() + param_count, plain->params().begin());
     etn.build();
 
     // The radial basis at probe distances, as RadialBasisCinf::CalcDer gives it (derivatives in r^2)
@@ -284,9 +342,17 @@ int main(int argc, char** argv) {
     print("wigner_re", {lm, lm, lm}, w_re);
     print("wigner_im", {lm, lm, lm}, w_im);
 
-    // Structures: n_atoms, cell rows, then type x y z per atom
-    size_t structure_count;
-    in >> structure_count;
+    // Harmonics: l_count, then the unit vectors
+    size_t harmonics_l_count, direction_count;
+    in >> harmonics_l_count >> direction_count;
+    std::vector<std::array<double, 3>> directions(direction_count);
+    for (auto& d : directions) in >> d[0] >> d[1] >> d[2];
+    print_harmonics(harmonics_l_count, directions);
+
+    // Structures: tensors are printed for the first tensor_atoms atoms; then n_atoms, cell rows,
+    // and type x y z per atom
+    size_t tensor_atoms, structure_count;
+    in >> tensor_atoms >> structure_count;
     for (size_t s = 0; s < structure_count; s++) {
         size_t n_atoms;
         in >> n_atoms;
@@ -308,77 +374,75 @@ int main(int argc, char** argv) {
         json << "],\"types\":[";
         for (size_t i = 0; i < n_atoms; i++) json << (i ? "," : "") << types[i];
         json << "]}";
-
         Cfg cfg;
         cfg.FromString(json.str());
+
+        // Energy, forces and stress from mlip-4's own CalcCfg
+        CalcCfg calc(cfg, true, true);
+        calc.AttachPot(plain);
+        calc.Run();
+        const auto& stress = calc.get_stress();
+        std::vector<double> folded(n_atoms * 3);
+        for (size_t i = 0; i < n_atoms; i++)
+            for (int a = 0; a < 3; a++) folded[i * 3 + a] = calc.get_forces()[i][a];
+
+        // Per atom: the input and bond vectors from the recomposed program, and the site energy,
+        // checked against the original program's
         ExtCfg ext(cfg, max_dist);
-
-        std::vector<double> inputs, eatom, energy_total(1, 0.0);
+        std::vector<double> inputs, eatom;
         std::vector<std::vector<double>> bonds_re(core_count + 1), bonds_im(core_count + 1);
-        std::vector<Vec3> forces(ext.size_with_ghost(), Vec3::ZERO());
-        std::vector<double> virial(6, 0.0);
         auto& exe = *etn.exe_tensors;
-        const double cutoff_sq = max_dist * max_dist;
-
         for (const auto& nbh : ext.nbhs()) {
             etn.load(exe, nbh);
             exe.Run();
-            // Outputs in build()'s order: input vector, energy, bonds re, bonds im
             size_t out = 0;
-            const size_t input_size = etn.input_size();
-            for (size_t k = 0; k < input_size; k++) inputs.push_back(exe.out_aggregate_vars(out, k));
+            std::vector<double> input(etn.input_size());
+            for (size_t k = 0; k < input.size(); k++) input[k] = exe.out_aggregate_vars(out, k);
             out++;
-            eatom.push_back(exe.out_aggregate_vars(out++));
-            bonds_re[0].push_back(1.0);
+            const double site_energy = exe.out_aggregate_vars(out++);
+            eatom.push_back(site_energy);
+
+            double original = 0.0;
+            plain->AccumulateSiteEnergy(nbh, original);
+            if (std::abs(original - site_energy) > 1e-12 * std::max(1.0, std::abs(original))) {
+                std::cerr << "mlip4_probe: the recomposed program gives site energy " << site_energy << ", mlip-4's " << original << '\n';
+                return 1;
+            }
+
+            std::vector<std::vector<double>> re(core_count + 1), im(core_count + 1);
+            re[0] = {1.0};
             for (size_t b = 1; b <= core_count; b++) {
-                const size_t size = etn.bond_re[b].n_elem();
-                for (size_t k = 0; k < size; k++) bonds_re[b].push_back(exe.out_aggregate_vars(out, k));
+                for (size_t k = 0; k < etn.bond_re[b].n_elem(); k++) re[b].push_back(exe.out_aggregate_vars(out, k));
                 out++;
             }
             for (size_t b = 0; b <= core_count; b++) {
-                const size_t size = etn.bond_re[b].empty() ? 1 : etn.bond_re[b].n_elem();
                 if (etn.bond_im[b].empty()) {
-                    for (size_t k = 0; k < size; k++) bonds_im[b].push_back(0.0);
+                    im[b].assign(re[b].size(), 0.0);
                     continue;
                 }
-                for (size_t k = 0; k < size; k++) bonds_im[b].push_back(exe.out_aggregate_vars(out, k));
+                for (size_t k = 0; k < etn.bond_im[b].n_elem(); k++) im[b].push_back(exe.out_aggregate_vars(out, k));
                 out++;
             }
 
-            // Forces and virial from mlip-4's own derivative program, tallied as PairMTP tallies them
-            double energy = 0.0;
-            etn.AccumulateSiteEnergyDers(nbh, energy, forces);
-            energy_total[0] += energy;
-            auto& ders = etn.energy_ders_executable();
-            etn.load(ders, nbh);
-            ders.Run();
-            int k = 0;
-            for (int j = 0; j < (int) nbh.size(); j++) {
-                const Vec3 r = nbh.rel_pos(j);
-                if (norm_sq(r) >= cutoff_sq) continue;
-                const double* g = (double*) ders.out_component_vars(k++);
-                virial[0] -= r[0] * g[0];
-                virial[1] -= r[1] * g[1];
-                virial[2] -= r[2] * g[2];
-                virial[3] -= r[0] * g[1];
-                virial[4] -= r[0] * g[2];
-                virial[5] -= r[1] * g[2];
+            if (nbh.my_ind() >= tensor_atoms) continue;
+            inputs.insert(inputs.end(), input.begin(), input.end());
+            for (size_t b = 0; b <= core_count; b++) {
+                bonds_re[b].insert(bonds_re[b].end(), re[b].begin(), re[b].end());
+                bonds_im[b].insert(bonds_im[b].end(), im[b].begin(), im[b].end());
             }
         }
 
-        std::vector<double> folded(n_atoms * 3, 0.0);
-        for (size_t a = 0; a < ext.size_with_ghost(); a++)
-            for (int c = 0; c < 3; c++) folded[ext.ghost_atom_ind(a) * 3 + c] += forces[a][c];
-
+        // mlip-4's stress is (xx, yy, zz, yz, xz, xy) of sum_i F_i (x) r_i, symmetrized
+        const size_t kept = std::min(tensor_atoms, n_atoms);
         const std::string prefix = "s" + std::to_string(s) + "/";
-        print(prefix + "energy", {}, energy_total);
+        print(prefix + "energy", {}, {calc.get_energy()});
         print(prefix + "eatom", {n_atoms}, eatom);
         print(prefix + "forces", {n_atoms, 3}, folded);
-        print(prefix + "virials", {6}, virial);
-        print(prefix + "inputs", {n_atoms, inputs.size() / n_atoms}, inputs);
+        print(prefix + "virials", {6}, {stress[0], stress[1], stress[2], stress[5], stress[4], stress[3]});
+        print(prefix + "inputs", {kept, inputs.size() / kept}, inputs);
         for (size_t b = 0; b <= core_count; b++) {
-            print(prefix + "bonds/" + std::to_string(b), {n_atoms, bonds_re[b].size() / n_atoms}, bonds_re[b]);
-            print(prefix + "bonds_im/" + std::to_string(b), {n_atoms, bonds_im[b].size() / n_atoms}, bonds_im[b]);
+            print(prefix + "bonds/" + std::to_string(b), {kept, bonds_re[b].size() / kept}, bonds_re[b]);
+            print(prefix + "bonds_im/" + std::to_string(b), {kept, bonds_im[b].size() / kept}, bonds_im[b]);
         }
     }
     return 0;

@@ -3,19 +3,22 @@
 Every tensor `PairETN` computes is compared with golden values in `etn_reference/`
 that mlip-4 computed: the radial basis and its derivatives, the real spherical
 harmonics and their gradients, the dense real and imaginary 3-j tables, and,
-for a 3-core and a 5-core potential on two structures of the NiSi system, each
-atom's input vector and bond vectors, the site energies, forces and virial.
+for six potentials on three NiSi structures, the energy, forces and virial,
+each atom's site energy, and the first atoms' input and bond vectors. The
+potentials span 1 to 5 cores, l up to 4, bonds with more l than the input,
+zero ranks and a single species. Each array is compared relative to its
+largest entry, and each row, at a looser tolerance, relative to its own.
+
+Then, without mlip-4: forces and virial against finite differences, invariance
+under rotation and reflection, the .etn round trip, and the untrained file.
 
     python tests/check_etn_kernels.py
-        check this build against the golden values
+        check this build
 
     python tests/check_etn_kernels.py --capture --cfg tmp/set.cfg --mlip4-build DIR
         rewrite the golden values from mlip-4, whose build directory DIR holds
         lib_mlip_4_interface.a; the probe `etn_reference/mlip4_probe.cpp` is
-        compiled against it, and the structures are the first two of the cfg.
-
-The harmonics come from mlip-4's table in src/pots/etn/angular_basis.cpp; the
-rest from the probe, which runs mlip-4's own ETN program.
+        compiled against it and runs mlip-4's own ETN program.
 """
 
 import argparse
@@ -31,18 +34,27 @@ from numpy import float64, int32
 
 from otf_engine._etn import PairETN, real_harmonics, real_wigner_3j, write_etn
 from otf_engine._mtp.neighbors import neighbors
+from otf_engine._mtp.selftest import check_forces, check_invariance, check_virial
 
 REFERENCE = Path(__file__).parent / "etn_reference"
 GOLDEN = REFERENCE / "kernels.npz"
 PROBE_SOURCE = REFERENCE / "mlip4_probe.cpp"
 TOL = 1e-12
+ROW_TOL = 1e-9  # rows whose terms cancel, such as small net forces, round to 1e-11 of themselves
+SELFTEST_TOL = 1e-6
 
-SPECIES_COUNT = 3
+# Structures of the cfg: one Ni; two Ni 3.7 A apart; a distant frame
+STRUCTURES = [0, 2410, 17763]
+TENSOR_ATOMS = 24  # input and bond vectors are kept for the first atoms, the Ni among them
 MIN_DIST, MAX_DIST, RADIAL_BASIS_SIZE = 1.0, 5.0, 6
-SPECIES_RANKS, RADIAL_FUNCS_COUNTS, RADIAL_RANKS = [2, 2, 1], [6, 4, 3], [3, 2, 2]
+# name: species count, species ranks, radial function counts, radial ranks (per l of the input), bond ranks
 POTENTIALS = {
-    "etn-3": [[1], [3, 2, 1], [3, 2, 1], [1]],
-    "etn-5": [[1], [2, 2, 1], [2, 2, 1], [2, 2, 1], [2, 2, 1], [1]],
+    "etn-1": (3, [2, 1], [6, 4], [3, 2], [[1], [1]]),
+    "etn-2": (3, [2, 1], [6, 4], [3, 2], [[1], [2, 2, 1, 1], [1]]),
+    "etn-3": (3, [2, 2, 1], [6, 4, 3], [3, 2, 2], [[1], [3, 2, 1], [3, 2, 1], [1]]),
+    "etn-4": (3, [2, 0, 1, 1, 1], [6, 4, 3, 2, 2], [3, 2, 0, 1, 1], [[1], [2, 0, 1, 1, 1], [2, 1, 1, 1, 1], [2, 0, 1, 1, 1], [1]]),
+    "etn-5": (3, [2, 2, 1], [6, 4, 3], [3, 2, 2], [[1], [2, 2, 1], [2, 2, 1], [2, 2, 1], [2, 2, 1], [1]]),
+    "etn-3-single": (1, [2, 1, 1], [6, 4, 3], [3, 2, 1], [[1], [2, 2, 1], [2, 2, 1], [1]]),
 }
 PROBE_DISTANCES = [1.0, 1.5, 2.5, 4.0, 4.9]
 WIGNER_L_COUNT = 5
@@ -55,7 +67,7 @@ def directions():
 
 
 def coeff_blocks(pot):
-    """The (getter, setter) arguments of every coefficient block, in mlip-4's params order."""
+    """The coefficient blocks of pot as (kind, argument), in mlip-4's params order."""
     l_count, core_count = len(pot.get_species_ranks()), pot.get_core_count()
     blocks = [("radial", l) for l in range(l_count)] + [("species_pair", l) for l in range(l_count)]
     blocks += [("core", (i, False)) for i in range(core_count)]
@@ -90,22 +102,23 @@ def set_params(pot, values):
             pot.set_species_coeffs(block)
 
 
-def template(bond_ranks):
-    """An untrained .etn file of the test shape."""
+def template(name):
+    """The untrained .etn file of a test potential."""
+    species_count, species_ranks, radial_funcs_counts, radial_ranks, bond_ranks = POTENTIALS[name]
     braces = lambda values: "{" + ", ".join(map(str, values)) + "}"
-    lines = ["ETN", "version = 1.0.0", f"species_count = {SPECIES_COUNT}", "radial_basis_type = RBCinf",
+    lines = ["ETN", "version = 1.0.0", f"potential_name = {name}", f"species_count = {species_count}", "radial_basis_type = RBCinf",
              f"\tmin_dist = {MIN_DIST}", f"\tmax_dist = {MAX_DIST}", f"\tradial_basis_size = {RADIAL_BASIS_SIZE}",
-             f"species_ranks = {braces(SPECIES_RANKS)}", f"radial_funcs_counts = {braces(RADIAL_FUNCS_COUNTS)}",
-             f"radial_ranks = {braces(RADIAL_RANKS)}", f"core_count = {len(bond_ranks) - 1}", "bond_ranks"]
+             f"species_ranks = {braces(species_ranks)}", f"radial_funcs_counts = {braces(radial_funcs_counts)}",
+             f"radial_ranks = {braces(radial_ranks)}", f"core_count = {len(bond_ranks) - 1}", "bond_ranks"]
     return "\n".join(lines + ["\t" + braces(ranks) for ranks in bond_ranks]) + "\n"
 
 
 def build_potentials(workdir):
-    """The two test potentials, from their templates with seeded coefficients."""
+    """The test potentials, from their templates with seeded coefficients."""
     built = {}
-    for k, (name, bond_ranks) in enumerate(POTENTIALS.items()):
+    for k, name in enumerate(POTENTIALS):
         path = Path(workdir) / f"{name}.etn"
-        path.write_text(template(bond_ranks))
+        path.write_text(template(name))
         pot = PairETN(str(path))
         set_params(pot, numpy.random.default_rng(k).standard_normal(pot.get_coeff_count()) * 0.3)
         pot.set_trained(True)
@@ -114,13 +127,19 @@ def build_potentials(workdir):
 
 
 def structures(golden):
-    """The structures stored in the golden values."""
+    """The structures stored in the golden values, with their species."""
     built, s = [], 0
     while f"structure/{s}/positions" in golden:
-        atoms = Atoms(numbers=numpy.full(len(golden[f"structure/{s}/types"]), 1), positions=golden[f"structure/{s}/positions"], cell=golden[f"structure/{s}/cell"], pbc=True)
-        built += [(atoms, numpy.asarray(golden[f"structure/{s}/types"], dtype=int32))]
+        types = numpy.asarray(golden[f"structure/{s}/types"], dtype=int32)
+        atoms = Atoms(numbers=numpy.full(len(types), 1), positions=golden[f"structure/{s}/positions"], cell=golden[f"structure/{s}/cell"], pbc=True)
+        built += [(atoms, types)]
         s += 1
     return built
+
+
+def species_of(pot, types):
+    """The species the potential sees: every atom is species 0 for a single-species potential."""
+    return types if pot.get_species_count() > 1 else numpy.zeros_like(types)
 
 
 def outputs(potentials, cells):
@@ -149,40 +168,59 @@ def outputs(potentials, cells):
 
     for name, pot in potentials.items():
         for s, (atoms, types) in enumerate(cells):
-            result = pot.compute(neighbors(atoms, MAX_DIST, types=types))
+            result = pot.compute(neighbors(atoms, MAX_DIST, types=species_of(pot, types)))
             prefix = f"{name}/s{s}/"
-            for key in ("energy", "eatom", "forces", "virials", "inputs"):
+            for key in ("energy", "eatom", "forces", "virials"):
                 out[prefix + key] = numpy.asarray(result[key], dtype=float64)
+            out[prefix + "inputs"] = numpy.asarray(result["inputs"])[:TENSOR_ATOMS]
             for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
-                out[prefix + f"bonds/{b}"] = numpy.asarray(re_part)
-                out[prefix + f"bonds_im/{b}"] = numpy.asarray(im_part)
+                out[prefix + f"bonds/{b}"] = numpy.asarray(re_part)[:TENSOR_ATOMS]
+                out[prefix + f"bonds_im/{b}"] = numpy.asarray(im_part)[:TENSOR_ATOMS]
     return out
+
+
+def relative_differences(got, want):
+    """Largest difference relative to the array's largest entry, and relative to each row's, floored at 1e-6 of the array's."""
+    got, want = numpy.atleast_2d(got), numpy.atleast_2d(want)
+    if got.ndim > 2:
+        got, want = got.reshape(len(got), -1), want.reshape(len(want), -1)
+    array_max = max(float(numpy.abs(want).max(initial=0.0)), 1e-300)
+    diff = numpy.abs(got - want)
+    scale = numpy.maximum(numpy.abs(want).max(axis=1, initial=0.0), 1e-6 * array_max)
+    return float(diff.max(initial=0.0)) / array_max, float((diff.max(axis=1, initial=0.0) / scale).max(initial=0.0))
+
+
+def self_tests(potentials, cells):
+    """Checks that need no mlip-4, as {name: error}."""
+    atoms, types = cells[1]
+    atoms = atoms.copy()
+    results = {}
+    for name in ("etn-4", "etn-5"):
+        pot = potentials[name]
+        atoms.arrays["type_index"] = species_of(pot, types)
+        results[f"{name} forces"] = check_forces(pot, atoms)
+        results[f"{name} virial"] = check_virial(pot, atoms)
+        results[f"{name} invariance"] = check_invariance(pot, atoms)
+
+    with tempfile.TemporaryDirectory() as workdir:
+        for name, pot in potentials.items():
+            path = Path(workdir) / f"{name}.etn"
+            write_etn(pot, path)
+            back = PairETN(str(path))
+            results[f"{name} round trip"] = float(numpy.abs(params(back) - params(pot)).max()) + (0.0 if back.is_trained() else 1.0)
+
+        path = Path(workdir) / "untrained.etn"
+        path.write_text(template("etn-5"))
+        untrained = PairETN(str(path))
+        initial = numpy.sin(10 + numpy.arange(untrained.get_coeff_count()) ** 2)
+        write_etn(untrained, Path(workdir) / "untrained-back.etn")
+        back = PairETN(str(Path(workdir) / "untrained-back.etn"))
+        results["untrained initial values"] = float(numpy.abs(params(untrained) - initial).max()) + (1.0 if untrained.is_trained() else 0.0)
+        results["untrained round trip"] = float(numpy.abs(params(back) - initial).max()) + (1.0 if back.is_trained() else 0.0)
+    return results
 
 
 # ---------------------------------------------------------------- capture
-
-
-def table_harmonics(source):
-    """mlip-4's Y_lm and their gradients tangent to the sphere, from its monomial table."""
-    text = Path(source).read_text()
-    moments = numpy.array([int(x) for x in re.findall(r"-?\d+", re.search(r"MOMENTS = \{(.*?)\};", text, re.S).group(1))]).reshape(-1, 4)
-    coeffs = numpy.array([float(x) for x in re.search(r"COEFFS\s*=\s*\{(.*?)\};", text, re.S).group(1).replace("{", "").replace("}", "").split(",") if x.strip()])
-    offsets = [int(x) for x in re.search(r"OFFSETS = \{(.*?)\};", text).group(1).split(",")]
-
-    out = {}
-    for k, u in enumerate(directions()):
-        vals, grads = numpy.zeros(HARMONICS_L_COUNT ** 2), numpy.zeros((HARMONICS_L_COUNT ** 2, 3))
-        for (index, a, b, c), w in zip(moments[: offsets[HARMONICS_L_COUNT - 1]], coeffs):
-            powers = numpy.array([a, b, c])
-            vals[index] += w * numpy.prod(u ** powers)
-            for axis in range(3):
-                if powers[axis] > 0:
-                    lowered = powers.copy()
-                    lowered[axis] -= 1
-                    grads[index, axis] += w * powers[axis] * numpy.prod(u ** lowered)
-        grads -= (grads @ u)[:, None] * u
-        out[f"ylm/{k}/vals"], out[f"ylm/{k}/grads"] = vals, grads
-    return out
 
 
 def compile_probe(build_dir, workdir):
@@ -196,16 +234,19 @@ def compile_probe(build_dir, workdir):
 
 def run_probe(probe, pot, cells, workdir):
     """mlip-4's tensors for pot on cells, parsed from the probe's output."""
-    lines = [f"{SPECIES_COUNT} {len(SPECIES_RANKS)} {pot.get_core_count()} {RADIAL_BASIS_SIZE} {MIN_DIST!r} {MAX_DIST!r}"]
-    lines += [" ".join(map(str, SPECIES_RANKS)), " ".join(map(str, RADIAL_FUNCS_COUNTS)), " ".join(map(str, RADIAL_RANKS))]
-    lines += [f"{len(ranks)} " + " ".join(map(str, ranks)) for ranks in pot.get_bond_ranks()]
+    ints = lambda values: " ".join(map(str, values))
+    floats = lambda values: " ".join(repr(float(x)) for x in values)
+    lines = [f"{pot.get_species_count()} {len(pot.get_species_ranks())} {pot.get_core_count()} {RADIAL_BASIS_SIZE} {MIN_DIST!r} {MAX_DIST!r}"]
+    lines += [ints(pot.get_species_ranks()), ints(pot.get_radial_funcs_counts()), ints(pot.get_radial_ranks())]
+    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in pot.get_bond_ranks()]
     coeffs = params(pot)
-    lines += [str(len(coeffs)), " ".join(repr(float(x)) for x in coeffs)]
-    lines += [str(len(PROBE_DISTANCES)), " ".join(map(repr, PROBE_DISTANCES)), str(WIGNER_L_COUNT), str(len(cells))]
+    lines += [str(len(coeffs)), floats(coeffs)]
+    lines += [str(len(PROBE_DISTANCES)), floats(PROBE_DISTANCES), str(WIGNER_L_COUNT)]
+    lines += [f"{HARMONICS_L_COUNT} {len(DIRECTIONS)}"] + [floats(u) for u in directions()]
+    lines += [f"{TENSOR_ATOMS} {len(cells)}"]
     for atoms, types in cells:
-        lines += [str(len(atoms))]
-        lines += [" ".join(repr(float(x)) for x in row) for row in atoms.cell.array]
-        lines += [f"{t} " + " ".join(repr(float(x)) for x in p) for t, p in zip(types, atoms.positions)]
+        lines += [str(len(atoms))] + [floats(row) for row in atoms.cell.array]
+        lines += [f"{t} {floats(p)}" for t, p in zip(species_of(pot, types), atoms.positions)]
     probe_file = Path(workdir) / "probe.txt"
     probe_file.write_text("\n".join(lines) + "\n")
 
@@ -222,11 +263,10 @@ def capture(args):
     from otf_engine.io_cfg import read_cfg
 
     with open(args.cfg) as f:
-        configs = read_cfg(f)[:2]
-    cells = [(atoms, numpy.asarray(atoms.arrays["type_index"], dtype=int32)) for atoms in configs]
+        configs = read_cfg(f)
+    cells = [(configs[k], numpy.asarray(configs[k].arrays["type_index"], dtype=int32)) for k in STRUCTURES]
 
-    source_root = re.search(r"^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$", (Path(args.mlip4_build) / "CMakeCache.txt").read_text(), re.M).group(1)
-    golden = table_harmonics(Path(source_root) / "src/pots/etn/angular_basis.cpp")
+    golden = {}
     for s, (atoms, types) in enumerate(cells):
         golden[f"structure/{s}/positions"] = atoms.positions
         golden[f"structure/{s}/cell"] = atoms.cell.array
@@ -238,12 +278,11 @@ def capture(args):
         for name, pot in potentials.items():
             write_etn(pot, REFERENCE / f"{name}.etn")
             tensors = run_probe(probe, pot, cells, workdir)
-            for key in ("rb_vals", "rb_ders", "wigner_re", "wigner_im"):
-                golden[key] = tensors[key]
-            for s in range(len(cells)):
-                for key, value in tensors.items():
-                    if key.startswith(f"s{s}/"):
-                        golden[f"{name}/{key}"] = value
+            for key, value in tensors.items():
+                if key.startswith("s"):
+                    golden[f"{name}/{key}"] = value
+                else:
+                    golden[key] = value
 
     numpy.savez_compressed(GOLDEN, **golden)
     print(f"captured {len(golden)} arrays to {GOLDEN} ({GOLDEN.stat().st_size / 1024:.0f} KB)")
@@ -255,9 +294,9 @@ def capture(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--capture", action="store_true", help="rewrite the golden values from mlip-4")
-    parser.add_argument("--cfg", help="cfg whose first two structures the capture uses")
+    parser.add_argument("--cfg", help="cfg holding the structures, for the capture")
     parser.add_argument("--mlip4-build", help="mlip-4 build directory, for the capture")
-    parser.add_argument("--tol", type=float, default=TOL, help=f"relative tolerance (default {TOL:g})")
+    parser.add_argument("--tol", type=float, default=TOL, help=f"relative tolerance against mlip-4 (default {TOL:g})")
     args = parser.parse_args()
 
     if args.capture:
@@ -268,8 +307,9 @@ def main():
 
     golden = numpy.load(GOLDEN)
     potentials = {name: PairETN(str(REFERENCE / f"{name}.etn")) for name in POTENTIALS}
-    collected = outputs(potentials, structures(golden))
-    failures, worst = [], 0.0
+    cells = structures(golden)
+    collected = outputs(potentials, cells)
+    failures, worst, worst_row = [], 0.0, 0.0
 
     for name in sorted(collected):
         if name not in golden.files:
@@ -279,21 +319,27 @@ def main():
         if got.shape != want.shape:
             failures += [f"{name}: shape {got.shape} != {want.shape}"]
             continue
-        rel = float(numpy.abs(got - want).max()) / max(float(numpy.abs(want).max()), 1e-300)
-        worst = max(worst, rel)
-        if rel > args.tol:
-            failures += [f"{name}: rel {rel:.3e}"]
+        rel, rel_row = relative_differences(got, want)
+        worst, worst_row = max(worst, rel), max(worst_row, rel_row)
+        if rel > args.tol or rel_row > ROW_TOL:
+            failures += [f"{name}: rel {rel:.3e}, by row {rel_row:.3e}"]
 
     for name in sorted(set(golden.files) - set(collected)):
         if not name.startswith("structure/"):
             failures += [f"{name}: missing from this build"]
 
-    print(f"{len(collected)} arrays checked, worst relative difference {worst:.3e}, tolerance {args.tol:g}")
+    print(f"{len(collected)} arrays checked against mlip-4, worst relative difference {worst:.3e} (tolerance {args.tol:g}), by row {worst_row:.3e} (tolerance {ROW_TOL:g})")
+
+    for name, err in self_tests(potentials, cells).items():
+        print(f"  {name:28s} {err:.3e}")
+        if not err <= SELFTEST_TOL:
+            failures += [f"{name}: {err:.3e} above {SELFTEST_TOL:g}"]
+
     for line in failures[:20]:
         print(f"  FAIL {line}")
     if len(failures) > 20:
         print(f"  ... and {len(failures) - 20} more")
-    print("every tensor matches mlip-4" if not failures else f"{len(failures)} failures")
+    print("every check passes" if not failures else f"{len(failures)} failures")
     return 1 if failures else 0
 
 

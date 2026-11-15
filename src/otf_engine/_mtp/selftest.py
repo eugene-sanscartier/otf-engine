@@ -3,7 +3,8 @@
 Every check returns the largest relative discrepancy between an analytical
 derivative and its central-difference estimate. Values around 1e-6 are what
 a correct implementation gives at the default step; anything above ``tol``
-indicates a real disagreement.
+indicates a real disagreement. check_forces, check_virial and check_invariance
+take any potential whose compute takes a NeighList, PairETN as well.
 """
 
 import numpy
@@ -46,6 +47,49 @@ def check_forces(pot, atoms, step=1e-5, n_atoms=4):
             numeric_forces[i, d] = -(e_plus - e_minus) / (2 * step)
 
     return _rel_error(analytic_forces[:n], numeric_forces)
+
+
+def check_virial(pot, atoms, step=1e-6):
+    """Compare the virial against -dE/d(strain) by central differences.
+
+    The virial's xy is sum_i x_i F_iy, the derivative of -E with respect to the
+    strain that moves y by x; the off-diagonal pairs agree for an invariant potential.
+    """
+    cutoff = pot.get_max_cutoff()
+    analytic_virial = numpy.asarray(pot.compute(neighbors(atoms, cutoff))["virials"], dtype=float64)
+
+    numeric = numpy.zeros((3, 3))
+    for a in range(3):
+        for b in range(3):
+            energies = []
+            for sign in (1, -1):
+                strain = numpy.eye(3)
+                strain[b, a] += sign * step
+                probe = atoms.copy()
+                probe.set_cell(atoms.cell.array @ strain.T, scale_atoms=True)
+                energies += [_energy(pot, probe, cutoff)]
+            numeric[a, b] = -(energies[0] - energies[1]) / (2 * step)
+
+    numeric_virial = [numeric[0, 0], numeric[1, 1], numeric[2, 2], numeric[0, 1], numeric[0, 2], numeric[1, 2]]
+    return _rel_error(analytic_virial, numeric_virial)
+
+
+def check_invariance(pot, atoms, seed=0):
+    """Largest relative change of the energy and the rotated-back forces under a random rotation and its reflection."""
+    cutoff = pot.get_max_cutoff()
+    reference = pot.compute(neighbors(atoms, cutoff))
+    energy, forces = float(reference["energy"]), numpy.asarray(reference["forces"], dtype=float64)
+
+    rotation, _ = numpy.linalg.qr(numpy.random.default_rng(seed).standard_normal((3, 3)))
+    worst = 0.0
+    for transform in (rotation, -rotation):
+        probe = atoms.copy()
+        probe.set_cell(atoms.cell.array @ transform.T)
+        probe.positions = atoms.positions @ transform.T
+        moved = pot.compute(neighbors(probe, cutoff))
+        worst = max(worst, abs(float(moved["energy"]) - energy) / max(abs(energy), 1e-30))
+        worst = max(worst, _rel_error(numpy.asarray(moved["forces"]) @ transform, forces))
+    return worst
 
 
 def _coeff_block(pot, block):
