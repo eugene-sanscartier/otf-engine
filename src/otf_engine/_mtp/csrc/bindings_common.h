@@ -10,6 +10,7 @@
    and, in the _etn_ext module under ../../_etn/csrc/:
      etn_harmonics_bindings.cpp     <- etn_harmonics.{h,cpp}
      etn_potential_bindings.cpp     <- etn_potential.{h,cpp}
+     etn_training_bindings.cpp      <- etn_training.{h,cpp}
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -121,3 +122,4 @@ void bind_trainer(py::module_& m);
 void bind_maxvol(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
 void bind_etn_potential(py::module_& m);
+void bind_etn_training(py::module_& m);

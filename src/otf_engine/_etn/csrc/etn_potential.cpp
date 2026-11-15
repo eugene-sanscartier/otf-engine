@@ -42,12 +42,7 @@ void PairETN::compute(const NeighList& list) {
     const int core_count = get_core_count();
     const int harmonic_count = l_count * l_count;
     const int mixed_size = mixed_offsets[l_count];
-    const int stride = 1 + 4 * harmonic_count + 2 * mixed_size;
     int nbr_offset = 0;
-
-    // The imaginary part of bond b exists for 2 <= b <= d-2, of core i for 1 <= i <= d-2, when d > 3
-    auto bond_has_im = [&](int b) { return has_imaginary_cores() && b >= 2 && b <= core_count - 2; };
-    auto core_has_im = [&](int i) { return has_imaginary_cores() && i >= 1 && i <= core_count - 2; };
 
     energy = 0.0;
     eatom.assign(list.n_atoms, 0.0);
@@ -58,94 +53,15 @@ void PairETN::compute(const NeighList& list) {
 
     // Loop over all provided neighbourhoods
     for (int ii = 0; ii < list.inum; ii++) {
-        int valid_count = 0;
         const int i = list.ilist[ii];
         const int itype = list.types[i];
-        const int jnum = list.numneigh[ii];
-        const int* nbrs = list.firstneigh + nbr_offset;
-        const double* dr = list.displacements + nbr_offset * 3;
-        nbr_offset += jnum;
-
-        // Resize per neighbor arrays
-        if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * stride);
-            cached_j.resize(jnum);
-            valid_dr.resize(jnum);
-            cache_size = jnum;
-        }
-
-        // ------------ Calculate the Input Vector ------------
         double* v = inputs.data() + (size_t) ii * input_shape.size;
-        v[0] = 1.0;
-        for (int jj = 0; jj < jnum; jj++) {
-            const int j = nbrs[jj];
-            const int jtype = list.types[j];
-            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
-            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-
-            if (rsq >= max_cutoff_sq) continue;
-            cached_j[valid_count] = j;
-            valid_dr[valid_count] = {r[0], r[1], r[2]};
-
-            const double dist = std::sqrt(rsq);
-            const double inv_dist = 1.0 / dist;
-            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            double* cache = neighbor_cache.data() + (size_t) valid_count * stride;
-            cache[0] = inv_dist;
-            double* ylm = cache + 1;
-            double* ylm_grads = ylm + harmonic_count;
-            double* mixed = ylm_grads + 3 * harmonic_count;
-            double* mixed_ders = mixed + mixed_size;
-            valid_count++;
-
-            radial_basis->calc_radial_basis_ders(dist);
-            const double* basis_vals = radial_basis->radial_basis_vals.data();
-            const double* basis_ders = radial_basis->radial_basis_ders.data();
-            harmonics.compute(u);
-            std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
-            std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
-
-            for (int l = 0; l < l_count; l++) {
-                const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
-                const double* s = radial_mixing[l].data() + (size_t) (itype * species_count + jtype) * n_rad * rank_r;
-                double* b = mixed + mixed_offsets[l];
-                double* db = mixed_ders + mixed_offsets[l];
-                for (int n = 0; n < rank_r; n++) {
-                    double val = 0, der = 0;
-                    for (int np = 0; np < n_rad; np++) {
-                        val += basis_vals[np] * s[np * rank_r + n];
-                        der += basis_ders[np] * s[np * rank_r + n];
-                    }
-                    b[n] = val;
-                    db[n] = der;
-                }
-                const int shift = l == 0 ? 1 : 0;
-                for (int m = -l; m <= l; m++) {
-                    const double y = ylm[l * l + l + m];
-                    double* pv = v + input_shape.index(l, m) + shift;
-                    for (int n = 0; n < rank_r; n++) pv[n] += y * b[n];
-                }
-            }
-        }
+        const int valid_count = site_input(list, ii, nbr_offset, v);
+        nbr_offset += list.numneigh[ii];
 
         // ------------ Tensor Train, Forwards ------------
         double* bond = bonds.data() + (size_t) ii * bonds_size;
-        bond[bond_offsets[0]] = 1.0;
-        for (int c = 0; c < core_count; c++) {
-            const CovariantShape& left = bond_shapes[c];
-            const CovariantShape& right = bond_shapes[c + 1];
-            const double* in_re = bond + bond_offsets[c];
-            const double* in_im = in_re + left.size;
-            double* out_re = bond + bond_offsets[c + 1];
-            double* out_im = out_re + right.size;
-
-            contract(cores[c], core_coeffs[c].data(), left, right, in_re, v, out_re);
-            if (bond_has_im(c) && bond_has_im(c + 1)) contract(cores[c], core_coeffs[c].data(), left, right, in_im, v, out_im);
-            if (core_has_im(c)) {
-                if (bond_has_im(c)) contract(cores_im[c], core_coeffs_im[c].data(), left, right, in_im, v, out_re);
-                if (bond_has_im(c + 1)) contract(cores_im[c], core_coeffs_im[c].data(), left, right, in_re, v, out_im);
-            }
-        }
+        train_forward(v, bond);
 
         const double nbh_energy = bond[bond_offsets[core_count]] + species_coeffs[itype];
         eatom[i] += nbh_energy;
@@ -155,29 +71,13 @@ void PairETN::compute(const NeighList& list) {
         std::fill(bond_adj.begin(), bond_adj.end(), 0.0);
         std::fill(input_adj.begin(), input_adj.end(), 0.0);
         bond_adj[bond_offsets[core_count]] = 1.0;
-        for (int c = core_count - 1; c >= 0; c--) {
-            const CovariantShape& left = bond_shapes[c];
-            const CovariantShape& right = bond_shapes[c + 1];
-            const double* in_re = bond + bond_offsets[c];
-            const double* in_im = in_re + left.size;
-            double* in_re_adj = bond_adj.data() + bond_offsets[c];
-            double* in_im_adj = in_re_adj + left.size;
-            const double* out_re_adj = bond_adj.data() + bond_offsets[c + 1];
-            const double* out_im_adj = out_re_adj + right.size;
-
-            contract_adjoint(cores[c], core_coeffs[c].data(), left, right, in_re, v, out_re_adj, in_re_adj, input_adj.data());
-            if (bond_has_im(c) && bond_has_im(c + 1)) contract_adjoint(cores[c], core_coeffs[c].data(), left, right, in_im, v, out_im_adj, in_im_adj, input_adj.data());
-            if (core_has_im(c)) {
-                if (bond_has_im(c)) contract_adjoint(cores_im[c], core_coeffs_im[c].data(), left, right, in_im, v, out_re_adj, in_im_adj, input_adj.data());
-                if (bond_has_im(c + 1)) contract_adjoint(cores_im[c], core_coeffs_im[c].data(), left, right, in_re, v, out_im_adj, in_re_adj, input_adj.data());
-            }
-        }
+        train_backward(v, bond, bond_adj.data(), input_adj.data(), nullptr, nullptr);
 
         // ------------ Forces Through the Input Vector ------------
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const double* r = valid_dr[jj].data();
-            const double* cache = neighbor_cache.data() + (size_t) jj * stride;
+            const double* cache = neighbor_cache.data() + (size_t) jj * cache_stride;
             const double inv_dist = cache[0];
             const double* ylm = cache + 1;
             const double* ylm_grads = ylm + harmonic_count;
@@ -228,8 +128,111 @@ void PairETN::compute(const NeighList& list) {
 }
 
 /* ----------------------------------------------------------------------
-   One core applied to (u, v), added into out, and its adjoint.
+   The input vector of one central atom, and the tensor train each way.
 ------------------------------------------------------------------------- */
+int PairETN::site_input(const NeighList& list, int ii, int nbr_offset, double* v) {
+    const int l_count = (int) species_ranks.size();
+    const int harmonic_count = l_count * l_count;
+    const int mixed_size = mixed_offsets[l_count];
+    const int i = list.ilist[ii];
+    const int itype = list.types[i];
+    const int jnum = list.numneigh[ii];
+    const int* nbrs = list.firstneigh + nbr_offset;
+    const double* dr = list.displacements + nbr_offset * 3;
+    int valid_count = 0;
+
+    // Resize per neighbor arrays
+    if (cache_size < jnum) {
+        neighbor_cache.resize((size_t) jnum * cache_stride);
+        cached_j.resize(jnum);
+        valid_dr.resize(jnum);
+        cache_size = jnum;
+    }
+
+    std::fill(v, v + input_shape.size, 0.0);
+    v[0] = 1.0;
+    for (int jj = 0; jj < jnum; jj++) {
+        const int j = nbrs[jj];
+        const int jtype = list.types[j];
+        const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
+        const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+
+        if (rsq >= max_cutoff_sq) continue;
+        cached_j[valid_count] = j;
+        valid_dr[valid_count] = {r[0], r[1], r[2]};
+
+        const double dist = std::sqrt(rsq);
+        const double inv_dist = 1.0 / dist;
+        const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+        double* cache = neighbor_cache.data() + (size_t) valid_count * cache_stride;
+        cache[0] = inv_dist;
+        double* ylm = cache + 1;
+        double* ylm_grads = ylm + harmonic_count;
+        double* mixed = ylm_grads + 3 * harmonic_count;
+        double* mixed_ders = mixed + mixed_size;
+        valid_count++;
+
+        radial_basis->calc_radial_basis_ders(dist);
+        const double* basis_vals = radial_basis->radial_basis_vals.data();
+        const double* basis_ders = radial_basis->radial_basis_ders.data();
+        harmonics.compute(u);
+        std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
+        std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
+
+        for (int l = 0; l < l_count; l++) {
+            const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
+            const double* s = radial_mixing[l].data() + (size_t) (itype * species_count + jtype) * n_rad * rank_r;
+            double* b = mixed + mixed_offsets[l];
+            double* db = mixed_ders + mixed_offsets[l];
+            for (int n = 0; n < rank_r; n++) {
+                double val = 0, der = 0;
+                for (int np = 0; np < n_rad; np++) {
+                    val += basis_vals[np] * s[np * rank_r + n];
+                    der += basis_ders[np] * s[np * rank_r + n];
+                }
+                b[n] = val;
+                db[n] = der;
+            }
+            const int shift = l == 0 ? 1 : 0;
+            for (int m = -l; m <= l; m++) {
+                const double y = ylm[l * l + l + m];
+                double* pv = v + input_shape.index(l, m) + shift;
+                for (int n = 0; n < rank_r; n++) pv[n] += y * b[n];
+            }
+        }
+    }
+    return valid_count;
+}
+
+void PairETN::train_forward(const double* v, double* bond) const {
+    std::fill(bond, bond + bonds_size, 0.0);
+    bond[bond_offsets[0]] = 1.0;
+    for (int c = 0; c < get_core_count(); c++) {
+        const CovariantShape& left = bond_shapes[c];
+        const CovariantShape& right = bond_shapes[c + 1];
+        for (const CoreTerm& t : core_terms[c]) {
+            const Core& core = t.imaginary ? cores_im[c] : cores[c];
+            const double* coeffs = t.imaginary ? core_coeffs_im[c].data() : core_coeffs[c].data();
+            contract(core, coeffs, left, right, bond + bond_offsets[c] + t.in_part * left.size, v, bond + bond_offsets[c + 1] + t.out_part * right.size);
+        }
+    }
+}
+
+void PairETN::train_backward(const double* v, const double* bond, double* bond_adj, double* v_adj, double* const* core_adj, double* const* core_im_adj) const {
+    for (int c = get_core_count() - 1; c >= 0; c--) {
+        const CovariantShape& left = bond_shapes[c];
+        const CovariantShape& right = bond_shapes[c + 1];
+        for (const CoreTerm& t : core_terms[c]) {
+            const Core& core = t.imaginary ? cores_im[c] : cores[c];
+            const double* coeffs = t.imaginary ? core_coeffs_im[c].data() : core_coeffs[c].data();
+            double* c_adj = core_adj ? (t.imaginary ? core_im_adj[c] : core_adj[c]) : nullptr;
+            const int in = bond_offsets[c] + t.in_part * left.size;
+            const int out = bond_offsets[c + 1] + t.out_part * right.size;
+            contract_adjoint(core, coeffs, left, right, bond + in, v, bond_adj + out, bond_adj + in, v_adj, c_adj);
+        }
+    }
+}
+
 void PairETN::contract(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const {
     for (const CoreBlock& block : core.blocks) {
         const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
@@ -253,7 +256,7 @@ void PairETN::contract(const Core& core, const double* c, const CovariantShape& 
     }
 }
 
-void PairETN::contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj) const {
+void PairETN::contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const {
     for (const CoreBlock& block : core.blocks) {
         const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
         for (int e = block.w_begin; e < block.w_end; e++) {
@@ -263,9 +266,9 @@ void PairETN::contract_adjoint(const Core& core, const double* c, const Covarian
             for (int n3 = 0; n3 < n3_count; n3++) {
                 const double g = w.w * po[n3];
                 if (g == 0.0) continue;
-                const double* c3 = c + block.base + n3 * block.stride3;
+                const int c3 = block.base + n3 * block.stride3;
                 for (int n2 = 0; n2 < n2_count; n2++) {
-                    const double* c2 = c3 + n2 * block.stride2;
+                    const double* c2 = c + c3 + n2 * block.stride2;
                     const double gv = g * v[iv + n2];
                     double t = 0;
                     for (int n1 = 0; n1 < n1_count; n1++) {
@@ -273,6 +276,10 @@ void PairETN::contract_adjoint(const Core& core, const double* c, const Covarian
                         u_adj[iu + n1] += gv * c2[n1];
                     }
                     v_adj[iv + n2] += g * t;
+                    if (c_adj) {
+                        double* a2 = c_adj + c3 + n2 * block.stride2;
+                        for (int n1 = 0; n1 < n1_count; n1++) a2[n1] += gv * u[iu + n1];
+                    }
                 }
             }
         }
@@ -479,6 +486,18 @@ void PairETN::prepare_cores() {
         for (int c = 1; c < core_count - 1; c++)
             cores_im[c] = prepare_core(c, true);
 
+    // With more than 3 cores, bond b has an imaginary part for 2 <= b <= d-2 and core c for
+    // 1 <= c <= d-2; they combine as mlip-4's ComposeETTProgram combines them.
+    auto bond_has_im = [&](int b) { return has_imaginary_cores() && b >= 2 && b <= core_count - 2; };
+    auto core_has_im = [&](int c) { return has_imaginary_cores() && c >= 1 && c <= core_count - 2; };
+    core_terms.assign(core_count, {});
+    for (int c = 0; c < core_count; c++) {
+        core_terms[c].push_back({false, 0, 0});
+        if (bond_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({false, 1, 1});
+        if (core_has_im(c) && bond_has_im(c)) core_terms[c].push_back({true, 1, 0});
+        if (core_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({true, 0, 1});
+    }
+
     core_coeffs.resize(core_count);
     core_coeffs_im.resize(core_count);
     for (int c = 0; c < core_count; c++) {
@@ -487,6 +506,7 @@ void PairETN::prepare_cores() {
     }
     species_coeffs.resize(species_count);
 
+    cache_stride = 1 + 4 * l_count * l_count + 2 * mixed_offsets[l_count];
     input_adj.resize(input_shape.size);
     bond_adj.resize(bonds_size);
 }

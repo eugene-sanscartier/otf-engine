@@ -42,6 +42,13 @@ struct Core {
     std::vector<CoreBlock> blocks;
 };
 
+// One term of a core: its real or imaginary part applied to one part (0 real, 1 imaginary) of
+// bond i, added into one part of bond i + 1.
+struct CoreTerm {
+    bool imaginary;
+    int in_part, out_part;
+};
+
 class PairETN {
   public:
     // Reads an ETN potential file (version 1.0.0).
@@ -107,8 +114,19 @@ class PairETN {
     void prepare_cores();
     Core prepare_core(int i, bool imaginary);
     void prepare_radial_mixing();
+
+    // The input vector v of central atom ii, whose neighbors start at nbr_offset in list; fills
+    // cached_j, valid_dr and neighbor_cache, and returns the count of neighbors within the cutoff.
+    int site_input(const NeighList& list, int ii, int nbr_offset, double* v);
+    // The bond vectors of v, into bond [bonds_size], from bond 0 = 1.
+    void train_forward(const double* v, double* bond) const;
+    // From bond_adj, the adjoint of bond, adds the adjoints of v into v_adj and, when core_adj and
+    // core_im_adj are given ([core] pointers to each part's coefficient adjoints), of the cores.
+    void train_backward(const double* v, const double* bond, double* bond_adj, double* v_adj, double* const* core_adj, double* const* core_im_adj) const;
+
+    // One core part applied to (u, v), added into out, and its adjoint; c_adj may be null.
     void contract(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const;
-    void contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj) const;
+    void contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const;
 
     std::string potential_name = "Untitled";
     std::string radial_basis_type;
@@ -141,6 +159,7 @@ class PairETN {
     // Tensor-train layout
     std::vector<Core> cores;                // [core_count]
     std::vector<Core> cores_im;             // [core_count]
+    std::vector<std::vector<CoreTerm>> core_terms;  // [core_count] the parts each core applies
     std::vector<WignerEntry> wigner;        // the 3-j symbols the blocks point into
     CovariantShape input_shape{{1}};        // v, with the constant 1 ahead of the l = 0 channels
     std::vector<CovariantShape> bond_shapes;
@@ -167,7 +186,8 @@ class PairETN {
 
     // Cache values between forwards and backwards pass
     int cache_size = 0;
+    int cache_stride = 0;                         // 1 + 4 * l_count^2 + 2 * radial-rank channels
     std::vector<int> cached_j;                    // [cache_size]
     std::vector<std::array<double, 3>> valid_dr;  // [cache_size] displacement of each cached neighbor
-    std::vector<double> neighbor_cache;           // [cache_size * stride] 1/dist, Y, grad Y, radial channels and their ders
+    std::vector<double> neighbor_cache;           // [cache_size * cache_stride] 1/dist, Y, grad Y, radial channels and their ders
 };

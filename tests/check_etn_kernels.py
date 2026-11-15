@@ -4,13 +4,15 @@ Every tensor `PairETN` computes is compared with golden values in `etn_reference
 that mlip-4 computed: the radial basis and its derivatives, the real spherical
 harmonics and their gradients, the dense real and imaginary 3-j tables, and,
 for six potentials on three NiSi structures, the energy, forces and virial,
-each atom's site energy, and the first atoms' input and bond vectors. The
+each atom's site energy, the first atoms' input and bond vectors, the gradient
+of a loss with seeded derivatives, and the first atoms' site-energy gradients. The
 potentials span 1 to 5 cores, l up to 4, bonds with more l than the input,
 zero ranks and a single species. Each array is compared relative to its
 largest entry, and each row, at a looser tolerance, relative to its own.
 
-Then, without mlip-4: forces and virial against finite differences, invariance
-under rotation and reflection, the .etn round trip, and the untrained file.
+Then, without mlip-4: forces, virial and the loss gradient against finite
+differences, invariance under rotation and reflection, the .etn round trip,
+and the untrained file.
 
     python tests/check_etn_kernels.py
         check this build
@@ -32,7 +34,7 @@ import numpy
 from ase import Atoms
 from numpy import float64, int32
 
-from otf_engine._etn import PairETN, real_harmonics, real_wigner_3j, write_etn
+from otf_engine._etn import ETNTraining, PairETN, real_harmonics, real_wigner_3j, write_etn
 from otf_engine._mtp.neighbors import neighbors
 from otf_engine._mtp.selftest import check_forces, check_invariance, check_virial
 
@@ -46,6 +48,7 @@ SELFTEST_TOL = 1e-6
 # Structures of the cfg: one Ni; two Ni 3.7 A apart; a distant frame
 STRUCTURES = [0, 2410, 17763]
 TENSOR_ATOMS = 24  # input and bond vectors are kept for the first atoms, the Ni among them
+GRAD_ATOMS = 6  # site-energy gradients are kept for the first atoms
 MIN_DIST, MAX_DIST, RADIAL_BASIS_SIZE = 1.0, 5.0, 6
 # name: species count, species ranks, radial function counts, radial ranks (per l of the input), bond ranks
 POTENTIALS = {
@@ -142,6 +145,12 @@ def species_of(pot, types):
     return types if pot.get_species_count() > 1 else numpy.zeros_like(types)
 
 
+def loss_seeds(s, n_atoms):
+    """Seeded derivatives of a loss with respect to structure s's energy, virial (xx, yy, zz, xy, xz, yz) and forces."""
+    rng = numpy.random.default_rng(100 + s)
+    return float(rng.standard_normal()), rng.standard_normal(6), rng.standard_normal((n_atoms, 3))
+
+
 def outputs(potentials, cells):
     """Every tensor of this build, keyed as the golden values."""
     out = {}
@@ -168,7 +177,8 @@ def outputs(potentials, cells):
 
     for name, pot in potentials.items():
         for s, (atoms, types) in enumerate(cells):
-            result = pot.compute(neighbors(atoms, MAX_DIST, types=species_of(pot, types)))
+            nl = neighbors(atoms, MAX_DIST, types=species_of(pot, types))
+            result = pot.compute(nl)
             prefix = f"{name}/s{s}/"
             for key in ("energy", "eatom", "forces", "virials"):
                 out[prefix + key] = numpy.asarray(result[key], dtype=float64)
@@ -176,7 +186,39 @@ def outputs(potentials, cells):
             for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
                 out[prefix + f"bonds/{b}"] = numpy.asarray(re_part)[:TENSOR_ATOMS]
                 out[prefix + f"bonds_im/{b}"] = numpy.asarray(im_part)[:TENSOR_ATOMS]
+            dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(s, len(atoms))
+            out[prefix + "loss_grad"] = numpy.asarray(pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial))
+            out[prefix + "grad"] = numpy.asarray(pot.eval_grad(nl))[:GRAD_ATOMS]
     return out
+
+
+def check_loss_grad(pot, atoms, types, step=1e-5):
+    """Largest relative error of eval_loss_grad along a random direction in each coefficient block, against central differences."""
+    nl = neighbors(atoms, MAX_DIST, types=species_of(pot, types))
+    dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(0, len(atoms))
+    coeffs = pot.get_coeffs()
+
+    def loss(c):
+        pot.set_coeffs(c)
+        result = pot.compute(nl)
+        return dloss_denergy * result["energy"] + (dloss_dforces * result["forces"]).sum() + (dloss_dvirial * result["virials"]).sum()
+
+    pot.set_coeffs(coeffs)
+    grad = pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial)
+    rng = numpy.random.default_rng(0)
+    sizes = [len(get_block(pot, kind, arg)) for kind, arg in coeff_blocks(pot)]
+    worst, offset = 0.0, 0
+    for size in sizes:
+        direction = numpy.zeros_like(coeffs)
+        direction[offset : offset + size] = rng.standard_normal(size)
+        offset += size
+        analytic = grad @ direction
+        if size == 0 or analytic == 0.0:
+            continue
+        numeric = (loss(coeffs + step * direction) - loss(coeffs - step * direction)) / (2 * step)
+        worst = max(worst, abs(numeric - analytic) / abs(analytic))
+    pot.set_coeffs(coeffs)
+    return worst
 
 
 def relative_differences(got, want):
@@ -201,6 +243,8 @@ def self_tests(potentials, cells):
         results[f"{name} forces"] = check_forces(pot, atoms)
         results[f"{name} virial"] = check_virial(pot, atoms)
         results[f"{name} invariance"] = check_invariance(pot, atoms)
+    # The imaginary cores' derivatives are 1e-7 of the loss, below what differences resolve
+    results["etn-3 loss gradient"] = check_loss_grad(potentials["etn-3"], *cells[1])
 
     with tempfile.TemporaryDirectory() as workdir:
         for name, pot in potentials.items():
@@ -243,10 +287,12 @@ def run_probe(probe, pot, cells, workdir):
     lines += [str(len(coeffs)), floats(coeffs)]
     lines += [str(len(PROBE_DISTANCES)), floats(PROBE_DISTANCES), str(WIGNER_L_COUNT)]
     lines += [f"{HARMONICS_L_COUNT} {len(DIRECTIONS)}"] + [floats(u) for u in directions()]
-    lines += [f"{TENSOR_ATOMS} {len(cells)}"]
-    for atoms, types in cells:
+    lines += [f"{TENSOR_ATOMS} {GRAD_ATOMS} {len(cells)}"]
+    for s, (atoms, types) in enumerate(cells):
         lines += [str(len(atoms))] + [floats(row) for row in atoms.cell.array]
         lines += [f"{t} {floats(p)}" for t, p in zip(species_of(pot, types), atoms.positions)]
+        dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(s, len(atoms))
+        lines += [floats([dloss_denergy]), floats(dloss_dvirial)] + [floats(row) for row in dloss_dforces]
     probe_file = Path(workdir) / "probe.txt"
     probe_file.write_text("\n".join(lines) + "\n")
 
@@ -306,7 +352,7 @@ def main():
         return 0
 
     golden = numpy.load(GOLDEN)
-    potentials = {name: PairETN(str(REFERENCE / f"{name}.etn")) for name in POTENTIALS}
+    potentials = {name: ETNTraining(str(REFERENCE / f"{name}.etn")) for name in POTENTIALS}
     cells = structures(golden)
     collected = outputs(potentials, cells)
     failures, worst, worst_row = [], 0.0, 0.0

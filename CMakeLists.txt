@@ -72,9 +72,11 @@ pybind11_add_module(_etn_ext
     ${ETN_CSRC}/etn_radial_basis.cpp
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/etn_potential.cpp
+    ${ETN_CSRC}/etn_training.cpp
     ${ETN_CSRC}/etn_bindings.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/etn_potential_bindings.cpp
+    ${ETN_CSRC}/etn_training_bindings.cpp
 )
 target_include_directories(_etn_ext PRIVATE ${ETN_CSRC})
 target_link_libraries(_etn_ext PRIVATE mtp_core Eigen3::Eigen)

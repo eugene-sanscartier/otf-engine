@@ -5,8 +5,10 @@
    shape and params, probe distances, directions and structures, and prints
    every tensor mlip-4 computes for them: the radial basis, the real 3-j
    tables, the real harmonics and their gradients, and per structure the
-   energy, forces and stress of mlip-4's CalcCfg, each atom's site energy,
-   and the first atoms' input and bond vectors. Those come from mlip-4's own
+   energy, forces and stress of mlip-4's CalcCfg and its gradient of a loss
+   with given derivatives (CalcCfg::AccumulateGrads), each atom's site energy,
+   the first atoms' site-energy gradients (AccumulateSiteEnergyGrads), and
+   the first atoms' input and bond vectors. Those come from mlip-4's own
    program, recomposed by ETNProbe below as ETN::ComposeETTProgram composes
    it with the bond vectors kept as outputs; the probe fails if a site
    energy of the recomposed program departs from the original's.
@@ -349,10 +351,11 @@ int main(int argc, char** argv) {
     for (auto& d : directions) in >> d[0] >> d[1] >> d[2];
     print_harmonics(harmonics_l_count, directions);
 
-    // Structures: tensors are printed for the first tensor_atoms atoms; then n_atoms, cell rows,
-    // and type x y z per atom
-    size_t tensor_atoms, structure_count;
-    in >> tensor_atoms >> structure_count;
+    // Structures: tensors are printed for the first tensor_atoms atoms and site-energy gradients
+    // for the first grad_atoms; then n_atoms, cell rows, type x y z per atom, and the loss
+    // derivatives
+    size_t tensor_atoms, grad_atoms, structure_count;
+    in >> tensor_atoms >> grad_atoms >> structure_count;
     for (size_t s = 0; s < structure_count; s++) {
         size_t n_atoms;
         in >> n_atoms;
@@ -377,6 +380,10 @@ int main(int argc, char** argv) {
         Cfg cfg;
         cfg.FromString(json.str());
 
+        // The loss derivatives: energy, virial (xx, yy, zz, xy, xz, yz), then forces per atom
+        std::vector<double> loss_seeds(1 + 6 + 3 * n_atoms);
+        for (auto& x : loss_seeds) in >> x;
+
         // Energy, forces and stress from mlip-4's own CalcCfg
         CalcCfg calc(cfg, true, true);
         calc.AttachPot(plain);
@@ -386,10 +393,17 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < n_atoms; i++)
             for (int a = 0; a < 3; a++) folded[i * 3 + a] = calc.get_forces()[i][a];
 
+        // The loss gradient from CalcCfg::AccumulateGrads, whose results are the energy, the
+        // stress (xx, yy, zz, yz, xz, xy) and the forces
+        std::vector<double> grad_over_results = {loss_seeds[0], loss_seeds[1], loss_seeds[2], loss_seeds[3], loss_seeds[6], loss_seeds[5], loss_seeds[4]};
+        grad_over_results.insert(grad_over_results.end(), loss_seeds.begin() + 7, loss_seeds.end());
+        std::vector<double> loss_grad(param_count, 0.0);
+        calc.AccumulateGrads(grad_over_results.data(), loss_grad.data());
+
         // Per atom: the input and bond vectors from the recomposed program, and the site energy,
         // checked against the original program's
         ExtCfg ext(cfg, max_dist);
-        std::vector<double> inputs, eatom;
+        std::vector<double> inputs, eatom, site_grads;
         std::vector<std::vector<double>> bonds_re(core_count + 1), bonds_im(core_count + 1);
         auto& exe = *etn.exe_tensors;
         for (const auto& nbh : ext.nbhs()) {
@@ -425,6 +439,11 @@ int main(int argc, char** argv) {
             }
 
             if (nbh.my_ind() >= tensor_atoms) continue;
+            if (nbh.my_ind() < grad_atoms) {
+                std::vector<double> row(param_count, 0.0);
+                plain->AccumulateSiteEnergyGrads(nbh, row.data());
+                site_grads.insert(site_grads.end(), row.begin(), row.end());
+            }
             inputs.insert(inputs.end(), input.begin(), input.end());
             for (size_t b = 0; b <= core_count; b++) {
                 bonds_re[b].insert(bonds_re[b].end(), re[b].begin(), re[b].end());
@@ -444,6 +463,8 @@ int main(int argc, char** argv) {
             print(prefix + "bonds/" + std::to_string(b), {kept, bonds_re[b].size() / kept}, bonds_re[b]);
             print(prefix + "bonds_im/" + std::to_string(b), {kept, bonds_im[b].size() / kept}, bonds_im[b]);
         }
+        print(prefix + "loss_grad", {param_count}, loss_grad);
+        print(prefix + "grad", {std::min(grad_atoms, n_atoms), param_count}, site_grads);
     }
     return 0;
 }
