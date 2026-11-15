@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   mlip-4's active learning on an ETN, for check_etn_selection.py.
+   mlip-4's active learning on an ETN, for tests/test_etn_selection.py.
 
-   Reads a selection file (written by check_etn_selection.py) holding the
+   Reads a selection file (written by test_etn_selection.py) holding the
    ETN's shape and params, the selection mode (0 cfg, 1 nbh), the training
    structures and the candidates; then, as mlip-4's CfgCalc does:
      - builds the active set on the training structures (UpdateActiveSet);
@@ -14,7 +14,7 @@
      selected K : the selected candidates' indices
      log_det_after : log |det A| in base n, after the selection
 
-   Build against a compiled mlip-4 (see check_etn_kernels.py).
+   Build against a compiled mlip-4 (see tests/etn_potentials.py).
 ------------------------------------------------------------------------- */
 
 #include "pch.h"

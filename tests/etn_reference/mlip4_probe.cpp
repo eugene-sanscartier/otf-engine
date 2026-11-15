@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   mlip-4's ETN tensors for check_etn_kernels.py --capture.
+   mlip-4's ETN tensors for tests/test_etn_kernels.py --recapture.
 
-   Reads a probe file (written by check_etn_kernels.py) holding the ETN's
+   Reads a probe file (written by test_etn_kernels.py) holding the ETN's
    shape and params, probe distances, directions and structures, and prints
    every tensor mlip-4 computes for them: the radial basis, the real 3-j
    tables, the real harmonics and their gradients, and per structure the
@@ -13,7 +13,7 @@
    it with the bond vectors kept as outputs; the probe fails if a site
    energy of the recomposed program departs from the original's.
 
-   Build against a compiled mlip-4 (see check_etn_kernels.py).
+   Build against a compiled mlip-4 (see tests/etn_potentials.py).
 ------------------------------------------------------------------------- */
 
 #include "pch.h"

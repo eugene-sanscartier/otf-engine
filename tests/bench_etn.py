@@ -1,6 +1,6 @@
 """Benchmark of the ETN against mlip-4: evaluation, a loss gradient, and a training run.
 
-On the first N structures of a cfg, for the 3-core and the 5-core potentials of check_etn_kernels
+On the first N structures of a cfg, for the 3-core and the 5-core potentials of test_etn_kernels
 (etn_reference/etn-3.etn and etn-5.etn), on one thread, it reports in ms:
 
   eval       energy, forces and virial of one structure: PairETN.compute on a built neighbor list,
@@ -25,14 +25,15 @@ from pathlib import Path
 
 import numpy
 
-import check_etn_kernels as kernels
-import check_etn_training as training
+import etn_potentials as kernels
+import test_etn_trainer as training
+from conftest import ETN_REFERENCE
 from otf_engine._etn import ETNTraining, train_etn
 from otf_engine._core import neighbors
 from otf_engine.io_cfg import read_cfg
 from otf_engine.train import training_structure
 
-BENCH_SOURCE = kernels.REFERENCE / "mlip4_bench.cpp"
+BENCH_SOURCE = ETN_REFERENCE / "mlip4_bench.cpp"
 
 
 def ours(pot, labelled, repeats):
@@ -88,9 +89,9 @@ def main():
 
     with tempfile.TemporaryDirectory() as workdir:
         bench = kernels.compile_probe(args.mlip4_build, workdir, BENCH_SOURCE)
-        trainer = kernels.compile_probe(args.mlip4_build, workdir, training.PROBE_SOURCE)
+        trainer = kernels.compile_probe(args.mlip4_build, workdir, ETN_REFERENCE / "mlip4_train.cpp")
         for name in args.potentials:
-            pot = ETNTraining(str(kernels.REFERENCE / f"{name}.etn"))
+            pot = ETNTraining(str(ETN_REFERENCE / f"{name}.etn"))
             labelled = [(atoms, training_structure(atoms, pot.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
             settings = dict(training.SETTINGS, pretrain=False, max_iter_count=args.iterations)
             training_file = Path(workdir) / f"{name}.txt"

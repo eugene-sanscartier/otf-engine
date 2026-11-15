@@ -61,6 +61,11 @@ def mlip3(request):
 
 
 @pytest.fixture(scope="session")
+def mlip4_build(request):
+    return Path(request.config.getoption("--mlip4-build"))
+
+
+@pytest.fixture(scope="session")
 def mlip3_probe(recapture, mlip3, tmp_path_factory):
     """mlip3_probe.cpp compiled with mlip-3's serial sources, under --recapture only."""
     if not recapture:

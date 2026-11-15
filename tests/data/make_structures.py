@@ -1,4 +1,4 @@
-"""Writes the synthetic structures of the tests, labelled by the level-16 teacher potential.
+"""Writes the synthetic structures of the tests, labelled by the level-16 teacher potential with its species energies left out.
 
 structures.cfg: 6 sheared periodic cells of 8 to 12 atoms of species 0, 1 and 2, the first without stress.
 candidates.cfg: 7 cells to grade and select against the first: structures 1 and 4 rattled by 0.2 A, 2 by 0.01 A and 5
@@ -44,10 +44,13 @@ def random_cell(rng, n_atoms, species):
 
 
 def labelled(atoms, teacher, stress=True):
+    """atoms with the teacher's forces, stress and energy, the energy less the teacher's species energies: a cohesive
+    energy of a few eV per atom, which an untrained potential starts nearer to than the reference code's absolute one."""
     atoms.calc = PotentialCalculator(teacher)
     properties = ["energy", "forces"] + (["stress"] if stress else [])
     atoms.calc.calculate(atoms, properties)
     results = {key: atoms.calc.results[key] for key in properties}
+    results["energy"] -= numpy.sum(numpy.asarray(teacher.get_species_coeffs())[atoms.arrays["type_index"]])
     atoms.calc.results = results
     return atoms
 

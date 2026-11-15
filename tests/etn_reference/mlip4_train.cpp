@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   mlip-4's Train on an ETN, for check_etn_training.py.
+   mlip-4's Train on an ETN, for tests/test_etn_trainer.py.
 
-   Reads a training file (written by check_etn_training.py) holding the
+   Reads a training file (written by test_etn_trainer.py) holding the
    ETN's shape and params, the loss weights, mlip-4's training settings and
    the structures with their reference energy, virial (when given) and
    forces; builds
@@ -10,7 +10,7 @@
    trained params follow on a line "@ params N : values". Given JIT 1, the
    ETN runs mlip-4's JIT-compiled code in place of its VM.
 
-   Build against a compiled mlip-4 (see check_etn_training.py).
+   Build against a compiled mlip-4 (see tests/etn_potentials.py).
 ------------------------------------------------------------------------- */
 
 #include "pch.h"
