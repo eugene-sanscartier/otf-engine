@@ -48,6 +48,7 @@ GOLDEN = kernels.REFERENCE / "training.npz"
 STRUCTURES = [0, 1]
 SETTINGS = {"max_iter_count": 1000, "max_func_eval": 10000, "linstop": 5e-4, "rescale": True, "pretrain": True, "wolfe_c1": 0.1, "wolfe_c2": 0.5, "bfgs_max_iters_no_improve": 10}
 WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
+MLP_NAMES = {"max_iter_count": "iteration_limit", "linstop": "tolerance"}    # train_etn's names of mlip-4's settings
 # name: potential, settings, structures, ranks (one, a thread per structure, or an MPI rank per structure), the
 # mlip-4 fit it is compared with, and the steps compared (None for all, and the trained potential with them)
 CASES = {
@@ -90,6 +91,14 @@ def structures(golden):
         atoms.calc = SinglePointCalculator(atoms, **results)
         built += [atoms]
     return built
+
+
+def trainer_options(settings, log):
+    """mlip-4's *settings* and the weights as train_etn takes them: strings, under mlp's names where mlp has the
+    setting, pretrain inverted as skip_preinit, and the log target."""
+    options = {MLP_NAMES.get(key, key): str(value) for key, value in dict(settings, **WEIGHTS).items() if key != "pretrain"}
+    options["skip_preinit"] = str(not settings["pretrain"])
+    return options | {"log": log}
 
 
 def write_training_file(path, pot, labelled, settings):
@@ -135,7 +144,7 @@ def run_case(name, golden, cells, workdir, tol, tensor_tol):
     _, _, _, ranks, reference, steps = CASES[name]
     template, settings, labelled = case_inputs(name, cells, workdir)
     log_file = Path(workdir) / f"{name}.log"
-    options = {key: str(value) for key, value in dict(settings, **WEIGHTS).items()} | {"log": str(log_file)}
+    options = trainer_options(settings, str(log_file))
     start = time.perf_counter()
     if ranks == "mpi":
         # train.fit over mpirun's ranks, each passing its share; rank 0 saves the coefficients
@@ -188,7 +197,7 @@ def mpi_worker(name, workdir):
 
     comm = MPI.COMM_WORLD
     template, settings, labelled = case_inputs(name, structures(numpy.load(GOLDEN)), workdir)
-    options = {key: str(value) for key, value in dict(settings, **WEIGHTS).items()} | {"log": str(Path(workdir) / f"{name}.log")}
+    options = trainer_options(settings, str(Path(workdir) / f"{name}.log"))
     trained = fit(str(template), [s for _, s in labelled[comm.Get_rank() :: comm.Get_size()]], options, comm=comm, balance_species=False)
     if comm.Get_rank() == 0: numpy.save(Path(workdir) / f"{name}-coeffs.npy", trained.get_coeffs())
 

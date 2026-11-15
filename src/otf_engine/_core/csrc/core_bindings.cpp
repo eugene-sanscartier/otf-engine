@@ -84,7 +84,7 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
         .def("get_potential_name", &Pair::get_potential_name)
         .def("get_radial_basis_type", &Pair::get_radial_basis_type)
         .def("get_species_coeffs",
-             [](const Pair& self) { return DoubleArray({self.get_species_count()}, self.get_species_coeffs()); },
+             [](const Pair& self) { return to_array(self.get_species_coeffs()); },
              "ndarray float64 (species_count)  — per-species reference energies")
         .def("set_species_coeffs",
              [](Pair& self, DoubleArray arr) {

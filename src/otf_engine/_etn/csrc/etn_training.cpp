@@ -8,6 +8,21 @@
 #include <stdexcept>
 
 ETNTraining::ETNTraining(const std::string& filename) : PairETN(filename) {
+    site_input_vals.resize(input_shape.size);
+    input_tangent.resize(input_shape.size);
+    input_tangent_adj.resize(input_shape.size);
+    site_bonds.resize(bonds_size);
+    bond_tangent.resize(bonds_size);
+    bond_tangent_adj.resize(bonds_size);
+    prepare_columns();
+}
+
+void ETNTraining::set_species_count(int n) {
+    PairETN::set_species_count(n);
+    prepare_columns();
+}
+
+void ETNTraining::prepare_columns() {
     const int l_count = (int) species_ranks.size();
     const int core_count = get_core_count();
     int column = 0;
@@ -22,12 +37,6 @@ ETNTraining::ETNTraining(const std::string& filename) : PairETN(filename) {
     for (int c = 0; c < core_count; c++) core_im_columns[c] = column, column += (int) core_coeffs_im[c].size();
     species_columns = column;
 
-    site_input_vals.resize(input_shape.size);
-    input_tangent.resize(input_shape.size);
-    input_tangent_adj.resize(input_shape.size);
-    site_bonds.resize(bonds_size);
-    bond_tangent.resize(bonds_size);
-    bond_tangent_adj.resize(bonds_size);
     mixing_adj.resize(l_count);
     for (int l = 0; l < l_count; l++) mixing_adj[l].resize(radial_mixing[l].size());
 }

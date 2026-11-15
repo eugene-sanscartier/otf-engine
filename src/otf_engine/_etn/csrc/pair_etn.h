@@ -58,8 +58,8 @@ class PairETN : public Pair {
     // and each central atom's input and bond vectors, left in the members below.
     void compute(const NeighList& list) override;
 
-    const double* get_inputs() const { return inputs.data(); }    // [inum * input_shape.size]
-    const double* get_bonds() const { return bonds.data(); }      // [inum * bonds_size]
+    const std::vector<double>& get_inputs() const { return inputs; }    // [inum * input_shape.size]
+    const std::vector<double>& get_bonds() const { return bonds; }      // [inum * bonds_size]
 
     // Bond b of the tensor train: its layout, and the offset of its real part within one atom's
     // block of get_bonds(); the imaginary part follows it, and is zero outside bonds 2 .. d-2.
@@ -90,6 +90,11 @@ class PairETN : public Pair {
     void set_radial_coeffs(int l, const double* c);
     void set_species_pair_coeffs(int l, const double* c);
     void set_core_coeffs(int i, bool imaginary, const double* c);
+    // Sizes the coefficients for n species, keeping each kept pair's A_l entries and each kept species'
+    // site energy; the new entries are zero. Set them afterwards.
+    void set_species_count(int n);
+    // mlip-4's initial values, ETN::PostConstruct's: sin(10 + k^2) for the k-th of the params.
+    void fill_initial_coeffs();
 
   protected:
     void read_file(std::istream& is);

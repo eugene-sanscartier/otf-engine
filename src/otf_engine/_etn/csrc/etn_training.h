@@ -20,7 +20,12 @@ class ETNTraining : public PairETN {
     // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
+    // PairETN::set_species_count, with the columns of the coefficient blocks moved to match.
+    void set_species_count(int n);
+
   private:
+    // The first column of each coefficient block, and mixing_adj's size, for the current species count.
+    void prepare_columns();
     // Adds to grad the derivative of energy_weight * E_i, plus that of E_i's derivative along the
     // neighbor displacements dloss_dforces and dloss_dvirial give, for central atom ii.
     void accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, double energy_weight, const double* dloss_dforces, const double* dloss_dvirial, double* grad);

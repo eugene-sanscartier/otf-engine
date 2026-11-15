@@ -86,6 +86,13 @@ class PyNeighbors {
     NeighList list_;
 };
 
+// A copy of values as a numpy array of the given shape, by default flat.
+template <class T>
+py::array_t<T> to_array(const std::vector<T>& values, std::vector<py::ssize_t> shape = {}) {
+    if (shape.empty()) shape = {(py::ssize_t) values.size()};
+    return py::array_t<T>(shape, values.data());
+}
+
 inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
     DoubleArray a(shape);
     std::fill(a.mutable_data(), a.mutable_data() + a.size(), 0.0);
@@ -97,9 +104,9 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
 inline py::dict potential_results(const Pair& self, int n_atoms) {
     py::dict result;
     result["energy"] = self.get_energy();
-    result["forces"] = DoubleArray({n_atoms, 3}, self.get_forces());
-    result["virials"] = DoubleArray({6}, self.get_virial());
-    result["eatom"] = DoubleArray({n_atoms}, self.get_eatom());
+    result["forces"] = to_array(self.get_forces(), {n_atoms, 3});
+    result["virials"] = DoubleArray({6}, self.get_virial().data());
+    result["eatom"] = to_array(self.get_eatom());
     return result;
 }
 

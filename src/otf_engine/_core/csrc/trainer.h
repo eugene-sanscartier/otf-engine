@@ -18,6 +18,7 @@
 #include "thread_mpi.h"
 #endif
 
+#include <algorithm>
 #include <functional>
 #include <ostream>
 #include <stdexcept>
@@ -60,6 +61,34 @@ class Trainer {
     }
 
   protected:
+    // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
+    // each present in the training set, and a trained potential's species are all present. Throws on every rank together.
+    int training_species_count() {
+        // the species count, and minus the lowest species when it is negative, so that every rank raises together
+        int local[2] = {0, 0}, global[2] = {0, 0};
+        for (const TrainingStructure& s : structures)
+            for (int t : s.types) {
+                local[0] = std::max(local[0], t + 1);
+                local[1] = std::max(local[1], -t);
+            }
+        MPI_Allreduce(local, global, 2, MPI_INT, MPI_MAX, comm);
+        if (global[1] > 0)
+            throw std::runtime_error("a training structure has species " + std::to_string(-global[1]));
+        const int type_count = global[0];
+
+        std::vector<int> present(type_count, 0), present_anywhere(type_count, 0);
+        for (const TrainingStructure& s : structures)
+            for (int t : s.types)
+                present[t] = 1;
+        MPI_Allreduce(present.data(), present_anywhere.data(), type_count, MPI_INT, MPI_MAX, comm);
+
+        const int old_spec = potential.is_trained() ? potential.get_species_count() : 0;
+        for (int t = 0; t < std::max(old_spec, type_count); t++)
+            if (t >= type_count || !present_anywhere[t])
+                throw std::runtime_error(t < old_spec ? "species " + std::to_string(t) + " of the potential is not present in the training set" : "the training set has species " + std::to_string(type_count - 1) + " but not species " + std::to_string(t));
+        return type_count;
+    }
+
     // Logs the errors of the potential at coeffs on the training set under title, unless it is untrained.
     void log_errors(const std::string& title) {
         if (!potential.is_trained()) return;

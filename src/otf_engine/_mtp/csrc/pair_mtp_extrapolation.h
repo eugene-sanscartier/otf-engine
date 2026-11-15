@@ -18,7 +18,7 @@ class PairMTPExtrapolation : public PairMTP {
     void compute(const NeighList& list) override;
 
     double get_max_grade() const { return max_grade; }
-    const double* get_nbh_extrapolation_grades() const { return nbh_extrapolation_grades.data(); }    // [n_atoms]
+    const std::vector<double>& get_nbh_extrapolation_grades() const { return nbh_extrapolation_grades; }    // [n_atoms]
 
     // invA is [coeff_count() * coeff_count()], row-major. The #MVS_v1.1 block
     // of an .almtp holding it is read and written by almtp_io.py.

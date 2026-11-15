@@ -15,14 +15,15 @@
 
 #include <vector>
 
-// mlip-4's TrainingParams, under their names and with their defaults; mlip-4's LossCfg doubles
+// mlip-4's TrainingParams with their defaults, under mlp's names where mlp has the option (mlip-4's
+// max_iter_count, linstop and pretrain inverted) and mlip-4's otherwise; mlip-4's LossCfg doubles
 // stress_weight on the virial's off-diagonal components, and has no balance_species.
 struct ETNTrainerOptions : TrainerOptions {
-    int max_iter_count = 1000;
+    int iteration_limit = 1000;
     int max_func_eval = 10000;
-    double linstop = 5e-4;            // stop when 100 steps decrease the loss by less than this, relatively
+    double tolerance = 5e-4;          // stop when 100 steps decrease the loss by less than this, relatively
     bool rescale = true;              // ETN::Rescale at the first step of each fit
-    bool pretrain = true;             // a 75-step fit before the main one
+    bool skip_preinit = false;        // skip the 75-step fit before the main one
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
     int bfgs_max_iters_no_improve = 10;
@@ -32,7 +33,6 @@ class ETNTrainer : public Trainer<ETNTraining, ETNTrainerOptions> {
   public:
     // log receives mlip-4's fit log on the rank given one; checkpoint is called
     // with the potential holding the coefficients at every step outside a line search.
-    // Throws on every rank together when a structure has a species the potential lacks.
     ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, and logs
@@ -40,6 +40,11 @@ class ETNTrainer : public Trainer<ETNTraining, ETNTrainerOptions> {
     void train();
 
   private:
+    // mlip-3's AddSpecies for an ETN: the potential gains the training set's species it lacks. An untrained one
+    // takes mlip-4's initial values at the new count; a trained one gives each new species a site energy of 0,
+    // and each new species pair of every A_l 1e-6 with 1e-3 (pair + 1) on its first channel, mlip-3's values for
+    // a new MTP pair.
+    void add_species();
     // mlip-4's Train without its pre-training: BFGS steps on the loss divided by the
     // structure count, from a rescale, until a stopping rule of o holds.
     void fit(const ETNTrainerOptions& o);

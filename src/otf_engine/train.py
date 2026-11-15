@@ -4,11 +4,10 @@ As a command line:
 
     python -m otf_engine.train potential.almtp|potential.etn train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=nbh|cfg] [trainer options]
 
-For an MTP, takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random,
---skip_preinit, ...) and the trainer's own (--varpro=false, --riemannian=false, ...;
-MLP_ALGORITHM lists those that give mlp's algorithm); for an ETN, mlip-4's training
-settings (--max_iter_count=300, --pretrain=false, ...). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
-be untrained, such as an mlip-3 template; an MTP gains the species of the training set it lacks. The
+Takes `mlp train`'s options (--iteration_limit=300, --tolerance=1e-3, --skip_preinit, --energy_weight=1,
+...). For an MTP, also the trainer's own (--varpro=false, --riemannian=false, ...; MLP_ALGORITHM lists
+those that give mlp's algorithm); for an ETN, mlip-4's training settings mlp lacks (--rescale=false, ...). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
+be untrained, such as an mlip-3 template; the potential gains the species of the training set it lacks. The
 trained potential is written to --save_to, by default over the input, with an active set built on
 the training set.
 """
@@ -68,12 +67,11 @@ def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int |
 def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None, balance_species: bool = True) -> None:
     """Train *potential* on *training_structs* with otf_engine's trainer, and write it with an active set to *save_to*.
 
-    *potential* may be untrained; an MTP gains the species of *training_structs* it lacks.
+    *potential* may be untrained; it gains the species of *training_structs* it lacks.
 
-    settings : the trainer's options. For an MTP, `mlp train`'s and the trainer's own without the leading "--", e.g.
-               {"iteration_limit": 300, "init_random": True}, MLP_ALGORITHM for mlp's algorithm; for an ETN, mlip-4's
-               training settings, e.g. {"max_iter_count": 300, "pretrain": False}; and "species", the species' names
-               for the log's error tables, comma-separated
+    settings : the trainer's options without the leading "--", e.g. {"iteration_limit": 300, "skip_preinit": True}:
+               `mlp train`'s; for an MTP, also the trainer's own, MLP_ALGORITHM for mlp's algorithm; for an ETN, mlip-4's
+               training settings mlp lacks; and "species", the species' names for the log's error tables, comma-separated
     ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the

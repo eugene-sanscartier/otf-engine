@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+import numpy
 
 
-def format_floats(values: Iterable[float]) -> str:
-    """*values* comma-separated, each to 17 significant digits, so a file read back holds the same doubles."""
-    return ", ".join(f"{float(value):.17g}" for value in values)
+def format_floats(values) -> str:
+    """*values*, flattened in C order, comma-separated, each to 17 significant digits, so a file read back holds the same doubles."""
+    return ", ".join(f"{float(value):.17g}" for value in numpy.ravel(values))
 
 
-def format_ints(values: Iterable[int]) -> str:
-    """*values* comma-separated."""
-    return ", ".join(str(int(value)) for value in values)
+def format_ints(values) -> str:
+    """*values*, flattened in C order, comma-separated."""
+    return ", ".join(str(int(value)) for value in numpy.ravel(values))

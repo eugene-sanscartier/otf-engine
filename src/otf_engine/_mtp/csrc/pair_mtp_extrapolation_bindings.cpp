@@ -15,7 +15,7 @@ static py::dict compute(PairMTPExtrapolation& self, const PyNeighbors& nb) {
     py::dict result = potential_results(self, nb.n_atoms());
     result["max_grade"] = self.get_max_grade();
     if (!self.get_configuration_mode())
-        result["nbh_grades"] = DoubleArray({nb.n_atoms()}, self.get_nbh_extrapolation_grades());
+        result["nbh_grades"] = to_array(self.get_nbh_extrapolation_grades());
     return result;
 }
 

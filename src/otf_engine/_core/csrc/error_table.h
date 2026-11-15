@@ -101,8 +101,8 @@ inline std::string error_table(Pair& potential, const std::vector<TrainingStruct
     for (const TrainingStructure& s : structures) {
         const NeighList list = s.list();
         potential.compute(list);
-        const double* forces = potential.get_forces();
-        const double* virial = potential.get_virial();
+        const double* forces = potential.get_forces().data();
+        const double* virial = potential.get_virial().data();
 
         if (s.has_energy) {
             const double diff = potential.get_energy() - s.energy;

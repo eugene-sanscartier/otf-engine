@@ -37,14 +37,14 @@ class PairMTP : public Pair {
     int get_alpha_index_basic_count() const { return alpha_index_basic_count; }
     int get_alpha_index_times_count() const { return alpha_index_times_count; }
 
-    // radial_basis_coeffs: flat [species^2 * radial_func_count * radial_basis_size]
-    const double* get_radial_basis_coeffs() const { return radial_basis_coeffs.data(); }
-    // alpha_index_basic: flat [alpha_index_basic_count * 4]  (mu, px, py, pz)
-    const int* get_alpha_index_basic() const { return alpha_index_basic[0].data(); }
-    // alpha_index_times: flat [alpha_index_times_count * 4]  (i0, i1, mult, out)
-    const int* get_alpha_index_times() const { return alpha_index_times[0].data(); }
-    const int* get_alpha_moment_mapping() const { return alpha_moment_mapping.data(); }
-    const double* get_linear_coeffs() const { return linear_coeffs.data(); }
+    // [species^2 * radial_func_count * radial_basis_size]
+    const std::vector<double>& get_radial_basis_coeffs() const { return radial_basis_coeffs; }
+    // [alpha_index_basic_count] (mu, px, py, pz)
+    const std::vector<std::array<int, 4>>& get_alpha_index_basic() const { return alpha_index_basic; }
+    // [alpha_index_times_count] (i0, i1, mult, out)
+    const std::vector<std::array<int, 4>>& get_alpha_index_times() const { return alpha_index_times; }
+    const std::vector<int>& get_alpha_moment_mapping() const { return alpha_moment_mapping; }    // [alpha_scalar_count]
+    const std::vector<double>& get_linear_coeffs() const { return linear_coeffs; }               // [alpha_scalar_count]
 
     void set_linear_coeffs(const double* c) { std::copy(c, c + alpha_scalar_count, linear_coeffs.begin()); }
     void set_radial_basis_coeffs(const double* c) { std::copy(c, c + radial_coeff_count, radial_basis_coeffs.begin()); }

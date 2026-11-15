@@ -42,20 +42,20 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
 
         .def("get_radial_basis_coeffs",
              [](const PairMTP& self) {
-                 return DoubleArray({self.get_species_count() * self.get_species_count(), self.get_radial_func_count(), self.get_radial_basis_size()}, self.get_radial_basis_coeffs());
+                 return to_array(self.get_radial_basis_coeffs(), {self.get_species_count() * self.get_species_count(), self.get_radial_func_count(), self.get_radial_basis_size()});
              },
              "ndarray float64 (species^2, radial_func_count, radial_basis_size)")
         .def("get_alpha_index_basic",
-             [](const PairMTP& self) { return py::array_t<int>({self.get_alpha_index_basic_count(), 4}, self.get_alpha_index_basic()); },
+             [](const PairMTP& self) { return py::array_t<int>({self.get_alpha_index_basic_count(), 4}, self.get_alpha_index_basic()[0].data()); },
              "ndarray int32 (alpha_index_basic_count, 4)  columns: mu, px, py, pz")
         .def("get_alpha_index_times",
-             [](const PairMTP& self) { return py::array_t<int>({self.get_alpha_index_times_count(), 4}, self.get_alpha_index_times()); },
+             [](const PairMTP& self) { return py::array_t<int>({self.get_alpha_index_times_count(), 4}, self.get_alpha_index_times()[0].data()); },
              "ndarray int32 (alpha_index_times_count, 4)  columns: i0, i1, multiplier, out")
         .def("get_alpha_moment_mapping",
-             [](const PairMTP& self) { return py::array_t<int>({self.get_alpha_scalar_count()}, self.get_alpha_moment_mapping()); },
+             [](const PairMTP& self) { return to_array(self.get_alpha_moment_mapping()); },
              "ndarray int32 (alpha_scalar_count)")
         .def("get_linear_coeffs",
-             [](const PairMTP& self) { return DoubleArray({self.get_alpha_scalar_count()}, self.get_linear_coeffs()); },
+             [](const PairMTP& self) { return to_array(self.get_linear_coeffs()); },
              "ndarray float64 (alpha_scalar_count)  — moment tensor basis coefficients")
 
         .def("set_linear_coeffs",

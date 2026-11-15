@@ -79,8 +79,10 @@ def coeff_blocks(pot):
 
 
 def get_block(pot, kind, arg):
-    return {"radial": lambda: pot.get_radial_coeffs(arg), "species_pair": lambda: pot.get_species_pair_coeffs(arg),
-            "core": lambda: pot.get_core_coeffs(*arg), "species": pot.get_species_coeffs}[kind]()
+    """A coefficient block of pot, flat in mlip-4's params order."""
+    block = {"radial": lambda: pot.get_radial_coeffs(arg), "species_pair": lambda: pot.get_species_pair_coeffs(arg),
+             "core": lambda: pot.get_core_coeffs(*arg), "species": pot.get_species_coeffs}[kind]()
+    return numpy.ravel(block)
 
 
 def params(pot):

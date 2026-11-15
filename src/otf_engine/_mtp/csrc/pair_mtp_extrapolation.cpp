@@ -31,7 +31,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
     energy = 0.0;
     eatom.assign(list.n_atoms, 0.0);
     forces.assign((size_t) list.n_atoms * 3, 0.0);
-    std::fill(virial, virial + 6, 0.0);
+    virial.fill(0.0);
 
     // Resize the nbh extrapolation grades if needed.
     if (!configuration_mode)

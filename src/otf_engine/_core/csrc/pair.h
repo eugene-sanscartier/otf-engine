@@ -24,9 +24,9 @@ class Pair {
     virtual void compute(const NeighList& list) = 0;
 
     double get_energy() const { return energy; }
-    const double* get_eatom() const { return eatom.data(); }      // [n_atoms]
-    const double* get_forces() const { return forces.data(); }    // [n_atoms * 3]
-    const double* get_virial() const { return virial; }           // [6] xx,yy,zz,xy,xz,yz
+    const std::vector<double>& get_eatom() const { return eatom; }       // [n_atoms]
+    const std::vector<double>& get_forces() const { return forces; }     // [n_atoms * 3]
+    const std::array<double, 6>& get_virial() const { return virial; }  // xx,yy,zz,xy,xz,yz
 
     // The coefficients as one vector, of coeff_count(), in the order the potential defines.
     virtual int coeff_count() const = 0;
@@ -58,7 +58,7 @@ class Pair {
     bool is_trained() const { return trained; }
     const std::string& get_potential_name() const { return potential_name; }
     const std::string& get_radial_basis_type() const { return radial_basis_type; }
-    const double* get_species_coeffs() const { return species_coeffs.data(); }    // [species_count]
+    const std::vector<double>& get_species_coeffs() const { return species_coeffs; }    // [species_count]
 
     void set_species_coeffs(const double* c) { std::copy(c, c + species_count, species_coeffs.begin()); }
     void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
@@ -91,7 +91,7 @@ class Pair {
     double energy = 0.0;
     std::vector<double> eatom;   // [n_atoms] site energies
     std::vector<double> forces;  // [n_atoms * 3]
-    double virial[6] = {};       // xx,yy,zz,xy,xz,yz
+    std::array<double, 6> virial{};    // xx,yy,zz,xy,xz,yz
 
     // Cache values between forwards and backwards pass
     int cache_size = 0;

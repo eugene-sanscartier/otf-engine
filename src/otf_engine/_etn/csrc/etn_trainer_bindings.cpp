@@ -7,11 +7,11 @@
 #include "bindings_common.h"
 #include "etn_trainer.h"
 
-// mlip-4's training settings beside the weights.
+// mlip-4's training settings beside the weights, under mlp's names where mlp has the option.
 void add_option_fields(ETNTrainerOptions& o, OptionFields& fields) {
-    fields.doubles.insert({{"linstop", &o.linstop}, {"wolfe_c1", &o.wolfe_c1}, {"wolfe_c2", &o.wolfe_c2}});
-    fields.ints = {{"max_iter_count", &o.max_iter_count}, {"max_func_eval", &o.max_func_eval}, {"bfgs_max_iters_no_improve", &o.bfgs_max_iters_no_improve}};
-    fields.bools = {{"rescale", &o.rescale}, {"pretrain", &o.pretrain}};
+    fields.doubles.insert({{"tolerance", &o.tolerance}, {"wolfe_c1", &o.wolfe_c1}, {"wolfe_c2", &o.wolfe_c2}});
+    fields.ints = {{"iteration_limit", &o.iteration_limit}, {"max_func_eval", &o.max_func_eval}, {"bfgs_max_iters_no_improve", &o.bfgs_max_iters_no_improve}};
+    fields.bools = {{"rescale", &o.rescale}, {"skip_preinit", &o.skip_preinit}};
 }
 
 #ifdef MTP_MPI
@@ -60,10 +60,10 @@ Train the potential in filename as mlip-4's Train does, on `ranks` threads, and 
 structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None, number),
              neighbor lists at the potential's cutoff, virial in eV, xx,yy,zz,xy,xz,yz, and the
              number the error tables name it by
-options    : mlip-4's training settings as strings (energy_weight, force_weight, stress_weight,
-             max_iter_count, max_func_eval, linstop, rescale, pretrain, wolfe_c1, wolfe_c2,
-             bfgs_max_iters_no_improve), log (stdout, none or a file), and species, the species'
-             names for the error tables, comma-separated
+options    : mlip-4's training settings as strings, under mlp's names where mlp has the option
+             (energy_weight, force_weight, stress_weight, iteration_limit, max_func_eval, tolerance,
+             rescale, skip_preinit, wolfe_c1, wolfe_c2, bfgs_max_iters_no_improve), log (stdout,
+             none or a file), and species, the species' names for the error tables, comma-separated
 checkpoint : called with the potential being trained at every step outside a line search
 balance_species : give every species of a structure an equal share of its force weight; False
              weighs every force alike, as mlip-4 does

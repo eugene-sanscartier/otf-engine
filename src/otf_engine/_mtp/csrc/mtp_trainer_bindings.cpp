@@ -54,7 +54,7 @@ the fitted potential. An error on any rank is raised on every rank.
 structures : this rank's share, an iterable of (NeighList, energy|None, forces(n_atoms,3)|None,
              virial(6)|None, number), neighbor lists at the potential's cutoff, virial as mlip-3's
              PlusStress in eV, xx,yy,zz,xy,xz,yz, and the number the error tables name it by
-options    : mlp train options without the leading "--", as strings, and species, the species'
+options    : mlp train's options without the leading "--", as strings, and species, the species'
              names for the error tables, comma-separated; rank 0 writes the log
 comm       : an mpi4py communicator
 checkpoint : called on rank 0 with the potential being trained wherever mlp saves it during the
@@ -104,7 +104,7 @@ Train the potential in filename as mlip-3's `mlp train` does, on `ranks` threads
 structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None, number),
              neighbor lists at the potential's cutoff, virial as mlip-3's PlusStress in eV,
              xx,yy,zz,xy,xz,yz, and the number the error tables name it by
-options    : mlp train options without the leading "--", as strings, and species, the species'
+options    : mlp train's options without the leading "--", as strings, and species, the species'
              names for the error tables, comma-separated
 checkpoint : called with the potential being trained wherever mlp saves it during the fit
 inverse_hessian : (n, n) float64 array, n the coefficients BFGS trains (the radial ones under

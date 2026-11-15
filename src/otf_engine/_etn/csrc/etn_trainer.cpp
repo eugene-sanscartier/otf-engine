@@ -20,13 +20,38 @@ static std::string full_precision(double x) {
 }
 
 ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
-    : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
-    int local_largest = -1, largest = -1;
-    for (const TrainingStructure& s : this->structures)
-        for (int t : s.types) local_largest = std::max(local_largest, t);
-    MPI_Allreduce(&local_largest, &largest, 1, MPI_INT, MPI_MAX, comm);
-    if (largest >= potential.get_species_count())
-        throw std::runtime_error("train_etn: a training structure has species " + std::to_string(largest) + ", outside the potential's " + std::to_string(potential.get_species_count()));
+    : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
+
+/* ---------------------------------------------------------------------- */
+void ETNTrainer::add_species() {
+    const int old_spec = potential.get_species_count();
+    const int new_spec = training_species_count();
+    if (old_spec == new_spec) return;
+
+    if (log && new_spec > old_spec) {
+        *log << "Following atomic numbers will be added to the ETN potential: ";
+        for (int t = old_spec; t < new_spec; t++)
+            *log << t << (t != new_spec - 1 ? ", " : "");
+        *log << std::endl;
+    }
+
+    potential.set_species_count(new_spec);
+    if (!potential.is_trained())
+        potential.fill_initial_coeffs();
+    else
+        for (int l = 0; l < (int) potential.get_species_ranks().size(); l++) {
+            const int rank = potential.get_species_ranks()[l];
+            std::vector<double> a = potential.get_species_pair_coeffs(l);
+            for (int pair = 0; pair < new_spec * new_spec; pair++) {
+                if (pair / new_spec < old_spec && pair % new_spec < old_spec) continue;
+                std::fill_n(a.begin() + pair * rank, rank, 1e-6);
+                a[pair * rank] = 1e-3 * (pair + 1);
+            }
+            potential.set_species_pair_coeffs(l, a.data());
+        }
+
+    coeffs.resize(potential.coeff_count());
+    potential.get_coeffs(coeffs.data());
 }
 
 /* ---------------------------------------------------------------------- */
@@ -34,15 +59,16 @@ void ETNTrainer::train() {
     const auto start = std::chrono::steady_clock::now();
     MPI_Barrier(comm);
 
+    add_species();
     log_errors("Training set errors before training:");
 
-    // mlip-4's pre-training keeps linstop and rescale, and takes the other settings' defaults
-    if (options.pretrain) {
+    // mlip-4's pre-training keeps tolerance and rescale, and takes the other settings' defaults
+    if (!options.skip_preinit) {
         if (log) *log << "Starting pretraining...\n";
         ETNTrainerOptions pretraining;
-        pretraining.max_iter_count = 75;
+        pretraining.iteration_limit = 75;
         pretraining.max_func_eval = 75 * 20;
-        pretraining.linstop = options.linstop;
+        pretraining.tolerance = options.tolerance;
         pretraining.rescale = options.rescale;
         fit(pretraining);
         if (log) *log << "Pretraining completed\n";
@@ -153,7 +179,7 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
                 if (!bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g)) break_flag = 1;
 
             if ((int) num_iter % 100 == 0) {
-                if (convergence_check_delay <= 0 && linf > bfgs_f && (linf - bfgs_f) / bfgs_f < o.linstop) {
+                if (convergence_check_delay <= 0 && linf > bfgs_f && (linf - bfgs_f) / bfgs_f < o.tolerance) {
                     break_flag = 1;
                     if (log) *log << "\nAchieved requested accuracy. Stopping the training...";
                 }
@@ -161,7 +187,7 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
                 linf = bfgs_f;
             }
 
-            if (num_iter >= o.max_iter_count && !break_flag) {
+            if (num_iter >= o.iteration_limit && !break_flag) {
                 break_flag = 1;
                 if (log) *log << "\nNumber of iterations exceeded the threshold. Stopping the training...";
             }
@@ -248,8 +274,8 @@ double ETNTrainer::loss_grad(std::vector<double>& grad) {
     for (const TrainingStructure& s : structures) {
         const NeighList list = s.list();
         potential.compute(list);
-        const double* forces = potential.get_forces();
-        const double* virial = potential.get_virial();
+        const double* forces = potential.get_forces().data();
+        const double* virial = potential.get_virial().data();
 
         double structure_loss = 0.0;
         double dloss_denergy = 0.0;

@@ -106,7 +106,7 @@ def main():
             template.write_text(kernels.template(name))
             untrained = ETNTraining(str(template))
             training.write_training_file(training_file, untrained, labelled, settings)
-            options = {key: str(value) for key, value in dict(settings, **training.WEIGHTS).items()} | {"log": "none"}
+            options = training.trainer_options(settings, "none")
             start = time.perf_counter()
             train_etn(str(template), [s for _, s in labelled], options, 1, balance_species=False)
             ours_train = time.perf_counter() - start

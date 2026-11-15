@@ -175,7 +175,7 @@ def run_training(training, workdir):
         reference.calculate(atoms, ["energy", "forces"])
         labelled += [atoms.copy()]
         labelled[-1].calc = SinglePointCalculator(labelled[-1], energy=reference.results["energy"], forces=reference.results["forces"])
-    train(str(template), labelled, trained, settings={"max_iter_count": 3, "pretrain": False, "log": "none"}, ranks=2)
+    train(str(template), labelled, trained, settings={"iteration_limit": 3, "skip_preinit": True, "log": "none"}, ranks=2)
 
     failures = []
     if not PairETN(trained).is_trained(): failures.append("train: the written potential is untrained")

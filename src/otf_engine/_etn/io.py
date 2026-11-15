@@ -11,7 +11,8 @@ def write_etn(potential, filename):
     """Write an ETN potential to an .etn file.
 
     The file structure is the one PairETN::read_file() expects. An untrained
-    potential is written without its coefficients, as write_mtp writes one.
+    potential is written without its coefficients, as write_mtp writes one, and
+    without its species count if it has none.
     """
     path = Path(filename)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,7 +25,8 @@ def write_etn(potential, filename):
         stream.write("version = 1.0.0\n")
         stream.write(f"potential_name = {potential.get_potential_name()}\n")
         stream.write(f"scaling = {potential.get_scaling():.17g}\n")
-        stream.write(f"species_count = {potential.get_species_count()}\n")
+        if potential.get_species_count() > 0:    # an untrained potential may have none until training
+            stream.write(f"species_count = {potential.get_species_count()}\n")
         stream.write(f"radial_basis_type = {potential.get_radial_basis_type()}\n")
         stream.write(f"\tmin_dist = {potential.get_min_cutoff():.17g}\n")
         stream.write(f"\tmax_dist = {potential.get_max_cutoff():.17g}\n")

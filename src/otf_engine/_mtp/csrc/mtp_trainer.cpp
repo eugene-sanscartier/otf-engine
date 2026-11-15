@@ -35,16 +35,14 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     // A basic moment has degree 1, a product the sum of its factors'.
     std::vector<int> moment_degree(potential.get_alpha_moment_count(), 0);
     std::fill_n(moment_degree.begin(), potential.get_alpha_index_basic_count(), 1);
-    const int* times = potential.get_alpha_index_times();
-    for (int t = 0; t < potential.get_alpha_index_times_count(); t++) {
-        const int degree = moment_degree[times[4 * t]] + moment_degree[times[4 * t + 1]];
-        int& out = moment_degree[times[4 * t + 3]];
+    for (const std::array<int, 4>& times : potential.get_alpha_index_times()) {
+        const int degree = moment_degree[times[0]] + moment_degree[times[1]];
+        int& out = moment_degree[times[3]];
         if (out != 0 && out != degree) scalable = false;
         out = degree;
     }
-    const int* mapping = potential.get_alpha_moment_mapping();
-    for (int s = 0; s < potential.get_alpha_scalar_count(); s++)
-        scalar_degree.push_back(moment_degree[mapping[s]]);
+    for (int moment : potential.get_alpha_moment_mapping())
+        scalar_degree.push_back(moment_degree[moment]);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -138,29 +136,8 @@ void MTPTrainer::train() {
    the training set, and a species is numbered by its index.
 ------------------------------------------------------------------------- */
 void MTPTrainer::add_species() {
-    // the species count, and minus the lowest species when it is negative, so that every rank raises together
-    int local[2] = {0, 0}, global[2] = {0, 0};
-    for (const TrainingStructure& s : structures)
-        for (int t : s.types) {
-            local[0] = std::max(local[0], t + 1);
-            local[1] = std::max(local[1], -t);
-        }
-    MPI_Allreduce(local, global, 2, MPI_INT, MPI_MAX, comm);
-    if (global[1] > 0)
-        throw std::runtime_error("MTPTrainer: a training structure has species " + std::to_string(-global[1]));
-    const int type_count = global[0];
-
-    std::vector<int> present(type_count, 0), present_anywhere(type_count, 0);
-    for (const TrainingStructure& s : structures)
-        for (int t : s.types)
-            present[t] = 1;
-    MPI_Allreduce(present.data(), present_anywhere.data(), type_count, MPI_INT, MPI_MAX, comm);
-
     const int old_spec = potential.is_trained() ? potential.get_species_count() : 0;
-    const int new_spec = type_count;
-    for (int t = 0; t < std::max(old_spec, new_spec); t++)
-        if (t >= new_spec || !present_anywhere[t])
-            throw std::runtime_error(t < old_spec ? "MTPTrainer: species " + std::to_string(t) + " of the potential is not present in the training set" : "MTPTrainer: the training set has species " + std::to_string(new_spec - 1) + " but not species " + std::to_string(t));
+    const int new_spec = training_species_count();
 
     if (old_spec < new_spec) {
         if (log) {
@@ -831,8 +808,8 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
         } else {
             potential.compute(list);
             energy = potential.get_energy();
-            forces = potential.get_forces();
-            virial = potential.get_virial();
+            forces = potential.get_forces().data();
+            virial = potential.get_virial().data();
         }
 
         dloss_dforces.assign((size_t) list.n_atoms * 3, 0.0);

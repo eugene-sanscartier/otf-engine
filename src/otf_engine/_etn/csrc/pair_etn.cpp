@@ -42,7 +42,7 @@ void PairETN::compute(const NeighList& list) {
     energy = 0.0;
     eatom.assign(list.n_atoms, 0.0);
     forces.assign((size_t) list.n_atoms * 3, 0.0);
-    std::fill(virial, virial + 6, 0.0);
+    virial.fill(0.0);
     inputs.assign((size_t) list.inum * input_shape.size, 0.0);
     bonds.assign((size_t) list.inum * bonds_size, 0.0);
 
@@ -309,6 +309,27 @@ void PairETN::set_radial_coeffs(int l, const double* c) {
     prepare_radial_mixing();
 }
 
+void PairETN::set_species_count(int n) {
+    const int kept = std::min(n, species_count);
+    for (size_t l = 0; l < species_pair_coeffs.size(); l++) {
+        const int rank = species_ranks[l];
+        std::vector<double> sized((size_t) n * n * rank, 0.0);
+        for (int si = 0; si < kept; si++)
+            for (int sj = 0; sj < kept; sj++)
+                std::copy_n(species_pair_coeffs[l].begin() + (si * species_count + sj) * rank, rank, sized.begin() + (si * n + sj) * rank);
+        species_pair_coeffs[l] = std::move(sized);
+    }
+    species_coeffs.resize(n, 0.0);
+    species_count = n;
+    prepare_radial_mixing();
+}
+
+void PairETN::fill_initial_coeffs() {
+    std::vector<double> c(coeff_count());
+    for (int k = 0; k < (int) c.size(); k++) c[k] = std::sin(10 + k * k);
+    set_coeffs(c.data());
+}
+
 void PairETN::set_species_pair_coeffs(int l, const double* c) {
     std::copy(c, c + species_pair_coeffs[l].size(), species_pair_coeffs[l].begin());
     prepare_radial_mixing();
@@ -352,13 +373,14 @@ void PairETN::read_file(std::istream& is) {
         tfr.advance();
     }
 
-    if (tfr.keyword() != "species_count")
-        throw std::runtime_error("PairETN: no species count is specified");
-    tfr.rest() >> species_count;
-    if (species_count < 1)
-        throw std::runtime_error("PairETN: ETN species count must be positive");
+    // An untrained potential may omit the species count, which training then sets
+    if (tfr.keyword() == "species_count") {
+        tfr.rest() >> species_count;
+        if (species_count < 1)
+            throw std::runtime_error("PairETN: ETN species count must be positive");
+        tfr.advance();
+    }
 
-    tfr.advance();
     read_radial_basis(tfr);
 
     // Shape of the input and of the tensor train
@@ -380,18 +402,14 @@ void PairETN::read_file(std::istream& is) {
 
     prepare_cores();
 
-    // An untrained potential may omit every coefficient; mlip-4's ETN::PostConstruct
-    // gives the k-th of its params sin(10 + k^2).
+    // An untrained potential may omit every coefficient, and takes mlip-4's initial values
     if (!tfr.next_line() || tfr.keyword() != "radial_coeffs") {
         trained = false;
-        int k = 0;
-        for (auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
-            for (auto& block : *blocks)
-                for (double& x : block) x = std::sin(10 + k * k), k++;
-        for (double& x : species_coeffs) x = std::sin(10 + k * k), k++;
-        prepare_radial_mixing();
+        fill_initial_coeffs();
         return;
     }
+    if (species_count == 0)
+        throw std::runtime_error("PairETN: a trained ETN file must give its species count");
 
     // One line of values per block, each of the length the shape gives it
     auto read_block = [&](std::vector<double>& block, const std::string& what) {
