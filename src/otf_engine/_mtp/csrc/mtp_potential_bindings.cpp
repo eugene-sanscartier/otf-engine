@@ -6,15 +6,6 @@
 
 // --- ported from PairMTP --------------------------------------------------
 
-py::dict potential_results(const PairMTP& self, int n_atoms) {
-    py::dict result;
-    result["energy"] = self.get_energy();
-    result["forces"] = DoubleArray({n_atoms, 3}, self.get_forces());
-    result["virials"] = DoubleArray({6}, self.get_virial());
-    result["eatom"] = DoubleArray({n_atoms}, self.get_eatom());
-    return result;
-}
-
 static py::dict compute(PairMTP& self, const PyNeighbors& nb) {
     {
         py::gil_scoped_release unlocked;

@@ -22,7 +22,7 @@ from .neighbors import mtp_types, neighbors
 
 
 class PotentialCalculator(Calculator):
-    """ASE Calculator for a potential whose compute takes a NeighList, as PairMTP's and ETN's do.
+    """ASE Calculator for a potential whose compute takes a NeighList, as PairMTP's and PairETN's do.
 
     Parameters
     ----------

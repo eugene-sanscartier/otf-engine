@@ -1,9 +1,9 @@
 ETN
 version = 1.0.0
 potential_name = Untitled
-species_count = 3
 scaling = 1
-radial_basis_type = RadialBasisCinf
+species_count = 3
+radial_basis_type = RBCinf
 	min_dist = 1
 	max_dist = 5
 	radial_basis_size = 6

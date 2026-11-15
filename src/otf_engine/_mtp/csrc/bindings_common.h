@@ -7,7 +7,9 @@
      mtp_training_bindings.cpp      <- mtp_training.{h,cpp}
      mtp_trainer_bindings.cpp       <- mtp_trainer.{h,cpp}
      maxvol_bindings.cpp            <- maxvol.{h,cpp}
-   and, in the _etn_ext module, ../../_etn/csrc/etn_bindings.cpp.
+   and, in the _etn_ext module under ../../_etn/csrc/:
+     etn_harmonics_bindings.cpp     <- etn_harmonics.{h,cpp}
+     etn_potential_bindings.cpp     <- etn_potential.{h,cpp}
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -67,9 +69,17 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
     return a;
 }
 
-// The results PairMTP::compute leaves in the potential, copied out:
+// The results PairMTP::compute or PairETN::compute leaves in the potential, copied out:
 // "energy", "forces" (n_atoms, 3), "virials" (6) and "eatom" (n_atoms).
-py::dict potential_results(const PairMTP& self, int n_atoms);
+template <class Potential>
+py::dict potential_results(const Potential& self, int n_atoms) {
+    py::dict result;
+    result["energy"] = self.get_energy();
+    result["forces"] = DoubleArray({n_atoms, 3}, self.get_forces());
+    result["virials"] = DoubleArray({6}, self.get_virial());
+    result["eatom"] = DoubleArray({n_atoms}, self.get_eatom());
+    return result;
+}
 
 // Raises unless every atom of nb has one of the potential's species, which the
 // kernels index their coefficients with.
@@ -109,3 +119,5 @@ void bind_extrapolation(py::module_& m);
 void bind_training(py::module_& m);
 void bind_trainer(py::module_& m);
 void bind_maxvol(py::module_& m);
+void bind_etn_harmonics(py::module_& m);
+void bind_etn_potential(py::module_& m);

@@ -1,14 +1,18 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Equivariant tensor network potential: the computation of mlip-4's ETN
-   (src/pots/etn/etn.cpp at 79a39bf) in PairMTP's structure.
+   Standalone ETN potential — no LAMMPS dependency.
+   Computes mlip-4's ETN (src/pots/etn/etn.cpp at 79a39bf), which has no
+   LAMMPS pair style; hand-written passes replace mlip-4's program.
+   Original author of mlip-4's ETN: Max Hodapp
 ------------------------------------------------------------------------- */
 
 #pragma once
 
 #include "etn_harmonics.h"
-#include "etn_radial_basis.h"
+#include "mtp_radial_basis.h"
 #include "neigh_list.h"
 
+#include <algorithm>
+#include <array>
 #include <istream>
 #include <string>
 #include <vector>
@@ -32,22 +36,20 @@ struct CoreBlock {
     int w_begin, w_end;
 };
 
-// The real or the imaginary part of one core, between bond i (left), the input and bond i + 1.
+// The blocks of the real or the imaginary part of one core, between bond i, the input and bond i + 1.
 struct Core {
-    int coeff_offset = 0;
     int coeff_count = 0;
     std::vector<CoreBlock> blocks;
 };
 
-class ETN {
+class PairETN {
   public:
-    // Reads an .etn file.
-    explicit ETN(const std::string& filename);
-    // An ETN of the given shape with every coefficient zero.
-    ETN(int species_count, std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int radial_basis_size, double min_dist, double max_dist);
+    // Reads an ETN potential file (version 1.0.0).
+    explicit PairETN(const std::string& filename);
+    virtual ~PairETN();
 
-    // Energy, per-atom energies, forces and virial of the central atoms in list, and each
-    // central atom's input vector and bond vectors, left in the members below.
+    // Energy, per-atom energies, forces and virial of the central atoms in list,
+    // and each central atom's input and bond vectors, left in the members below.
     void compute(const NeighList& list);
 
     double get_energy() const { return energy; }
@@ -57,17 +59,18 @@ class ETN {
     const double* get_inputs() const { return inputs.data(); }    // [inum * input_shape.size]
     const double* get_bonds() const { return bonds.data(); }      // [inum * bonds_size]
 
-    // Bond b of the tensor train: its layout, and the offsets of its real and imaginary parts
-    // within one atom's block of get_bonds(); the imaginary part is zero outside bonds 2 .. d-2.
-    const CovariantShape& bond_shape(int b) const { return bond_shapes[b]; }
-    int bond_offset(int b) const { return bond_offsets[b]; }
+    // Bond b of the tensor train: its layout, and the offset of its real part within one atom's
+    // block of get_bonds(); the imaginary part follows it, and is zero outside bonds 2 .. d-2.
+    const CovariantShape& get_bond_shape(int b) const { return bond_shapes[b]; }
+    int get_bond_offset(int b) const { return bond_offsets[b]; }
     int get_bonds_size() const { return bonds_size; }
     const CovariantShape& get_input_shape() const { return input_shape; }
 
-    int coeff_count() const { return (int) coeffs.size(); }
-    const double* get_coeffs() const { return coeffs.data(); }
-    void set_coeffs(const double* c);
+    // Radial basis values and derivatives at dist.
+    void eval_radial_basis(double dist, double* vals_out, double* ders_out);
 
+    // Length of mlip-4's params: every block below, in their order.
+    int coeff_count() const;
     int get_species_count() const { return species_count; }
     int get_core_count() const { return (int) bond_ranks.size() - 1; }
     bool has_imaginary_cores() const { return get_core_count() > 3; }
@@ -75,46 +78,75 @@ class ETN {
     const std::vector<int>& get_radial_func_counts() const { return radial_func_counts; }
     const std::vector<int>& get_radial_ranks() const { return radial_ranks; }
     const std::vector<std::vector<int>>& get_bond_ranks() const { return bond_ranks; }
-    const RadialBasisCinf& get_radial_basis() const { return radial_basis; }
+    int get_radial_basis_size() const { return radial_basis_size; }
+    double get_min_cutoff() const { return min_cutoff; }
+    double get_max_cutoff() const { return max_cutoff; }
+    double get_scaling() const { return scaling; }
+    // False for a file without coefficients, which holds mlip-4's initial values.
+    bool is_trained() const { return trained; }
     const std::string& get_potential_name() const { return potential_name; }
-    double get_scaling() const { return radial_basis.scaling; }
-    void set_scaling(double s) { radial_basis.scaling = s; }
+    const std::string& get_radial_basis_type() const { return radial_basis_type; }
 
-    // Offsets into the coefficient vector, in mlip-4's params order.
-    int radial_coeffs_offset(int l) const { return radial_offsets[l]; }
-    int species_pair_coeffs_offset(int l) const { return species_pair_offsets[l]; }
-    const Core& core(int i, bool imaginary) const { return imaginary ? cores_im[i] : cores_re[i]; }
-    int species_coeffs_offset() const { return coeff_count() - species_count; }
+    // radial_coeffs[l]: [species_rank * radial_func_count * radial_rank], column-major (k, n', n)
+    const std::vector<double>& get_radial_coeffs(int l) const { return radial_coeffs[l]; }
+    // species_pair_coeffs[l]: [species_count^2 * species_rank], row-major (s_i, s_j, k)
+    const std::vector<double>& get_species_pair_coeffs(int l) const { return species_pair_coeffs[l]; }
+    // core_coeffs[i], core_coeffs_im[i]: the core's blocks, ordered l3, n3, l2, n2, l1, n1
+    const std::vector<double>& get_core_coeffs(int i, bool imaginary) const { return imaginary ? core_coeffs_im[i] : core_coeffs[i]; }
+    const std::vector<double>& get_species_coeffs() const { return species_coeffs; }
+
+    void set_radial_coeffs(int l, const double* c);
+    void set_species_pair_coeffs(int l, const double* c);
+    void set_core_coeffs(int i, bool imaginary, const double* c);
+    void set_species_coeffs(const double* c) { std::copy(c, c + species_count, species_coeffs.begin()); }
+    void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
+    void set_trained(bool t) { trained = t; }
 
   protected:
     void read_file(std::istream& is);
-    void build();
+    void prepare_cores();
+    Core prepare_core(int i, bool imaginary);
     void prepare_radial_mixing();
-    Core build_core(int i, bool imaginary, int& offset);
-    void contract(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const;
-    void contract_adjoint(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj) const;
+    void contract(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const;
+    void contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj) const;
 
     std::string potential_name = "Untitled";
-    int species_count = 0;
-    RadialBasisCinf radial_basis{1, 0.5, 1.0};
+    std::string radial_basis_type;
 
-    // Shape, per l of the input: species rank, radial functions, radial rank
+    int species_count = 0;
+    double scaling = 1.0;
+    bool trained = true;
+
+    // Radial basis
+    RadialMTPBasis* radial_basis = nullptr;
+    int radial_basis_size = 0;
+    double min_cutoff = 0.0;
+    double max_cutoff = 0.0;
+    double max_cutoff_sq = 0.0;
+
+    // Shape: per l of the input, the species rank, radial functions and radial rank;
+    // per bond, its rank per l, {1} at both ends
     std::vector<int> species_ranks;
     std::vector<int> radial_func_counts;
     std::vector<int> radial_ranks;
-    std::vector<std::vector<int>> bond_ranks;  // [core_count + 1][l]; bonds 0 and d are {1}
+    std::vector<std::vector<int>> bond_ranks;
 
-    std::vector<double> coeffs;
-    std::vector<int> radial_offsets;        // [l] B_l, column-major (k, n', n)
-    std::vector<int> species_pair_offsets;  // [l] A_l, [s_i][s_j][k]
-    std::vector<Core> cores_re;             // [core_count]
-    std::vector<Core> cores_im;             // [core_count], empty but for 1 .. d-2 when d > 3
+    // Coefficients, in mlip-4's params order
+    std::vector<std::vector<double>> radial_coeffs;        // [l] B_l
+    std::vector<std::vector<double>> species_pair_coeffs;  // [l] A_l
+    std::vector<std::vector<double>> core_coeffs;          // [core] real part
+    std::vector<std::vector<double>> core_coeffs_im;       // [core] imaginary part, empty but for 1 .. d-2 when d > 3
+    std::vector<double> species_coeffs;                    // [species] site energy offsets
+
+    // Tensor-train layout
+    std::vector<Core> cores;                // [core_count]
+    std::vector<Core> cores_im;             // [core_count]
     std::vector<WignerEntry> wigner;        // the 3-j symbols the blocks point into
-
-    CovariantShape input_shape{{1}};
+    CovariantShape input_shape{{1}};        // v, with the constant 1 ahead of the l = 0 channels
     std::vector<CovariantShape> bond_shapes;
-    std::vector<int> bond_offsets;  // [core_count + 1] real part of bond b; imaginary part after it
+    std::vector<int> bond_offsets;          // [core_count + 1] real part of bond b in one atom's block
     int bonds_size = 0;
+    std::vector<int> mixed_offsets;         // [l_count + 1] radial-rank channels of each l
 
     // A_l contracted with B_l for each species pair: [l][(s_i * species_count + s_j) * N_rad * R_rad + n' * R_rad + n]
     std::vector<std::vector<double>> radial_mixing;
@@ -123,16 +155,19 @@ class ETN {
 
     // Results of compute
     double energy = 0.0;
-    std::vector<double> eatom;   // [n_atoms]
+    std::vector<double> eatom;   // [n_atoms] site energies
     std::vector<double> forces;  // [n_atoms * 3]
     double virial[6] = {};       // xx,yy,zz,xy,xz,yz
     std::vector<double> inputs;  // [inum * input_shape.size]
     std::vector<double> bonds;   // [inum * bonds_size]
 
-    // Scratch of compute
-    std::vector<double> radial_vals, radial_ders;  // [radial_basis.size]
-    std::vector<double> neighbor_cache;            // per neighbor: dr, 1/r, Y, grad Y, b, db/dr
-    std::vector<double> input_adj;                 // [input_shape.size]
-    std::vector<double> bond_adj;                  // [bonds_size]
-    std::vector<double> mixed_adj;                 // [sum of radial ranks]
+    // Adjoints of the backwards pass
+    std::vector<double> input_adj;  // [input_shape.size]
+    std::vector<double> bond_adj;   // [bonds_size]
+
+    // Cache values between forwards and backwards pass
+    int cache_size = 0;
+    std::vector<int> cached_j;                    // [cache_size]
+    std::vector<std::array<double, 3>> valid_dr;  // [cache_size] displacement of each cached neighbor
+    std::vector<double> neighbor_cache;           // [cache_size * stride] 1/dist, Y, grad Y, radial channels and their ders
 };

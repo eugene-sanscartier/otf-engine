@@ -1,29 +1,26 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   mlip-4's C-infinity radial basis (RadialBasisCinf), evaluated as the ETN
-   program evaluates it.
+   Standalone ETN radial basis — no LAMMPS dependency.
+   Computes mlip-4's RadialBasisCinf (src/pots/radial_basis/cinf/rb_cinf.cpp
+   at 79a39bf) as the ETN program evaluates it.
 ------------------------------------------------------------------------- */
 
 #pragma once
 
+#include "mtp_radial_basis.h"
+
 #include <array>
 #include <vector>
 
-class RadialBasisCinf {
+// phi_0 = exp(-2 (1 - (min/max)^2) / (1 - x^2)) times a constant, x = r / r_cut, and a
+// three-term recursion in x^2 above, whose coefficients depend on min_cutoff / max_cutoff.
+class RBCinf : public RadialMTPBasis {
   public:
-    // size basis functions on [min_dist, max_dist); min_dist / max_dist must not exceed 0.8.
-    RadialBasisCinf(int size, double min_dist, double max_dist);
-
-    // Values at dist < max_dist, times scaling, and their derivatives with respect to dist.
-    void calc(double dist, double* vals, double* ders) const;
-
-    int size;
-    double min_dist;
-    double max_dist;
-    double scaling = 1.0;
+    // Reads the basis properties; min_dist / max_dist must not exceed 0.8.
+    explicit RBCinf(TextFileReader& tfr);
+    void calc_radial_basis_ders(double dist) override;
 
   private:
-    double max_dist_sq;
-    double exp_ratio;                                 // exponent of the envelope at x = 0
-    double zeroth_poly;                               // normalization of the first function
-    std::vector<std::array<double, 3>> recursive_coeffs; // [size - 1] three-term recursion
+    double exp_ratio = 0;                                 // exponent of the envelope at x = 0
+    double zeroth_poly = 0;                               // normalization of phi_0
+    std::vector<std::array<double, 3>> recursive_coeffs;  // [size] recursion coefficients
 };

@@ -1,6 +1,6 @@
 """Parity gate for the ETN C++ layer against mlip-4.
 
-Every tensor `ETN` computes is compared with golden values in `etn_reference/`
+Every tensor `PairETN` computes is compared with golden values in `etn_reference/`
 that mlip-4 computed: the radial basis and its derivatives, the real spherical
 harmonics and their gradients, the dense real and imaginary 3-j tables, and,
 for a 3-core and a 5-core potential on two structures of the NiSi system, each
@@ -29,7 +29,7 @@ import numpy
 from ase import Atoms
 from numpy import float64, int32
 
-from otf_engine._etn import ETN, real_harmonics, real_wigner_3j, write_etn
+from otf_engine._etn import PairETN, real_harmonics, real_wigner_3j, write_etn
 from otf_engine._mtp.neighbors import neighbors
 
 REFERENCE = Path(__file__).parent / "etn_reference"
@@ -54,12 +54,61 @@ def directions():
     return DIRECTIONS / numpy.linalg.norm(DIRECTIONS, axis=1)[:, None]
 
 
-def build_potentials():
-    """The two test potentials, with seeded coefficients."""
+def coeff_blocks(pot):
+    """The (getter, setter) arguments of every coefficient block, in mlip-4's params order."""
+    l_count, core_count = len(pot.get_species_ranks()), pot.get_core_count()
+    blocks = [("radial", l) for l in range(l_count)] + [("species_pair", l) for l in range(l_count)]
+    blocks += [("core", (i, False)) for i in range(core_count)]
+    blocks += [("core", (i, True)) for i in range(1, core_count - 1) if core_count > 3]
+    return blocks + [("species", None)]
+
+
+def get_block(pot, kind, arg):
+    return {"radial": lambda: pot.get_radial_coeffs(arg), "species_pair": lambda: pot.get_species_pair_coeffs(arg),
+            "core": lambda: pot.get_core_coeffs(*arg), "species": pot.get_species_coeffs}[kind]()
+
+
+def params(pot):
+    """The coefficients of pot as mlip-4's params vector."""
+    return numpy.concatenate([get_block(pot, kind, arg) for kind, arg in coeff_blocks(pot)])
+
+
+def set_params(pot, values):
+    """Split mlip-4's params vector into pot's coefficient blocks."""
+    offset = 0
+    for kind, arg in coeff_blocks(pot):
+        size = len(get_block(pot, kind, arg))
+        block = values[offset : offset + size]
+        offset += size
+        if kind == "radial":
+            pot.set_radial_coeffs(arg, block)
+        elif kind == "species_pair":
+            pot.set_species_pair_coeffs(arg, block)
+        elif kind == "core":
+            pot.set_core_coeffs(arg[0], block, imaginary=arg[1])
+        else:
+            pot.set_species_coeffs(block)
+
+
+def template(bond_ranks):
+    """An untrained .etn file of the test shape."""
+    braces = lambda values: "{" + ", ".join(map(str, values)) + "}"
+    lines = ["ETN", "version = 1.0.0", f"species_count = {SPECIES_COUNT}", "radial_basis_type = RBCinf",
+             f"\tmin_dist = {MIN_DIST}", f"\tmax_dist = {MAX_DIST}", f"\tradial_basis_size = {RADIAL_BASIS_SIZE}",
+             f"species_ranks = {braces(SPECIES_RANKS)}", f"radial_funcs_counts = {braces(RADIAL_FUNCS_COUNTS)}",
+             f"radial_ranks = {braces(RADIAL_RANKS)}", f"core_count = {len(bond_ranks) - 1}", "bond_ranks"]
+    return "\n".join(lines + ["\t" + braces(ranks) for ranks in bond_ranks]) + "\n"
+
+
+def build_potentials(workdir):
+    """The two test potentials, from their templates with seeded coefficients."""
     built = {}
     for k, (name, bond_ranks) in enumerate(POTENTIALS.items()):
-        pot = ETN(SPECIES_COUNT, SPECIES_RANKS, RADIAL_FUNCS_COUNTS, RADIAL_RANKS, bond_ranks, RADIAL_BASIS_SIZE, MIN_DIST, MAX_DIST)
-        pot.set_coeffs(numpy.random.default_rng(k).standard_normal(pot.get_coeff_count()) * 0.3)
+        path = Path(workdir) / f"{name}.etn"
+        path.write_text(template(bond_ranks))
+        pot = PairETN(str(path))
+        set_params(pot, numpy.random.default_rng(k).standard_normal(pot.get_coeff_count()) * 0.3)
+        pot.set_trained(True)
         built[name] = pot
     return built
 
@@ -150,7 +199,7 @@ def run_probe(probe, pot, cells, workdir):
     lines = [f"{SPECIES_COUNT} {len(SPECIES_RANKS)} {pot.get_core_count()} {RADIAL_BASIS_SIZE} {MIN_DIST!r} {MAX_DIST!r}"]
     lines += [" ".join(map(str, SPECIES_RANKS)), " ".join(map(str, RADIAL_FUNCS_COUNTS)), " ".join(map(str, RADIAL_RANKS))]
     lines += [f"{len(ranks)} " + " ".join(map(str, ranks)) for ranks in pot.get_bond_ranks()]
-    coeffs = pot.get_coeffs()
+    coeffs = params(pot)
     lines += [str(len(coeffs)), " ".join(repr(float(x)) for x in coeffs)]
     lines += [str(len(PROBE_DISTANCES)), " ".join(map(repr, PROBE_DISTANCES)), str(WIGNER_L_COUNT), str(len(cells))]
     for atoms, types in cells:
@@ -183,8 +232,8 @@ def capture(args):
         golden[f"structure/{s}/cell"] = atoms.cell.array
         golden[f"structure/{s}/types"] = types
 
-    potentials = build_potentials()
     with tempfile.TemporaryDirectory() as workdir:
+        potentials = build_potentials(workdir)
         probe = compile_probe(args.mlip4_build, workdir)
         for name, pot in potentials.items():
             write_etn(pot, REFERENCE / f"{name}.etn")
@@ -218,7 +267,7 @@ def main():
         return 0
 
     golden = numpy.load(GOLDEN)
-    potentials = {name: ETN(str(REFERENCE / f"{name}.etn")) for name in POTENTIALS}
+    potentials = {name: PairETN(str(REFERENCE / f"{name}.etn")) for name in POTENTIALS}
     collected = outputs(potentials, structures(golden))
     failures, worst = [], 0.0
 
