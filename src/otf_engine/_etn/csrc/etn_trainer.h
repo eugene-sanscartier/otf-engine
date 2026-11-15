@@ -6,7 +6,8 @@
 
    The trainer is SPMD, as MTPTrainer is: every rank of a communicator holds
    a copy of the potential and a share of the structures, and the MPI
-   collectives combine them. Its ranks are threads (thread_mpi.h).
+   collectives combine them. Built with MTP_MPI it uses <mpi.h>; otherwise
+   thread_mpi.h, whose ranks are threads.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -16,6 +17,13 @@
 #include "training_structure.h"
 #include "wolfe_bfgs.h"
 
+#ifdef MTP_MPI
+#include <mpi.h>
+#else
+#include "thread_mpi.h"
+#endif
+
+#include <functional>
 #include <ostream>
 #include <string>
 #include <vector>
@@ -33,13 +41,15 @@ struct ETNTrainerOptions {
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
     int bfgs_max_iters_no_improve = 10;
+    bool balance_species = false;     // MTPTrainer's equal share of a structure's force weight per species; not mlip-4's
     std::vector<std::string> species;    // the species' names in the error tables
 };
 
 class ETNTrainer {
   public:
-    // log receives mlip-4's fit log on the rank given one.
-    ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr);
+    // log receives mlip-4's fit log on the rank given one; checkpoint is called
+    // with the potential holding the coefficients at every step outside a line search.
+    ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, and logs
     // the errors on the training set before and after.
@@ -62,6 +72,7 @@ class ETNTrainer {
     int rank = 0, size = 1;
     int structure_count = 0;    // over all ranks
     std::ostream* log;
+    std::function<void()> checkpoint;
 
     std::vector<double> coeffs;    // what potential holds, in mlip-4's params order
 

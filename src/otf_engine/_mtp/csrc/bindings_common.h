@@ -12,6 +12,8 @@
      etn_potential_bindings.cpp     <- etn_potential.{h,cpp}
      etn_training_bindings.cpp      <- etn_training.{h,cpp}
      etn_trainer_bindings.cpp       <- etn_trainer.{h,cpp}
+   Built with MTP_MPI, mtp_trainer_bindings.cpp and maxvol_bindings.cpp are
+   the _mtp_mpi module, and etn_trainer_bindings.cpp the _etn_mpi module.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -19,6 +21,10 @@
 #include "mtp_extrapolation.h"
 #include "mtp_training.h"
 #include "training_structure.h"
+
+#ifdef MTP_MPI
+#include <mpi.h>
+#endif
 
 #include <fstream>
 #include <iostream>
@@ -134,6 +140,26 @@ inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
         throw std::runtime_error("cannot open log '" + target + "'");
     return &file;
 }
+
+#ifdef MTP_MPI
+// Raises error on every rank of comm, or else the error of the lowest rank that has one.
+inline void raise_together(MPI_Comm comm, const std::string& error) {
+    int rank = 0, size = 1;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+    const int mine = error.empty() ? size : rank;
+    int failed = size;
+    MPI_Allreduce(&mine, &failed, 1, MPI_INT, MPI_MIN, comm);
+    if (failed == size) return;
+
+    std::string message = rank == failed ? error : std::string();
+    int length = (int) message.size();
+    MPI_Bcast(&length, 1, MPI_INT, failed, comm);
+    message.resize(length);
+    MPI_Bcast(message.data(), length, MPI_CHAR, failed, comm);
+    throw std::runtime_error(message);
+}
+#endif
 
 // Raises unless every atom of nb has one of the potential's species, which the
 // kernels index their coefficients with.

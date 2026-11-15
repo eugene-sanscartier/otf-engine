@@ -66,24 +66,6 @@ static double* inverse_hessian_buffer(py::object inverse_hessian, int& n) {
 
 #ifdef MTP_MPI
 
-// Raises error on every rank of comm, or else the error of the lowest rank that has one.
-static void raise_together(MPI_Comm comm, const std::string& error) {
-    int rank = 0, size = 1;
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm_size(comm, &size);
-    const int mine = error.empty() ? size : rank;
-    int failed = size;
-    MPI_Allreduce(&mine, &failed, 1, MPI_INT, MPI_MIN, comm);
-    if (failed == size) return;
-
-    std::string message = rank == failed ? error : std::string();
-    int length = (int) message.size();
-    MPI_Bcast(&length, 1, MPI_INT, failed, comm);
-    message.resize(length);
-    MPI_Bcast(message.data(), length, MPI_CHAR, failed, comm);
-    throw std::runtime_error(message);
-}
-
 static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, py::object comm_object, py::object checkpoint, py::object inverse_hessian, bool balance_species) {
     const MPI_Comm comm = MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>());
     int rank = 0;

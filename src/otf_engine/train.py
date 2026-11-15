@@ -1,11 +1,12 @@
-"""Train an MTP with otf_engine's trainer.
+"""Train an MTP or an ETN with otf_engine's trainer.
 
-    python -m otf_engine.train potential.almtp train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=nbh|cfg] [trainer options]
+    python -m otf_engine.train potential.almtp|potential.etn train.cfg [--save_to=FILE] [--ranks=N] [--al_mode=nbh|cfg] [trainer options]
 
-Takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random, --skip_preinit,
-...) and the trainer's own (--varpro=false, --riemannian=false, ...; mtp_backend.MLP_ALGORITHM lists
-those that give mlp's algorithm). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
-be untrained, such as an mlip-3 template, and gains the species of the training set it lacks. The
+For an MTP, takes `mlp train`'s options (--iteration_limit=300, --energy_weight=1, --init_random,
+--skip_preinit, ...) and the trainer's own (--varpro=false, --riemannian=false, ...;
+mtp_backend.MLP_ALGORITHM lists those that give mlp's algorithm); for an ETN, mlip-4's training
+settings (--max_iter_count=300, --pretrain=false, ...). Every species of a structure has an equal share of its force weight. --ranks sets the thread count, by default the CPUs this process may run on. The potential may
+be untrained, such as an mlip-3 template; an MTP gains the species of the training set it lacks. The
 trained potential is written to --save_to, by default over the input, with an active set built on
 the training set.
 """

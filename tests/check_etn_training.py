@@ -10,6 +10,7 @@ with the fits of mlip-4's Train stored in etn_reference/training.npz:
                  mlip-4's JIT-compiled code already takes another path than its VM at step 7
   imaginary      the 5-core potential, whose middle cores have imaginary parts, on both structures
   threads        skip_pretrain on one thread per structure, against mlip-4 on one process
+  mpi            skip_pretrain through mtp_backend.fit under mpirun, one rank per structure
 
 A run fails when its log, numbers aside, differs from mlip-4's; when a logged loss differs from
 mlip-4's by more than --tol relatively, mlip-4's log holding 6 significant digits; or when the
@@ -47,13 +48,14 @@ GOLDEN = kernels.REFERENCE / "training.npz"
 STRUCTURES = [0, 1]
 SETTINGS = {"max_iter_count": 1000, "max_func_eval": 10000, "linstop": 5e-4, "rescale": True, "pretrain": True, "wolfe_c1": 0.1, "wolfe_c2": 0.5, "bfgs_max_iters_no_improve": 10}
 WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
-# name: potential, settings, structures, threads per structure, the mlip-4 fit it is compared with, and the
-# steps compared (None for all, and the trained potential with them)
+# name: potential, settings, structures, ranks (one, a thread per structure, or an MPI rank per structure), the
+# mlip-4 fit it is compared with, and the steps compared (None for all, and the trained potential with them)
 CASES = {
-    "skip_pretrain": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], False, "skip_pretrain", None),
-    "pretrain": ("etn-3", {"pretrain": True, "max_iter_count": 3}, [1], False, "pretrain", 7),
-    "imaginary": ("etn-5", {"pretrain": False, "max_iter_count": 10}, [0, 1], False, "imaginary", None),
-    "threads": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], True, "skip_pretrain", None),
+    "skip_pretrain": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], "one", "skip_pretrain", None),
+    "pretrain": ("etn-3", {"pretrain": True, "max_iter_count": 3}, [1], "one", "pretrain", 7),
+    "imaginary": ("etn-5", {"pretrain": False, "max_iter_count": 10}, [0, 1], "one", "imaginary", None),
+    "threads": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], "threads", "skip_pretrain", None),
+    "mpi": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], "mpi", "skip_pretrain", None),
 }
 STEP = re.compile(r"^(\d+)((\t[-+]?(nan|inf)|\t[-+0-9.eE]+)+)")
 # the trainer's lines, not mlip-4's: its error tables and timing; and the probe's params
@@ -130,12 +132,18 @@ def tensors(pot, coeffs, atoms):
 
 def run_case(name, golden, cells, workdir, tol, tensor_tol):
     """Fits one case; returns its failures and a one-line account."""
-    _, _, _, per_structure, reference, steps = CASES[name]
+    _, _, _, ranks, reference, steps = CASES[name]
     template, settings, labelled = case_inputs(name, cells, workdir)
     log_file = Path(workdir) / f"{name}.log"
     options = {key: str(value) for key, value in dict(settings, **WEIGHTS).items()} | {"log": str(log_file)}
     start = time.perf_counter()
-    trained = train_etn(str(template), [s for _, s in labelled], options, len(labelled) if per_structure else 1)
+    if ranks == "mpi":
+        # mtp_backend.fit over mpirun's ranks, each passing its share; rank 0 saves the coefficients
+        subprocess.run(["mpirun", "-n", str(len(labelled)), sys.executable, str(Path(__file__).resolve()), "--mpi-worker", name, workdir], check=True)
+        trained = ETNTraining(str(template))
+        trained.set_coeffs(numpy.load(Path(workdir) / f"{name}-coeffs.npy"))
+    else:
+        trained = train_etn(str(template), [s for _, s in labelled], options, len(labelled) if ranks == "threads" else 1, balance_species=False)
     elapsed = time.perf_counter() - start
 
     failures = []
@@ -170,6 +178,19 @@ def run_case(name, golden, cells, workdir, tol, tensor_tol):
 
     account = f"{name:14s} {len(mlip4_counts):3d} steps, {count:4d} losses, worst {worst:.2e}, trained tensors {tensor_account}, last loss {b[-1]:.6e}  ({elapsed:.1f} s)"
     return failures, account
+
+
+def mpi_worker(name, workdir):
+    """A case's fit through mtp_backend.fit over MPI.COMM_WORLD, the coefficients saved by rank 0."""
+    from mpi4py import MPI
+
+    from otf_engine.mtp_backend import fit
+
+    comm = MPI.COMM_WORLD
+    template, settings, labelled = case_inputs(name, structures(numpy.load(GOLDEN)), workdir)
+    options = {key: str(value) for key, value in dict(settings, **WEIGHTS).items()} | {"log": str(Path(workdir) / f"{name}.log")}
+    trained = fit(str(template), [s for _, s in labelled[comm.Get_rank() :: comm.Get_size()]], options, comm=comm, balance_species=False)
+    if comm.Get_rank() == 0: numpy.save(Path(workdir) / f"{name}-coeffs.npy", trained.get_coeffs())
 
 
 def capture(args):
@@ -216,8 +237,12 @@ def main():
     parser.add_argument("--cases", nargs="+", default=list(CASES), choices=list(CASES))
     parser.add_argument("--tol", type=float, default=1e-5, help="relative tolerance on logged losses, which mlip-4 writes to 6 digits (default 1e-5)")
     parser.add_argument("--tensor-tol", type=float, default=1e-6, help="relative tolerance on the trained tensors (default 1e-6)")
+    parser.add_argument("--mpi-worker", nargs=2, metavar=("CASE", "WORKDIR"), help=argparse.SUPPRESS)
     args = parser.parse_args()
 
+    if args.mpi_worker:
+        mpi_worker(*args.mpi_worker)
+        return 0
     if args.capture:
         if not args.cfg or not args.mlip4_build:
             parser.error("--capture needs --cfg and --mlip4-build")

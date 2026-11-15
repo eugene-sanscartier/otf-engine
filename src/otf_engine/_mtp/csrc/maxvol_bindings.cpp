@@ -128,6 +128,7 @@ void bind_maxvol(py::module_& m) {
              },
              py::arg("cfg_indices"), py::arg("eqn_indices"), py::arg("pool_id"), "Restore the provenance of each active row from saved indices.")
         .def_readwrite("threshold", &MaxVol::threshold)
+        .def_readwrite("threshold_swap", &MaxVol::threshold_swap, "mlip-4's: once a search has swapped, it goes on while a grade exceeds this; None, threshold, as mlip-3's.")
         .def_property_readonly("A", [](const MaxVol& self) { return DoubleArray({self.n, self.n}, self.A.data()); })
         .def_property_readonly("invA", [](const MaxVol& self) { return DoubleArray({self.n, self.n}, self.invA.data()); })
         .def_property_readonly("active_pool_ids", [](const MaxVol& self) { return IntArray({self.n}, self.active_pool_ids.data()); })

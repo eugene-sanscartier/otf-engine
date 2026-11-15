@@ -2,11 +2,13 @@
    Python bindings for ETNTraining (see etn_training.h).
 
    mlip-4 takes these derivatives by differentiating its program; nothing
-   here binds a function of its.
+   here binds a function of its. The site-energy rows also give
+   Equations.add an ETNTraining overload, on _mtp_ext's Equations class.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
 #include "etn_training.h"
+#include "maxvol.h"
 
 static DoubleArray eval_grad(ETNTraining& self, const PyNeighbors& nb) {
     auto out = zeros({nb.inum(), self.coeff_count()});
@@ -72,4 +74,22 @@ dL/dc (coeff_count,) for a loss L with the given derivatives w.r.t. the energy,
 the forces (n_atoms, 3) and the virial (6, xx,yy,zz,xy,xz,yz); None is zero.
 )doc",
                   py::arg("dloss_denergy"), py::arg("dloss_dforces") = py::none(), py::arg("dloss_dvirial") = py::none());
+
+    // mlip-4's CfgCalc selects on site energies (nbh) or the energy over N (cfg), and has no force rows.
+    py::object equations = py::module_::import("otf_engine._mtp._mtp_ext").attr("Equations");
+    equations.attr("add") = py::cpp_function(
+        [](Equations& self, ETNTraining& pot, const PyNeighbors& nb, int structure) {
+            check_species(pot, nb);
+            if (pot.coeff_count() != self.coeff_count)
+                throw std::runtime_error("Equations: a potential of " + std::to_string(pot.coeff_count()) + " coefficients, not " + std::to_string(self.coeff_count));
+            if (self.needs_forces())
+                throw std::runtime_error("Equations: an ETN selects on energies and site energies only; force_weight and stress_weight must be 0");
+            py::gil_scoped_release unlocked;
+            std::vector<double> site_energy_grad((size_t) nb.inum() * self.coeff_count);
+            pot.eval_grad(nb.view(), site_energy_grad.data());
+            self.add(nb.view(), site_energy_grad.data(), nullptr, nullptr, structure);
+        },
+        py::name("add"), py::is_method(equations), py::sibling(py::getattr(equations, "add", py::none())),
+        py::arg("potential"), py::arg("neighbors"), py::arg("structure") = -1,
+        "Append the equations of one structure under an ETN's current coefficients, numbered structure (by default the next).");
 }

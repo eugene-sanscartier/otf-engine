@@ -17,6 +17,7 @@
 
 #include "mtp_training.h"
 
+#include <optional>
 #include <vector>
 
 // The MaxVol equations of a set of structures, under one set of selection weights.
@@ -31,6 +32,11 @@ class Equations {
     //   site_en_weight > 0    : the raw site energies, last
     // structure numbers it; by default the next after the highest so far.
     void add(MTPTraining& pot, const NeighList& list, int structure = -1);
+    // The same from the gradients of the site energies [inum * coeff_count] and, when needs_forces(),
+    // of the forces [n_atoms * 3 * coeff_count] and of the virial [6 * coeff_count].
+    void add(const NeighList& list, const double* site_energy_grad, const double* force_grad, const double* virial_grad, int structure = -1);
+
+    bool needs_forces() const { return force_weight != 0.0 || stress_weight != 0.0; }
 
     // The equations whose keep entry is true [size()], under the same structure numbering.
     Equations subset(const bool* keep) const;
@@ -75,7 +81,8 @@ class MaxVol {
     // grades[r] = max_i |rows[r] . invA[i]| for count rows of n.
     void grade(const double* rows, int count, double* grades);
 
-    // MaximizeVol: swaps in the highest-grading equation of pool until none grades above threshold or
+    // MaximizeVol: swaps in the highest-grading equation of pool until none grades above threshold
+    // (threshold_swap once it has swapped, when set) or
     // max_swaps are made. Each swap puts the equation it displaces from A into pool in its place, with its
     // provenance, so later sweeps grade the displaced one; pool is restored when the search ends.
     // pool_id is recorded as the pool of each of pool's equations that enters A.
@@ -88,15 +95,18 @@ class MaxVol {
 
     const int n;
     double threshold;
+    // mlip-4's MaximizeVol: once a search has swapped, it goes on while a grade exceeds threshold_swap.
+    // Unset, threshold, as mlip-3's.
+    std::optional<double> threshold_swap;
     std::vector<double> A, invA;                // [n * n] row k of A is active equation k
     std::vector<int> active_pool_ids;           // [n] -1 where row k is still init_scale * e_k
     std::vector<int> active_struct_indices;     // [n]
     std::vector<int> active_eqn_indices;        // [n]
 
   private:
-    // UpdateInvA: swaps v into the row of A it grades highest against, when that grade exceeds threshold,
+    // UpdateInvA: swaps v into the row of A it grades highest against, when that grade exceeds bound,
     // by a rank-1 update of invA; the displaced row goes to displaced [n].
-    bool try_swap(const double* v, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index);
+    bool try_swap(const double* v, double bound, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index);
 
     std::vector<double> w, dv, buf3, row_k;     // [n] try_swap's
     std::vector<double> block;                  // [sweep_block_rows * n] grade's product block

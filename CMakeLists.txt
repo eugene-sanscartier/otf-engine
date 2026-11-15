@@ -66,22 +66,36 @@ target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
 target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX Eigen3::Eigen)
 install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)
 
-# The ETN potential, which uses mtp_core's TextFileReader and _mtp_ext's NeighList
+# The ETN potential classes, which use mtp_core's TextFileReader and _mtp_ext's NeighList, linked into both ETN modules
 set(ETN_CSRC src/otf_engine/_etn/csrc)
-pybind11_add_module(_etn_ext
+add_library(etn_core STATIC
     ${ETN_CSRC}/etn_radial_basis.cpp
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/etn_potential.cpp
     ${ETN_CSRC}/etn_training.cpp
     ${ETN_CSRC}/wolfe_bfgs.cpp
-    ${ETN_CSRC}/etn_trainer.cpp
+)
+target_include_directories(etn_core PUBLIC ${ETN_CSRC})
+target_link_libraries(etn_core PUBLIC mtp_core)
+set_target_properties(etn_core PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
+
+pybind11_add_module(_etn_ext
     ${MTP_CSRC}/thread_mpi.cpp
+    ${ETN_CSRC}/etn_trainer.cpp
     ${ETN_CSRC}/etn_bindings.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/etn_potential_bindings.cpp
     ${ETN_CSRC}/etn_training_bindings.cpp
     ${ETN_CSRC}/etn_trainer_bindings.cpp
 )
-target_include_directories(_etn_ext PRIVATE ${ETN_CSRC})
-target_link_libraries(_etn_ext PRIVATE mtp_core Threads::Threads Eigen3::Eigen)
+target_link_libraries(_etn_ext PRIVATE etn_core Threads::Threads Eigen3::Eigen)
 install(TARGETS _etn_ext DESTINATION otf_engine/_etn)
+
+# The ETN trainer over MPI, which uses _etn_ext's classes
+pybind11_add_module(_etn_mpi
+    ${ETN_CSRC}/etn_trainer.cpp
+    ${ETN_CSRC}/etn_trainer_bindings.cpp
+)
+target_compile_definitions(_etn_mpi PRIVATE MTP_MPI)
+target_link_libraries(_etn_mpi PRIVATE etn_core MPI::MPI_CXX Eigen3::Eigen)
+install(TARGETS _etn_mpi DESTINATION otf_engine/_etn)

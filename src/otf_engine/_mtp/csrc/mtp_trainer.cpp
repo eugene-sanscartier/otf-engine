@@ -40,19 +40,8 @@ MTPTrainer::MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> st
     if (options.radial_only || options.bfgs_only) this->options.varpro = this->options.riemannian = false;
     if (this->options.varpro) this->options.reg_once = true;    // a regularization that moved during BFGS would change the objective
 
-    // N atoms of k species, n_s of species s: each atom of s weighs N / (k n_s), its species N / k.
     if (options.balance_species)
-        for (TrainingStructure& s : this->structures) {
-            std::vector<int> counts;
-            for (int i : s.ilist) {
-                if (s.types[i] >= (int) counts.size()) counts.resize(s.types[i] + 1, 0);
-                counts[s.types[i]]++;
-            }
-            const int k = (int) std::count_if(counts.begin(), counts.end(), [](int n) { return n > 0; });
-            s.species_factors.assign(counts.size(), 0.0);
-            for (size_t t = 0; t < counts.size(); t++)
-                if (counts[t] > 0) s.species_factors[t] = (double) s.ilist.size() / (k * counts[t]);
-        }
+        for (TrainingStructure& s : this->structures) s.balance_species();
 
     // A basic moment has degree 1, a product the sum of its factors'.
     std::vector<int> moment_degree(potential.get_alpha_moment_count(), 0);

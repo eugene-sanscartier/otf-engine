@@ -24,14 +24,18 @@ void Equations::append(const double* grad, double factor, int structure, int equ
 }
 
 void Equations::add(MTPTraining& pot, const NeighList& list, int structure) {
+    const bool stress = stress_weight != 0.0;
+    site_energy_grad.resize((size_t) list.inum * coeff_count);
+    if (needs_forces()) force_grad.resize((size_t) list.n_atoms * 3 * coeff_count);
+    if (stress) virial_grad.resize(6 * coeff_count);
+    pot.eval_grad(list, site_energy_grad.data(), needs_forces() ? force_grad.data() : nullptr, stress ? virial_grad.data() : nullptr);
+    add(list, site_energy_grad.data(), force_grad.data(), virial_grad.data(), structure);
+}
+
+void Equations::add(const NeighList& list, const double* site_energy_grad, const double* force_grad, const double* virial_grad, int structure) {
     const int n_atoms = list.n_atoms, cc = coeff_count;
     const double scale = std::max(std::pow((double) n_atoms, weight_scaling / 2.0), 1e-30);
     const bool forces = force_weight != 0.0, stress = stress_weight != 0.0;
-
-    site_energy_grad.resize((size_t) list.inum * cc);
-    if (forces || stress) force_grad.resize((size_t) n_atoms * 3 * cc);
-    if (stress) virial_grad.resize(6 * cc);
-    pot.eval_grad(list, site_energy_grad.data(), forces || stress ? force_grad.data() : nullptr, stress ? virial_grad.data() : nullptr);
 
     const int s = structure < 0 ? structure_count : structure;
     structure_count = std::max(structure_count, s + 1);
@@ -121,7 +125,8 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps, PoolRa
             }
         int owner = ranks->rank();
         ranks->reduce_best(best_grade, best_position, owner);
-        if (best_grade <= threshold) break;
+        const double bound = swaps > 0 && threshold_swap ? *threshold_swap : threshold;
+        if (best_grade <= bound) break;
 
         const bool mine = owner == ranks->rank();
         if (mine) {
@@ -133,7 +138,7 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps, PoolRa
         ranks->broadcast(v.data(), n, provenance, owner);
 
         int displaced_pool_id, displaced_struct_index, displaced_eqn_index;
-        if (!try_swap(v.data(), provenance[0], provenance[1], provenance[2], displaced.data(), displaced_pool_id, displaced_struct_index, displaced_eqn_index)) break;
+        if (!try_swap(v.data(), bound, provenance[0], provenance[1], provenance[2], displaced.data(), displaced_pool_id, displaced_struct_index, displaced_eqn_index)) break;
         if (!mine) continue;
 
         double* row = &pool.grads[(size_t) best * n];
@@ -159,7 +164,7 @@ void MaxVol::restore_active(const int* cfg_indices, const int* eqn_indices, int 
     }
 }
 
-bool MaxVol::try_swap(const double* v, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index) {
+bool MaxVol::try_swap(const double* v, double bound, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index) {
     // w = invA v, the grade elements; row k of A is the one v replaces
     for (int i = 0; i < n; i++) {
         double s = 0.0;
@@ -169,7 +174,7 @@ bool MaxVol::try_swap(const double* v, int pool_id, int struct_index, int eqn_in
     int k = 0;
     for (int i = 1; i < n; i++)
         if (std::fabs(w[i]) > std::fabs(w[k])) k = i;
-    if (std::fabs(w[k]) <= threshold) return false;
+    if (std::fabs(w[k]) <= bound) return false;
 
     // invA -= (invA (v - A[k]) / w[k]) invA[k]^T
     for (int j = 0; j < n; j++) dv[j] = v[j] - A[(size_t) k * n + j];

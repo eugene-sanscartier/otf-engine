@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 
 // A loss as the log writes it, to 17 significant digits.
 static std::string full_precision(double x) {
@@ -18,13 +19,18 @@ static std::string full_precision(double x) {
     return buffer;
 }
 
-ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log)
-    : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log) {
+ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+    : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log), checkpoint(std::move(checkpoint)) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &size);
 
+    if (options.balance_species)
+        for (TrainingStructure& s : this->structures) s.balance_species();
+
     int local_count = (int) this->structures.size();
     MPI_Allreduce(&local_count, &structure_count, 1, MPI_INT, MPI_SUM, comm);
+    if (structure_count == 0)
+        throw std::runtime_error("ETNTrainer: no training structures");    // on every rank together
 
     coeffs.resize(potential.coeff_count());
     potential.get_coeffs(coeffs.data());
@@ -179,6 +185,11 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
             }
 
             if (log) *log << '\n';
+
+            if (checkpoint) {
+                potential.set_coeffs(coeffs.data());
+                checkpoint();
+            }
         }
 
         // The step that met a stopping rule is dropped
@@ -273,9 +284,10 @@ double ETNTrainer::loss_grad(std::vector<double>& grad) {
             }
         if (s.has_forces)
             for (int i = 0; i < list.n_atoms * 3; i++) {
+                const double wgt = options.balance_species ? options.force_weight * s.species_factors[s.types[i / 3]] : options.force_weight;
                 const double diff = forces[i] - s.forces[i];
-                structure_loss += options.force_weight * diff * diff;
-                dloss_dforces[i] = 2 * options.force_weight * diff;
+                structure_loss += wgt * diff * diff;
+                dloss_dforces[i] = 2 * wgt * diff;
             }
 
         loss += structure_loss;

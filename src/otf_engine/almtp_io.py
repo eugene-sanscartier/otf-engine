@@ -1,4 +1,4 @@
-"""Read and write the #MVS_v1.1 active-set section of .almtp/.mtp files.
+"""Read and write the #MVS_v1.1 active-set section of .almtp/.mtp and .etn files.
 
 The section is written by mlip-3's cfg_selection.cpp (Save/Load) and
 maxvol.cpp (WriteData/ReadData).  Format (mixed text + binary):
@@ -14,7 +14,7 @@ maxvol.cpp (WriteData/ReadData).  Format (mixed text + binary):
     <n*n float64 LE>        <- invA matrix, row-major (column-ordered in mlip)
     \\n#\\n                   <- end delimiter
 
-n = CoeffCount() (radial + linear + species coefficients).
+n = CoeffCount() (radial + linear + species coefficients), or an ETN's coefficient count.
 n is NOT stored explicitly; it is inferred from the binary block size.
 """
 
@@ -43,13 +43,17 @@ class MVSState:
     selected_cfgs: list
 
 
-def _coeff_count(mtp_text: bytes) -> int:
+def _coeff_count(path: str, mtp_text: bytes) -> int:
+    """The coefficient count of the potential in *path*, whose text before the section is *mtp_text*."""
+    if mtp_text.startswith(b"ETN"):
+        from ._etn import PairETN
+        return PairETN(path).get_coeff_count()
     fields = {m[1]: int(m[2]) for m in re.finditer(rb"^\s*(\w+)\s*=\s*(\d+)", mtp_text, re.MULTILINE)}
     sc = fields[b"species_count"]
     return fields[b"radial_basis_size"] * sc * sc * fields[b"radial_funcs_count"] + fields[b"alpha_scalar_moments"] + sc
 
 
-def _read_header_and_binary(data: bytes) -> tuple[dict, ndarray, ndarray, int]:
+def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndarray, int]:
     marker_pos = data.find(_MARKER)
     if marker_pos == -1:
         raise RuntimeError("No #MVS_v1.1 active-set section found.")
@@ -71,7 +75,7 @@ def _read_header_and_binary(data: bytes) -> tuple[dict, ndarray, ndarray, int]:
     if binary_start == -1:
         raise ValueError("Binary payload marker '#' not found in #MVS_v1.1 section")
     binary_start += 1
-    n = _coeff_count(data[:marker_pos])
+    n = _coeff_count(path, data[:marker_pos])
     n_bytes = 2 * n * n * 8
     end_pos = binary_start + n_bytes
     if data[end_pos:end_pos + len(_END_MARKER)] != _END_MARKER:
@@ -114,7 +118,7 @@ def read_mvs_header(almtp_path: str) -> tuple[dict, ndarray, ndarray]:
         data = f.read()
 
     try:
-        weights, A, invA, _ = _read_header_and_binary(data)
+        weights, A, invA, _ = _read_header_and_binary(data, almtp_path)
     except RuntimeError as exc:
         raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
     return weights, A, invA
@@ -126,7 +130,7 @@ def read_mvs_state(almtp_path: str) -> MVSState:
         data = f.read()
 
     try:
-        weights, A, invA, end_pos = _read_header_and_binary(data)
+        weights, A, invA, end_pos = _read_header_and_binary(data, almtp_path)
     except RuntimeError as exc:
         raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
 
