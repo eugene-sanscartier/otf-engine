@@ -7,13 +7,11 @@ from pathlib import Path
 from .._core.io import format_floats, format_ints
 
 
-def write_mtp(potential, filename, template_filename=None):
+def write_mtp(potential, filename):
     """Write an MTP potential to an .mtp file.
 
-    The current implementation writes the canonical file structure expected by
-    PairMTP::read_file(). If template_filename is provided, it is accepted
-    for API compatibility but not required. An untrained potential is written
-    without its species count and coefficients, as mlip-3 writes it.
+    The file structure is the one PairMTP::read_file() expects. An untrained
+    potential is written without its species count and coefficients, as mlip-3 writes it.
     """
     path = Path(filename)
     path.parent.mkdir(parents=True, exist_ok=True)

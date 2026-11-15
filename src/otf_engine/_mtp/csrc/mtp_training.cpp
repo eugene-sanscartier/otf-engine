@@ -160,7 +160,6 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
     const int width = coeff_count();
     const int n_radial = radial_coeff_count;
     const int n_linear = alpha_scalar_count;
-    const int stride = 1 + 2 * radial_func_count;
 
     // Column offsets of each coefficient block within a row of width `width`.
     const int rad_off = 0;
@@ -202,7 +201,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
 
         // Resize per neighbor arrays
         if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * stride);
+            neighbor_cache.resize((size_t) jnum * cache_stride);
             cached_j.resize(jnum);
             valid_dr.resize(jnum);
             cache_size = jnum;
@@ -241,7 +240,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             const double inv_dist = 1.0 / dist;
             for (int a = 0; a < 3; a++) u[a][valid_count] = r[a] * inv_dist;
             inv_dists[valid_count] = inv_dist;
-            neighbor_cache[(size_t) valid_count * stride] = inv_dist;
+            neighbor_cache[(size_t) valid_count * cache_stride] = inv_dist;
             radial_basis->calc_radial_basis_ders(dist);
             std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size);
             std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size);
@@ -435,7 +434,7 @@ X86_64_V3_CLONE void MTPTraining::eval_grad(const NeighList& list, double* site_
             const int j = cached_j[jj];
             const int jtype = list.types[j];
             const auto& r = valid_dr[jj];
-            const double inv_dist = neighbor_cache[(size_t) jj * stride];
+            const double inv_dist = neighbor_cache[(size_t) jj * cache_stride];
             const double unit_r[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
             const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
             const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;

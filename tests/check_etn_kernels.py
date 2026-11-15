@@ -281,7 +281,7 @@ def run_probe(probe, pot, cells, workdir):
     ints = lambda values: " ".join(map(str, values))
     floats = lambda values: " ".join(repr(float(x)) for x in values)
     lines = [f"{pot.get_species_count()} {len(pot.get_species_ranks())} {pot.get_core_count()} {RADIAL_BASIS_SIZE} {MIN_DIST!r} {MAX_DIST!r}"]
-    lines += [ints(pot.get_species_ranks()), ints(pot.get_radial_funcs_counts()), ints(pot.get_radial_ranks())]
+    lines += [ints(pot.get_species_ranks()), ints(pot.get_radial_func_counts()), ints(pot.get_radial_ranks())]
     lines += [f"{len(ranks)} {ints(ranks)}" for ranks in pot.get_bond_ranks()]
     coeffs = params(pot)
     lines += [str(len(coeffs)), floats(coeffs)]

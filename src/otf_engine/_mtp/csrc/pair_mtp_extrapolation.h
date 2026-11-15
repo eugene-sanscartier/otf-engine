@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "mtp_potential.h"
+#include "pair_mtp.h"
 
 class PairMTPExtrapolation : public PairMTP {
   public:

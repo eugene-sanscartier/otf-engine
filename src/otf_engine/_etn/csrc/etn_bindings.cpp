@@ -10,7 +10,7 @@ PYBIND11_MODULE(_etn_ext, m) {
     py::module_::import("otf_engine._core._core_ext");
 
     bind_etn_harmonics(m);
-    bind_etn_potential(m);
+    bind_pair_etn(m);
     bind_etn_training(m);
     bind_etn_trainer(m);
 }

@@ -5,9 +5,8 @@
    Original author of mlip-4's ETN: Max Hodapp
 ------------------------------------------------------------------------- */
 
-#include "etn_potential.h"
+#include "pair_etn.h"
 
-#include "etn_radial_basis.h"
 #include "text_file_reader.h"
 
 #include <cmath>
@@ -360,21 +359,7 @@ void PairETN::read_file(std::istream& is) {
         throw std::runtime_error("PairETN: ETN species count must be positive");
 
     tfr.advance();
-    if (tfr.keyword() != "radial_basis_type")
-        throw std::runtime_error("PairETN: no radial basis set type is specified");
-    tfr.rest() >> radial_basis_type;
-
-    // Set the type of radial basis.
-    if (radial_basis_type == "RBCinf")
-        radial_basis = new RBCinf(tfr);
-    else
-        throw std::runtime_error("PairETN: the radial basis type '" + radial_basis_type + "' was not found/available");
-
-    radial_basis->scaling = scaling;
-    radial_basis_size = radial_basis->size;
-    min_cutoff = radial_basis->min_cutoff;
-    max_cutoff = radial_basis->max_cutoff;
-    max_cutoff_sq = max_cutoff * max_cutoff;
+    read_radial_basis(tfr);
 
     // Shape of the input and of the tensor train
     tfr.expect("species_ranks");

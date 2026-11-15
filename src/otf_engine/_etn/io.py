@@ -30,7 +30,7 @@ def write_etn(potential, filename):
         stream.write(f"\tmax_dist = {potential.get_max_cutoff():.17g}\n")
         stream.write(f"\tradial_basis_size = {potential.get_radial_basis_size()}\n")
         stream.write("species_ranks = {" + format_ints(potential.get_species_ranks()) + "}\n")
-        stream.write("radial_funcs_counts = {" + format_ints(potential.get_radial_funcs_counts()) + "}\n")
+        stream.write("radial_funcs_counts = {" + format_ints(potential.get_radial_func_counts()) + "}\n")
         stream.write("radial_ranks = {" + format_ints(potential.get_radial_ranks()) + "}\n")
         stream.write(f"core_count = {core_count}\n")
         stream.write("bond_ranks\n")

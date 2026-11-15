@@ -1,9 +1,9 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for PairETN (see etn_potential.h).
+   Python bindings for PairETN (see pair_etn.h).
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
-#include "etn_potential.h"
+#include "pair_etn.h"
 
 // --- the computation of mlip-4's ETN ---------------------------------------
 
@@ -46,7 +46,7 @@ static void check_length(const DoubleArray& arr, const std::vector<double>& bloc
         throw std::runtime_error(std::string(what) + ": expected length " + std::to_string(block.size()));
 }
 
-void bind_etn_potential(py::module_& m) {
+void bind_pair_etn(py::module_& m) {
     auto cls = py::class_<PairETN, Pair>(m, "PairETN", "Energy, forces and virial for an ETN potential file.")
                    .def(py::init<const std::string&>(), py::arg("filename"), "Load an ETN potential from an .etn file (version 1.0.0).");
 
@@ -66,7 +66,7 @@ entry (l, m, n) at offset(l) + (m + l) * rank(l) + n.
     // get_coeffs orders the blocks as mlip-4's params.
     cls.def("get_core_count", &PairETN::get_core_count)
         .def("get_species_ranks", &PairETN::get_species_ranks)
-        .def("get_radial_funcs_counts", &PairETN::get_radial_func_counts)
+        .def("get_radial_func_counts", &PairETN::get_radial_func_counts)
         .def("get_radial_ranks", &PairETN::get_radial_ranks)
         .def("get_bond_ranks", &PairETN::get_bond_ranks)
 

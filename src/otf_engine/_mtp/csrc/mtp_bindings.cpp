@@ -9,8 +9,8 @@ PYBIND11_MODULE(_mtp_ext, m) {
     m.doc() = "Standalone MTP potential bindings (no LAMMPS).";
     py::module_::import("otf_engine._core._core_ext");
 
-    bind_potential(m);
-    bind_extrapolation(m);
-    bind_training(m);
-    bind_trainer(m);
+    bind_pair_mtp(m);
+    bind_pair_mtp_extrapolation(m);
+    bind_mtp_training(m);
+    bind_mtp_trainer(m);
 }

@@ -20,7 +20,6 @@ n is NOT stored explicitly; it is inferred from the binary block size.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from io import StringIO
 
@@ -41,16 +40,6 @@ class MVSState:
     active_cfg_indices: ndarray
     active_eqn_indices: ndarray
     selected_cfgs: list
-
-
-def _coeff_count(path: str, mtp_text: bytes) -> int:
-    """The coefficient count of the potential in *path*, whose text before the section is *mtp_text*."""
-    if mtp_text.startswith(b"ETN"):
-        from ._etn import PairETN
-        return PairETN(path).get_coeff_count()
-    fields = {m[1]: int(m[2]) for m in re.finditer(rb"^\s*(\w+)\s*=\s*(\d+)", mtp_text, re.MULTILINE)}
-    sc = fields[b"species_count"]
-    return fields[b"radial_basis_size"] * sc * sc * fields[b"radial_funcs_count"] + fields[b"alpha_scalar_moments"] + sc
 
 
 def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndarray, int]:
@@ -75,7 +64,8 @@ def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndar
     if binary_start == -1:
         raise ValueError("Binary payload marker '#' not found in #MVS_v1.1 section")
     binary_start += 1
-    n = _coeff_count(path, data[:marker_pos])
+    from .models import model_of    # loads the extensions, which reading the section's header does not need
+    n = model_of(path).training(path).get_coeff_count()
     n_bytes = 2 * n * n * 8
     end_pos = binary_start + n_bytes
     if data[end_pos:end_pos + len(_END_MARKER)] != _END_MARKER:

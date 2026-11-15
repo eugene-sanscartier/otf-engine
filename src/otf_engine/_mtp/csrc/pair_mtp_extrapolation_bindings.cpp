@@ -1,9 +1,9 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for PairMTPExtrapolation (see mtp_extrapolation.h).
+   Python bindings for PairMTPExtrapolation (see pair_mtp_extrapolation.h).
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
-#include "mtp_extrapolation.h"
+#include "pair_mtp_extrapolation.h"
 
 // --- ported from PairMTPExtrapolation --------------------------------------
 
@@ -19,7 +19,7 @@ static py::dict compute(PairMTPExtrapolation& self, const PyNeighbors& nb) {
     return result;
 }
 
-void bind_extrapolation(py::module_& m) {
+void bind_pair_mtp_extrapolation(py::module_& m) {
     auto cls = py::class_<PairMTPExtrapolation, PairMTP>(m, "PairMTPExtrapolation", "An MTP potential that also grades configurations against a MaxVol active set.")
                    .def(py::init<const std::string&>(), py::arg("filename"));
 

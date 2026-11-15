@@ -12,10 +12,11 @@ set(CORE_CSRC src/otf_engine/_core/csrc)
 set(MTP_CSRC src/otf_engine/_mtp/csrc)
 set(ETN_CSRC src/otf_engine/_etn/csrc)
 
-# What the MTP and the ETN share: Pair, the file reader, the radial basis base and MaxVol, linked into every module
+# What the MTP and the ETN share: Pair, the file reader, the radial bases and MaxVol, linked into every module
 add_library(core STATIC
     ${CORE_CSRC}/text_file_reader.cpp
     ${CORE_CSRC}/mtp_radial_basis.cpp
+    ${CORE_CSRC}/etn_radial_basis.cpp
     ${CORE_CSRC}/pair.cpp
     ${CORE_CSRC}/maxvol.cpp
 )
@@ -60,8 +61,8 @@ install(TARGETS _core_mpi DESTINATION otf_engine/_core)
 
 # The MTP potential classes, linked into both MTP modules
 add_library(mtp STATIC
-    ${MTP_CSRC}/mtp_potential.cpp
-    ${MTP_CSRC}/mtp_extrapolation.cpp
+    ${MTP_CSRC}/pair_mtp.cpp
+    ${MTP_CSRC}/pair_mtp_extrapolation.cpp
     ${MTP_CSRC}/mtp_training.cpp
 )
 target_include_directories(mtp PUBLIC ${MTP_CSRC})
@@ -73,8 +74,8 @@ pybind11_add_module(_mtp_ext
     ${MTP_CSRC}/bfgs.cpp
     ${MTP_CSRC}/mtp_trainer.cpp
     ${MTP_CSRC}/mtp_bindings.cpp
-    ${MTP_CSRC}/mtp_potential_bindings.cpp
-    ${MTP_CSRC}/mtp_extrapolation_bindings.cpp
+    ${MTP_CSRC}/pair_mtp_bindings.cpp
+    ${MTP_CSRC}/pair_mtp_extrapolation_bindings.cpp
     ${MTP_CSRC}/mtp_training_bindings.cpp
     ${MTP_CSRC}/mtp_trainer_bindings.cpp
 )
@@ -93,9 +94,8 @@ install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)
 
 # The ETN potential classes, linked into both ETN modules
 add_library(etn STATIC
-    ${ETN_CSRC}/etn_radial_basis.cpp
     ${ETN_CSRC}/etn_harmonics.cpp
-    ${ETN_CSRC}/etn_potential.cpp
+    ${ETN_CSRC}/pair_etn.cpp
     ${ETN_CSRC}/etn_training.cpp
     ${ETN_CSRC}/wolfe_bfgs.cpp
 )
@@ -108,7 +108,7 @@ pybind11_add_module(_etn_ext
     ${ETN_CSRC}/etn_trainer.cpp
     ${ETN_CSRC}/etn_bindings.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
-    ${ETN_CSRC}/etn_potential_bindings.cpp
+    ${ETN_CSRC}/pair_etn_bindings.cpp
     ${ETN_CSRC}/etn_training_bindings.cpp
     ${ETN_CSRC}/etn_trainer_bindings.cpp
 )

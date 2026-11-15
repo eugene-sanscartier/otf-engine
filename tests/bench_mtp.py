@@ -16,9 +16,9 @@ less: rounding differences grow through the BFGS, and past about 45 steps they s
 mlp on 1 rank from mlp on 4 ranks, which fit the same loss.
 
 An untrained potential (an mlip-3 template) logs 75 pre-training steps first, over which
-rounding separates even mlp's runs; tests/check_training.py gates the untrained paths.
+rounding separates even mlp's runs; tests/check_mtp_training.py gates the untrained paths.
 
-    python tests/bench_training.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
+    python tests/bench_mtp.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
 """
 
 import argparse
@@ -31,7 +31,8 @@ from tempfile import TemporaryDirectory
 
 import numpy
 
-from otf_engine._mtp import MTPCalculator, PairMTP
+from otf_engine._core import PotentialCalculator
+from otf_engine._mtp import MTPTraining, PairMTP
 from otf_engine.io_cfg import read_cfg
 from otf_engine.train import MLP_ALGORITHM
 
@@ -53,7 +54,7 @@ def extract_cfgs(cfg_path, n_structures, out_path):
 
 def rmse(potential_path, structs):
     """Energy RMSE per atom and force RMSE per component of a potential on structs."""
-    calc = MTPCalculator(str(potential_path))
+    calc = PotentialCalculator(MTPTraining(str(potential_path)))
     e_err, f_err = [], []
     for atoms in structs:
         result = calc.potential.compute(calc.neighbors(atoms))

@@ -96,5 +96,5 @@ class PairMTP : public Pair {
     // Graph traversal, forwards and backwards pass
     std::vector<double> moment_tensor_vals;          // the moments
     std::vector<double> nbh_energy_ders_wrt_moments; // same, for ders
-    // neighbor_cache's stride is 1 + 2 * radial_func_count: 1/dist, radial vals, radial ders
+    // neighbor_cache holds per neighbor 1/dist, the radial vals and the radial ders: cache_stride is 1 + 2 * radial_func_count
 };

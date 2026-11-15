@@ -33,7 +33,7 @@ from tempfile import TemporaryDirectory
 
 import numpy
 
-from bench_training import extract_cfgs
+from bench_mtp import extract_cfgs
 
 TIMEOUT = 300    # s, so that a hung rank fails the gate instead of stalling it
 LOSS_LINE = re.compile(r"(?:BFGS|Riemann) iter +(\d+): +(?:f=)?(\S+)")    # the trainer's logged losses
@@ -46,7 +46,8 @@ def worker(args):
     from mpi4py import MPI
     from pykmc.manager import ManagerFactory
     from otf_engine import NestedLauncher
-    from otf_engine._mtp import MTPCalculator
+    from otf_engine._core import PotentialCalculator
+    from otf_engine._mtp import MTPTraining
     from otf_engine.otf_mtp import OTFCycle
     from otf_engine import otf_pool
 
@@ -66,7 +67,7 @@ def worker(args):
 
     def evaluator(structure):
         atoms = structure.copy()
-        atoms.calc = MTPCalculator(args.potential)
+        atoms.calc = PotentialCalculator(MTPTraining(args.potential))
         results = dict(energy=atoms.get_potential_energy(), forces=atoms.get_forces(), stress=atoms.get_stress())
         atoms.calc = SinglePointCalculator(atoms, **results)
         return atoms

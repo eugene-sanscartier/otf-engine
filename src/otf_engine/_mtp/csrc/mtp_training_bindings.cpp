@@ -22,7 +22,7 @@ static py::object eval_grad(MTPTraining& self, const PyNeighbors& nb, bool force
     return grad_arrays(nb, self.coeff_count(), forces, virial, [&](double* eg, double* fg, double* vg) { self.eval_grad(nb.view(), eg, fg, vg, radial); });
 }
 
-void bind_training(py::module_& m) {
+void bind_mtp_training(py::module_& m) {
     auto cls = py::class_<MTPTraining, PairMTP>(m, "MTPTraining", "An MTP potential that also gives its basis values, and differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
                    .def(py::init<const std::string&>(), py::arg("filename"));
 

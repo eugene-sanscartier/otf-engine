@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "mtp_potential.h"
+#include "pair_mtp.h"
 
 class MTPTraining : public PairMTP {
   public:

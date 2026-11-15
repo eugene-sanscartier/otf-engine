@@ -95,7 +95,7 @@ static py::tuple objective(const std::string& filename, py::iterable structures,
     return py::make_tuple(loss, py::array_t<double>(grad.size(), grad.data()));
 }
 
-void bind_trainer(py::module_& m) {
+void bind_mtp_trainer(py::module_& m) {
     m.def("trainer_objective", &objective, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("balance_species") = true,
           "The loss the trainer's BFGS minimizes and its gradient at coeffs, for gradient tests; the potential in filename must hold every species of structures.");
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(

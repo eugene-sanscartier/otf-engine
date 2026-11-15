@@ -1,12 +1,12 @@
 """Kernel-equivalence gate for the MTP C++ layer.
 
 Every entry point of `PairMTP`, `PairMTPExtrapolation` and `MTPTraining` is run
-against golden values in `kernel_reference/`, on a level-16 3-species potential.
+against golden values in `mtp_reference/`, on a level-16 3-species potential.
 The forward pass exists in five hand-written copies, one per `compute`-shaped
 method; this is what catches a transcription slip between them.
 
-    python tests/check_kernels.py             check against the golden values
-    python tests/check_kernels.py --capture   rewrite them from this build
+    python tests/check_mtp_kernels.py             check against the golden values
+    python tests/check_mtp_kernels.py --capture   rewrite them from this build
 
 Capture only from a build that has already passed, and say in the commit why the
 values moved.
@@ -23,7 +23,7 @@ from numpy import float64, int32
 from otf_engine._mtp import MTPTraining, PairMTPExtrapolation
 from otf_engine._core import neighbors
 
-REFERENCE = Path(__file__).parent / "kernel_reference"
+REFERENCE = Path(__file__).parent / "mtp_reference"
 POTENTIAL = REFERENCE / "potential-16.mtp"
 GOLDEN = REFERENCE / "kernels.npz"
 TOL = 1e-12

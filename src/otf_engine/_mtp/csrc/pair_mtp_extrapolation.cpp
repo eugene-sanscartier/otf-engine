@@ -4,7 +4,7 @@
    Original author: Richard Meng, Queen's University at Kingston, 10.02.25
 ------------------------------------------------------------------------- */
 
-#include "mtp_extrapolation.h"
+#include "pair_mtp_extrapolation.h"
 
 #include <cmath>
 #include <stdexcept>
@@ -26,7 +26,6 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
 
     max_grade = 0;
 
-    const int stride = 1 + 2 * radial_func_count;
     int nbr_offset = 0;
 
     energy = 0.0;
@@ -55,7 +54,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
 
         // Resize per neighbor arrays
         if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * stride);
+            neighbor_cache.resize((size_t) jnum * cache_stride);
             cached_j.resize(jnum);
             valid_dr.resize(jnum);
             cache_size = jnum;
@@ -86,7 +85,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             const double dist = std::sqrt(rsq);
             const double inv_dist = 1.0 / dist;
             const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            double* cache = neighbor_cache.data() + (size_t) valid_count * stride;
+            double* cache = neighbor_cache.data() + (size_t) valid_count * cache_stride;
             cache[0] = inv_dist;
             double* vals = cache + 1;
             double* ders = vals + radial_func_count;
@@ -167,7 +166,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const auto& r = valid_dr[jj];
-            const double* cache = neighbor_cache.data() + (size_t) jj * stride;
+            const double* cache = neighbor_cache.data() + (size_t) jj * cache_stride;
             const double inv_dist = cache[0];
             const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
             const double* vals = cache + 1;

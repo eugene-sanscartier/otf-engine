@@ -4,7 +4,7 @@
    Original author: Richard Meng, Queen's University at Kingston, 22.11.24
 ------------------------------------------------------------------------- */
 
-#include "mtp_potential.h"
+#include "pair_mtp.h"
 
 #include "text_file_reader.h"
 
@@ -36,7 +36,6 @@ void PairMTP::set_coeffs(const double* c) {
    Main Computation Function
    ---------------------------------------------------------------------- */
 void PairMTP::compute(const NeighList& list) {
-    const int stride = 1 + 2 * radial_func_count;
     int nbr_offset = 0;
 
     energy = 0.0;
@@ -57,7 +56,7 @@ void PairMTP::compute(const NeighList& list) {
 
         // Resize per neighbor arrays
         if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * stride);
+            neighbor_cache.resize((size_t) jnum * cache_stride);
             cached_j.resize(jnum);
             valid_dr.resize(jnum);
             cache_size = jnum;
@@ -81,7 +80,7 @@ void PairMTP::compute(const NeighList& list) {
             const double dist = std::sqrt(rsq);
             const double inv_dist = 1.0 / dist;
             const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            double* cache = neighbor_cache.data() + (size_t) valid_count * stride;
+            double* cache = neighbor_cache.data() + (size_t) valid_count * cache_stride;
             cache[0] = inv_dist;
             double* vals = cache + 1;
             double* ders = vals + radial_func_count;
@@ -155,7 +154,7 @@ void PairMTP::compute(const NeighList& list) {
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const auto& r = valid_dr[jj];
-            const double* cache = neighbor_cache.data() + (size_t) jj * stride;
+            const double* cache = neighbor_cache.data() + (size_t) jj * cache_stride;
             const double inv_dist = cache[0];
             const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
             const double* vals = cache + 1;
@@ -251,25 +250,12 @@ void PairMTP::read_file(std::istream& is) {
         tfr.advance();
     }
 
-    if (tfr.keyword() != "radial_basis_type")
-        throw std::runtime_error("PairMTP: no radial basis set type is specified");
-    tfr.rest() >> radial_basis_type;
-
-    // Set the type of radial basis.
-    if (radial_basis_type == "RBChebyshev")
-        radial_basis = new RBChebyshev(tfr);
-    else
-        throw std::runtime_error("PairMTP: the radial basis type '" + radial_basis_type + "' was not found/available");
-
-    radial_basis->scaling = scaling;
-    radial_basis_size = radial_basis->size;
-    min_cutoff = radial_basis->min_cutoff;
-    max_cutoff = radial_basis->max_cutoff;
-    max_cutoff_sq = max_cutoff * max_cutoff;
+    read_radial_basis(tfr);
 
     radial_func_count = tfr.next_int("radial_funcs_count");
     if (radial_func_count < 1)
         throw std::runtime_error("PairMTP: MTP radial function count must be positive");
+    cache_stride = 1 + 2 * radial_func_count;
 
     tfr.advance();
     if (tfr.keyword() == "magnetic_basis_type")

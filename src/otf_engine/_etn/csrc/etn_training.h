@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "etn_potential.h"
+#include "pair_etn.h"
 
 class ETNTraining : public PairETN {
   public:

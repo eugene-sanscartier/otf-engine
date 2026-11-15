@@ -1,9 +1,9 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for PairMTP (see mtp_potential.h).
+   Python bindings for PairMTP (see pair_mtp.h).
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
-#include "mtp_potential.h"
+#include "pair_mtp.h"
 
 // --- ported from PairMTP --------------------------------------------------
 
@@ -15,7 +15,7 @@ static py::dict compute(PairMTP& self, const PyNeighbors& nb) {
     return potential_results(self, nb.n_atoms());
 }
 
-void bind_potential(py::module_& m) {
+void bind_pair_mtp(py::module_& m) {
     auto cls = py::class_<PairMTP, Pair>(m, "PairMTP", "Energy, forces and virial for an MTP potential file.")
                    .def(py::init<const std::string&>(), py::arg("filename"), "Load an MTP potential from a .mtp file (version 1.1.0).");
 

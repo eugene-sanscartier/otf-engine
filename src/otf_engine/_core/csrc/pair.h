@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+class TextFileReader;
+
 class Pair {
   public:
     virtual ~Pair() { delete radial_basis; }
@@ -63,6 +65,10 @@ class Pair {
     void set_trained(bool t) { trained = t; }
 
   protected:
+    // Reads radial_basis_type at the current line of tfr and the basis it names, RBChebyshev or RBCinf,
+    // and sets the radial basis members from it; scaling must be read first.
+    void read_radial_basis(TextFileReader& tfr);
+
     std::string potential_name = "Untitled";
     std::string radial_basis_type;
 
@@ -79,7 +85,7 @@ class Pair {
     double max_cutoff = 0.0;
     double max_cutoff_sq = 0.0;
 
-    std::vector<double> species_coeffs;  // 0th rank moment tensor coeffs: site energy offsets
+    std::vector<double> species_coeffs;  // [species_count] site energy offsets
 
     // Results of compute
     double energy = 0.0;
@@ -91,5 +97,6 @@ class Pair {
     int cache_size = 0;
     std::vector<int> cached_j;                    // [cache_size]
     std::vector<std::array<double, 3>> valid_dr;  // [cache_size] displacement of each cached neighbor
-    std::vector<double> neighbor_cache;           // [cache_size * stride] 1/dist, then the potential's per-neighbor values
+    int cache_stride = 0;                         // values per cached neighbor
+    std::vector<double> neighbor_cache;           // [cache_size * cache_stride] 1/dist, then the potential's per-neighbor values
 };

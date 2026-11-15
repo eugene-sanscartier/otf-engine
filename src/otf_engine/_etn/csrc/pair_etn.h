@@ -147,6 +147,6 @@ class PairETN : public Pair {
     std::vector<double> input_adj;  // [input_shape.size]
     std::vector<double> bond_adj;   // [bonds_size]
 
-    // neighbor_cache's stride: 1/dist, Y, grad Y, radial channels and their ders
-    int cache_stride = 0;                         // 1 + 4 * l_count^2 + 2 * radial-rank channels
+    // neighbor_cache holds per neighbor 1/dist, Y, grad Y, the radial channels and their ders:
+    // cache_stride is 1 + 4 * l_count^2 + 2 * radial-rank channels
 };

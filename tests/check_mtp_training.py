@@ -18,7 +18,7 @@ so ill-conditioned that rounding separates mlp on 2, 4 or 8 ranks from mlp on 1 
 1e-5 from step 30 to 38 on 8 structures, so its log is compared up to its --preinit-steps-th
 logged loss only; over the first 15 the trainer stays within 1.4e-6 of mlp.
 
-    python tests/check_training.py --cfg tmp/set.cfg
+    python tests/check_mtp_training.py --cfg tmp/set.cfg
 """
 
 import argparse
@@ -31,7 +31,7 @@ from tempfile import TemporaryDirectory
 
 import numpy
 
-from bench_training import BFGS_LINE, MLP, extract_cfgs
+from bench_mtp import BFGS_LINE, MLP, extract_cfgs
 from otf_engine.io_cfg import read_cfg, write_cfg
 from otf_engine.train import MLP_ALGORITHM, train
 

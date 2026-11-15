@@ -8,7 +8,7 @@ A direction passes at its best of three step sizes. VarPro's gradient carries th
 solve, which the system's conditioning sets (5e-5 to 3e-4 relatively on tmp/set.cfg at level 16,
 1e-6 with reg_param 1e-8), so its option sets pass under 1e-3, and riemannian alone under 1e-6.
 
-    python tests/check_trainer_gradient.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg --species Ni Si H
+    python tests/check_mtp_trainer_gradient.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg --species Ni Si H
 """
 import argparse
 import sys

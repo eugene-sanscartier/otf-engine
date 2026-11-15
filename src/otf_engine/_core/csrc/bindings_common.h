@@ -3,18 +3,18 @@
 
    One binding unit per source pair, bound in the same order. In the
    _core_ext module:
-     core_bindings.cpp              <- neigh_list.h, pair.{h,cpp}, error_table.h
-     maxvol_bindings.cpp            <- maxvol.{h,cpp}
+     core_bindings.cpp                    <- neigh_list.h, pair.{h,cpp}, error_table.h
+     maxvol_bindings.cpp                  <- maxvol.{h,cpp}
    in the _mtp_ext module under ../../_mtp/csrc/:
-     mtp_potential_bindings.cpp     <- mtp_potential.{h,cpp}
-     mtp_extrapolation_bindings.cpp <- mtp_extrapolation.{h,cpp}
-     mtp_training_bindings.cpp      <- mtp_training.{h,cpp}
-     mtp_trainer_bindings.cpp       <- mtp_trainer.{h,cpp}
+     pair_mtp_bindings.cpp                <- pair_mtp.{h,cpp}
+     pair_mtp_extrapolation_bindings.cpp  <- pair_mtp_extrapolation.{h,cpp}
+     mtp_training_bindings.cpp            <- mtp_training.{h,cpp}
+     mtp_trainer_bindings.cpp             <- mtp_trainer.{h,cpp}
    and in the _etn_ext module under ../../_etn/csrc/:
-     etn_harmonics_bindings.cpp     <- etn_harmonics.{h,cpp}
-     etn_potential_bindings.cpp     <- etn_potential.{h,cpp}
-     etn_training_bindings.cpp      <- etn_training.{h,cpp}
-     etn_trainer_bindings.cpp       <- etn_trainer.{h,cpp}
+     etn_harmonics_bindings.cpp           <- etn_harmonics.{h,cpp}
+     pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
+     etn_training_bindings.cpp            <- etn_training.{h,cpp}
+     etn_trainer_bindings.cpp             <- etn_trainer.{h,cpp}
    Built with MTP_MPI, core_bindings.cpp and maxvol_bindings.cpp are the
    _core_mpi module, mtp_trainer_bindings.cpp the _mtp_mpi module, and
    etn_trainer_bindings.cpp the _etn_mpi module.
@@ -394,11 +394,11 @@ py::object train_on_threads(const char* name, const std::string& filename, py::i
 
 void bind_core(py::module_& m);
 void bind_maxvol(py::module_& m);
-void bind_potential(py::module_& m);
-void bind_extrapolation(py::module_& m);
-void bind_training(py::module_& m);
-void bind_trainer(py::module_& m);
+void bind_pair_mtp(py::module_& m);
+void bind_pair_mtp_extrapolation(py::module_& m);
+void bind_mtp_training(py::module_& m);
+void bind_mtp_trainer(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
-void bind_etn_potential(py::module_& m);
+void bind_pair_etn(py::module_& m);
 void bind_etn_training(py::module_& m);
 void bind_etn_trainer(py::module_& m);
