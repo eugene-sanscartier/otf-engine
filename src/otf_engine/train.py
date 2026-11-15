@@ -34,8 +34,8 @@ def training_structure(atoms, cutoff: float, number: int) -> TrainingStructure:
     forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
     virial = None
     if "stress" in results:
-        # read_cfg divides PlusStress by -det(cell); ASE's Voigt order is xx yy zz yz xz xy.
-        v = -numpy.asarray(results["stress"], dtype=float64) * numpy.linalg.det(atoms.cell.array)
+        # ASE's stress is -virial / volume, in Voigt order xx yy zz yz xz xy
+        v = -numpy.asarray(results["stress"], dtype=float64) * atoms.get_volume()
         virial = v[[0, 1, 2, 5, 4, 3]]
     structure = TrainingStructure(neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number)
     return structure

@@ -569,7 +569,7 @@ void MTPTrainer::assemble_linear() {
         if (options.force_weight != 0 && s.has_forces)
             for (int ii = 0; ii < list.inum; ii++) {
                 const int atom = list.ilist[ii];
-                const double root = std::sqrt(force_weight(s, atom));
+                const double root = std::sqrt(force_weight(s, atom, s.forces.data()));
                 for (int a = 0; a < 3; a++) {
                     equations.row(m) = root * rows.row(1 + atom * 3 + a);
                     references[m++] = root * s.forces[atom * 3 + a];
@@ -820,7 +820,7 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
         if (options.force_weight != 0 && s.has_forces)
             for (int ii = 0; ii < list.inum; ii++) {
                 const int i = list.ilist[ii];
-                const double wgt = force_weight(s, i);
+                const double wgt = force_weight(s, i, forces);    // mlp's loss weighs by the predicted force
                 for (int a = 0; a < 3; a++) {
                     const double diff = forces[i * 3 + a] - s.forces[i * 3 + a];
                     loss += wgt * diff * diff;
@@ -967,10 +967,10 @@ double MTPTrainer::energy_weight(const TrainingStructure& s) const {
     return options.energy_weight / std::pow(s.ilist.size(), options.weight_scaling) * options.select_factor;
 }
 
-double MTPTrainer::force_weight(const TrainingStructure& s, int i) const {
+double MTPTrainer::force_weight(const TrainingStructure& s, int i, const double* forces) const {
     double wgt = options.force_weight / std::pow(s.ilist.size(), options.weight_scaling_forces);
     if (options.scale_by_force > 0.0) {
-        const double* f = s.forces.data() + i * 3;
+        const double* f = forces + i * 3;
         wgt *= options.scale_by_force / (f[0] * f[0] + f[1] * f[1] + f[2] * f[2] + options.scale_by_force);
     }
     if (options.balance_species)

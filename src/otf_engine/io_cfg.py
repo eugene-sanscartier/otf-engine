@@ -77,7 +77,7 @@ def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, i
                 calcs["forces"] = f
             if stress:
                 if stress_type == "PlusStress":
-                    stress = numpy.array(stress, dtype=float) / numpy.linalg.det(supercell) * -1
+                    stress = numpy.array(stress, dtype=float) / abs(numpy.linalg.det(supercell)) * -1
                 calcs["stress"] = stress
 
             if type and species is not None:
@@ -163,11 +163,8 @@ def write_cfg(fileobj: IO[str], images: list[ase.Atoms]):
                 line += f" {fields_data['nbh_grades'][i]:12.6f}"
             output += [line]
 
-        output += [" Energy"]
         if has_energy:
-            output += [f"    {atoms.calc.results['energy']:12.6f}"]
-        else:
-            output += [f"    {0.0:12.6f}"]
+            output += [" Energy", f"    {atoms.calc.results['energy']:12.6f}"]
 
         if has_stress:
             stress_fields, stress_fields_data = ["xx", "yy", "zz", "yz", "xz", "xy"], {}

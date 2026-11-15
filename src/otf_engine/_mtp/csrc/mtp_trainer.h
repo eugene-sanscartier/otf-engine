@@ -100,7 +100,9 @@ class MTPTrainer : public Trainer<MTPTraining, MTPTrainerOptions> {
     void retract(std::vector<double>& c) const;
 
     double energy_weight(const TrainingStructure& s) const;
-    double force_weight(const TrainingStructure& s, int i) const;
+    // The weight of atom i's force, scale_by_force taking it at forces: the reference ones in the linear fit, the
+    // predicted ones in the loss, as mlip-3 takes them.
+    double force_weight(const TrainingStructure& s, int i, const double* forces) const;
     double stress_weight(const TrainingStructure& s) const;
 
     double loss_terms[3] = {};    // the energy, force and stress terms of the last loss_grad

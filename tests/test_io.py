@@ -33,9 +33,10 @@ def test_cfg_round_trip(structures):
             numpy.testing.assert_allclose(b.calc.results["stress"] * b.get_volume(), a.calc.results["stress"] * a.get_volume(), atol=5e-7)
 
 
-@pytest.mark.xfail(strict=True, reason="read_cfg divides PlusStress by the signed determinant of the cell, write_cfg multiplies by its volume")
 def test_cfg_left_handed_stress(structures):
-    """A left-handed cell keeps the sign of its stress through write_cfg and read_cfg."""
+    """A left-handed cell keeps the sign of its stress, and of the virial training_structure takes, through write_cfg and read_cfg."""
+    from otf_engine.train import training_structure
+
     atoms = structures[1].copy()
     atoms.calc = structures[1].calc
     atoms.arrays["type_index"] = structures[1].arrays["type_index"]
@@ -43,9 +44,9 @@ def test_cfg_left_handed_stress(structures):
     assert numpy.linalg.det(atoms.cell[:]) < 0
     back = round_trip([atoms])[0]
     numpy.testing.assert_allclose(back.calc.results["stress"], atoms.calc.results["stress"], atol=1e-6)
+    numpy.testing.assert_allclose(training_structure(back, 5.0, 0).virial, training_structure(atoms, 5.0, 0).virial, atol=1e-5)
 
 
-@pytest.mark.xfail(strict=True, reason="write_cfg writes Energy 0.0 for a structure without one")
 def test_cfg_without_energy(structures):
     """A structure without an energy reads back without one, not with a zero energy to fit."""
     atoms = structures[1].copy()
