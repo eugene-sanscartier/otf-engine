@@ -16,43 +16,6 @@
 #include <sstream>
 #include <thread>
 
-static TrainingStructure make_structure(py::handle item) {
-    py::tuple t = py::reinterpret_borrow<py::tuple>(item);
-    if (t.size() != 5)
-        throw std::runtime_error("train_mtp: a structure is (NeighList, energy, forces, virial, number)");
-    const NeighList& list = t[0].cast<const PyNeighbors&>().view();
-    py::object energy = t[1], forces = t[2], virial = t[3];
-    const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
-
-    TrainingStructure s;
-    s.types.assign(list.types, list.types + list.n_atoms);
-    s.ilist.assign(list.ilist, list.ilist + list.inum);
-    s.numneigh.assign(list.numneigh, list.numneigh + list.inum);
-    s.firstneigh.assign(list.firstneigh, list.firstneigh + n_pairs);
-    s.displacements.assign(list.displacements, list.displacements + (size_t) n_pairs * 3);
-
-    if (!energy.is_none()) {
-        s.energy = energy.cast<double>();
-        s.has_energy = true;
-    }
-    if (!forces.is_none()) {
-        DoubleArray f = forces.cast<DoubleArray>();
-        if (f.ndim() != 2 || f.shape(0) != list.n_atoms || f.shape(1) != 3)
-            throw std::runtime_error("train_mtp: forces must have shape (n_atoms, 3)");
-        s.forces.assign(f.data(), f.data() + f.size());
-        s.has_forces = true;
-    }
-    if (!virial.is_none()) {
-        DoubleArray v = virial.cast<DoubleArray>();
-        if (v.size() != 6)
-            throw std::runtime_error("train_mtp: virial must have 6 components");
-        std::copy(v.data(), v.data() + 6, s.virial);
-        s.has_virial = true;
-    }
-    s.number = t[4].cast<int>();
-    return s;
-}
-
 // mlp train's options; log is where the fit log goes.
 static TrainerOptions parse_options(const std::map<std::string, std::string>& options, std::string& log) {
     TrainerOptions o;
@@ -86,16 +49,6 @@ static TrainerOptions parse_options(const std::map<std::string, std::string>& op
             throw std::runtime_error("train_mtp: unknown option '" + key + "'");
     }
     return o;
-}
-
-// The stream the log option names: stdout (or empty), none, or a file, opened into file.
-static std::ostream* open_log(const std::string& target, std::ofstream& file) {
-    if (target == "stdout" || target.empty()) return &std::cout;
-    if (target == "none") return nullptr;
-    file.open(target);
-    if (!file)
-        throw std::runtime_error("train_mtp: cannot open log '" + target + "'");
-    return &file;
 }
 
 // The buffer of inverse_hessian, a writable C-contiguous (n, n) float64 array, and its n; nullptr and 0 for None.

@@ -1,0 +1,285 @@
+/* -*- c++ -*- ----------------------------------------------------------
+   Fits an ETN to reference energies, forces and stresses.
+   Algorithm of mlip-4's Train and ETN::Rescale; see etn_trainer.h.
+   BSD 2-Clause, see mlip-4's LICENSE.
+------------------------------------------------------------------------- */
+
+#include "etn_trainer.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+
+// A loss as the log writes it, to 17 significant digits.
+static std::string full_precision(double x) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof buffer, "%.17g", x);
+    return buffer;
+}
+
+ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log)
+    : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log) {
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &size);
+
+    int local_count = (int) this->structures.size();
+    MPI_Allreduce(&local_count, &structure_count, 1, MPI_INT, MPI_SUM, comm);
+
+    coeffs.resize(potential.coeff_count());
+    potential.get_coeffs(coeffs.data());
+}
+
+/* ---------------------------------------------------------------------- */
+void ETNTrainer::train() {
+    const auto start = std::chrono::steady_clock::now();
+    MPI_Barrier(comm);
+
+    auto log_errors = [&](const std::string& title) {
+        if (!potential.is_trained()) return;
+        potential.set_coeffs(coeffs.data());
+        const std::string table = error_table(potential, structures, options.species, comm, title);
+        if (log) *log << table;
+    };
+    log_errors("Training set errors before training:");
+
+    // mlip-4's pre-training keeps linstop and rescale, and takes the other settings' defaults
+    if (options.pretrain) {
+        if (log) *log << "Starting pretraining...\n";
+        ETNTrainerOptions pretraining;
+        pretraining.max_iter_count = 75;
+        pretraining.max_func_eval = 75 * 20;
+        pretraining.linstop = options.linstop;
+        pretraining.rescale = options.rescale;
+        fit(pretraining);
+        if (log) *log << "Pretraining completed\n";
+    }
+    fit(options);
+
+    potential.set_coeffs(coeffs.data());
+    potential.set_trained(true);
+    log_errors("Training set errors:");
+    if (log) *log << "Trained in " << std::round(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 10) / 10 << " s" << std::endl;
+    MPI_Barrier(comm);
+}
+
+/* ----------------------------------------------------------------------
+   mlip-4's Train: rank 0 steps BFGS on the loss and gradient reduced onto
+   it, and broadcasts the coefficients with the step count and the stop and
+   rescale flags at the top of every loop.
+------------------------------------------------------------------------- */
+void ETNTrainer::fit(const ETNTrainerOptions& o) {
+    const int n = (int) coeffs.size();
+    std::vector<double> loss_data(1 + n);    // [loss | gradient], reduced onto rank 0
+    std::vector<double> grad(n), bfgs_g(n);
+
+    std::vector<double> shared(3 + n, 0.0);    // [step | stop | rescale | coefficients], broadcast from rank 0
+    double& num_iter = shared[0];
+    double& break_flag = shared[1];
+    double& rescale_flag = shared[2];
+    std::copy(coeffs.begin(), coeffs.end(), shared.begin() + 3);
+
+    WolfeBFGS bfgs;
+    if (rank == 0) {
+        bfgs.set_wolfe_c1(o.wolfe_c1);
+        bfgs.set_wolfe_c2(o.wolfe_c2);
+        bfgs.max_iters_no_improve = o.bfgs_max_iters_no_improve;
+        bfgs.set_log(log);
+        bfgs.set_x(coeffs.data(), n);
+    }
+
+    int num_func_eval = 0;
+    double linf = 9e99;
+    double bfgs_f = 0.0;
+    bool attempted_rescale = false;
+    bool is_new_step = true;
+    int convergence_check_delay = 0;
+    if (rank == 0) rescale_flag = num_iter == 0;    // ETN::rescale_this_iter
+
+    while (true) {
+        MPI_Bcast(shared.data(), 3 + n, MPI_DOUBLE, 0, comm);
+        std::copy(shared.begin() + 3, shared.end(), coeffs.begin());
+        if (break_flag) break;
+
+        if (o.rescale && rescale_flag) {
+            if (log) *log << "Rescaling potential...\n";
+            rescale();
+            if (log) *log << "Potential rescaling completed\n";
+            rescale_flag = 0;
+            attempted_rescale = true;
+            std::copy(coeffs.begin(), coeffs.end(), shared.begin() + 3);
+            if (rank == 0) {
+                bfgs.set_x(coeffs.data(), n);
+                bfgs.set_identity_as_inv_hess();
+                convergence_check_delay = std::max(300, convergence_check_delay);
+            }
+            continue;
+        }
+        if (rank == 0 && is_new_step) {
+            if (log) *log << (int) num_iter;
+            is_new_step = false;
+        }
+
+        loss_data[0] = loss_grad(grad);
+        std::copy(grad.begin(), grad.end(), loss_data.begin() + 1);
+        std::vector<double> total(1 + n);
+        MPI_Reduce(loss_data.data(), total.data(), 1 + n, MPI_DOUBLE, MPI_SUM, 0, comm);
+        num_func_eval++;
+        if (rank != 0) continue;
+
+        const double inv_cfg_count = 1.0 / structure_count;
+        const double loss = total[0] * inv_cfg_count;
+        for (int i = 0; i < n; i++) bfgs_g[i] = total[1 + i] * inv_cfg_count;
+        bfgs_f = loss;
+        if (log) *log << '\t' << full_precision(loss);
+
+        bool loss_decrease;
+        if (attempted_rescale) {
+            loss_decrease = bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g);
+            attempted_rescale = false;
+        } else
+            loss_decrease = bfgs.iterate(bfgs_f, bfgs_g);
+        if (!loss_decrease) {
+            break_flag = 1;
+            if (log) *log << "\nStepping in accend direction. Stopping the training...\n";
+        }
+
+        if (!bfgs.in_linesearch() && !break_flag) {
+            num_iter++;
+            is_new_step = true;
+            if (o.rescale) rescale_flag = num_iter == 0;
+
+            if ((int) num_iter % 1500 == 0) {
+                if (log) *log << "\nDiagonalizing inverted hessian...";
+                bfgs.diag_inv_hess();
+                convergence_check_delay = std::max(convergence_check_delay, 300);
+            }
+
+            // A normal step unless this step rescales
+            if (!o.rescale || !rescale_flag)
+                if (!bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g)) break_flag = 1;
+
+            if ((int) num_iter % 100 == 0) {
+                if (convergence_check_delay <= 0 && linf > bfgs_f && (linf - bfgs_f) / bfgs_f < o.linstop) {
+                    break_flag = 1;
+                    if (log) *log << "\nAchieved requested accuracy. Stopping the training...";
+                }
+                convergence_check_delay -= 100;
+                linf = bfgs_f;
+            }
+
+            if (num_iter >= o.max_iter_count && !break_flag) {
+                break_flag = 1;
+                if (log) *log << "\nNumber of iterations exceeded the threshold. Stopping the training...";
+            }
+            // Checked only between line searches, as mlip-4 checks it
+            if (num_func_eval > o.max_func_eval && !break_flag) {
+                break_flag = 1;
+                if (log) *log << "\nNumber of loss function evaluations exceeded the threshold. Stopping the training...";
+            }
+
+            if (log) *log << '\n';
+        }
+
+        // The step that met a stopping rule is dropped
+        if (!break_flag) std::copy(bfgs.x().begin(), bfgs.x().end(), shared.begin() + 3);
+    }
+}
+
+/* ----------------------------------------------------------------------
+   ETN::Rescale: from alpha = 0, mlip-4's line search along the coefficients
+   x0 as they are, its sign chosen to descend, on the loss summed over the
+   structures, for at most 20 trials or until alpha moves by under 1e-5.
+------------------------------------------------------------------------- */
+void ETNTrainer::rescale() {
+    const int n = (int) coeffs.size();
+    const std::vector<double> x0 = coeffs;
+    std::vector<double> grad(n);
+
+    WolfeLineSearch linesearch;
+    if (rank == 0) linesearch.log = log;
+    double alpha_prev = 0.0;
+    double alpha_curr = 1.0;
+    int sign = 1;
+    linesearch.reset(alpha_curr);
+
+    auto loss_and_der = [&](double& loss, double& loss_der) {
+        loss = loss_grad(grad);
+        loss_der = 0;
+        for (int i = 0; i < n; i++)
+            loss_der += grad[i] * sign * x0[i];
+        double local[2] = {loss, loss_der}, total[2];
+        MPI_Allreduce(local, total, 2, MPI_DOUBLE, MPI_SUM, comm);
+        loss = total[0];
+        loss_der = total[1];
+    };
+
+    double loss, loss_der;
+    std::fill(coeffs.begin(), coeffs.end(), 0.0);
+    loss_and_der(loss, loss_der);
+    if (loss_der > 0) {
+        sign *= -1;
+        loss_der *= -1;
+    }
+    linesearch.iterate(loss, loss_der);
+
+    for (int iter = 0; iter < 20 && std::abs(alpha_curr - alpha_prev) > 1e-5; iter++) {
+        for (int i = 0; i < n; i++)
+            coeffs[i] = sign * alpha_curr * x0[i];
+        loss_and_der(loss, loss_der);
+        linesearch.iterate(loss, loss_der);
+        alpha_prev = alpha_curr;
+        alpha_curr = linesearch.x();
+    }
+
+    for (int i = 0; i < n; i++)
+        coeffs[i] = sign * alpha_curr * x0[i];
+}
+
+/* ----------------------------------------------------------------------
+   mlip-4's LossCfg over this rank's structures: the weighted squared
+   residuals of the energy, the virial (xx, yy, zz, yz, xz, xy, the last
+   three doubled) and the forces, in that order, and their gradient.
+------------------------------------------------------------------------- */
+double ETNTrainer::loss_grad(std::vector<double>& grad) {
+    static constexpr int STRESS_ORDER[6] = {0, 1, 2, 5, 4, 3};    // mlip-4's stress order, as virial indices
+    potential.set_coeffs(coeffs.data());
+    std::fill(grad.begin(), grad.end(), 0.0);
+    double loss = 0.0;
+
+    for (const TrainingStructure& s : structures) {
+        const NeighList list = s.list();
+        potential.compute(list);
+        const double* forces = potential.get_forces();
+        const double* virial = potential.get_virial();
+
+        double structure_loss = 0.0;
+        double dloss_denergy = 0.0;
+        double dloss_dvirial[6] = {};
+        dloss_dforces.assign((size_t) list.n_atoms * 3, 0.0);
+
+        if (s.has_energy) {
+            const double diff = potential.get_energy() - s.energy;
+            structure_loss += options.energy_weight * diff * diff;
+            dloss_denergy = 2 * options.energy_weight * diff;
+        }
+        if (s.has_virial)
+            for (int c = 0; c < 6; c++) {
+                const int k = STRESS_ORDER[c];
+                const double wgt = (c < 3 ? 1 : 2) * options.stress_weight;
+                const double diff = virial[k] - s.virial[k];
+                structure_loss += wgt * diff * diff;
+                dloss_dvirial[k] = 2 * wgt * diff;
+            }
+        if (s.has_forces)
+            for (int i = 0; i < list.n_atoms * 3; i++) {
+                const double diff = forces[i] - s.forces[i];
+                structure_loss += options.force_weight * diff * diff;
+                dloss_dforces[i] = 2 * options.force_weight * diff;
+            }
+
+        loss += structure_loss;
+        potential.eval_loss_grad(list, dloss_denergy, dloss_dforces.data(), dloss_dvirial, grad.data());
+    }
+    return loss;
+}

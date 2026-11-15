@@ -11,13 +11,18 @@
      etn_harmonics_bindings.cpp     <- etn_harmonics.{h,cpp}
      etn_potential_bindings.cpp     <- etn_potential.{h,cpp}
      etn_training_bindings.cpp      <- etn_training.{h,cpp}
+     etn_trainer_bindings.cpp       <- etn_trainer.{h,cpp}
 ------------------------------------------------------------------------- */
 
 #pragma once
 
 #include "mtp_extrapolation.h"
 #include "mtp_training.h"
+#include "training_structure.h"
 
+#include <fstream>
+#include <iostream>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -82,6 +87,54 @@ py::dict potential_results(const Potential& self, int n_atoms) {
     return result;
 }
 
+// A training structure from (NeighList, energy|None, forces (n_atoms, 3)|None, virial (6)|None, number).
+inline TrainingStructure make_structure(py::handle item) {
+    py::tuple t = py::reinterpret_borrow<py::tuple>(item);
+    if (t.size() != 5)
+        throw std::runtime_error("a training structure is (NeighList, energy, forces, virial, number)");
+    const NeighList& list = t[0].cast<const PyNeighbors&>().view();
+    py::object energy = t[1], forces = t[2], virial = t[3];
+    const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
+
+    TrainingStructure s;
+    s.types.assign(list.types, list.types + list.n_atoms);
+    s.ilist.assign(list.ilist, list.ilist + list.inum);
+    s.numneigh.assign(list.numneigh, list.numneigh + list.inum);
+    s.firstneigh.assign(list.firstneigh, list.firstneigh + n_pairs);
+    s.displacements.assign(list.displacements, list.displacements + (size_t) n_pairs * 3);
+
+    if (!energy.is_none()) {
+        s.energy = energy.cast<double>();
+        s.has_energy = true;
+    }
+    if (!forces.is_none()) {
+        DoubleArray f = forces.cast<DoubleArray>();
+        if (f.ndim() != 2 || f.shape(0) != list.n_atoms || f.shape(1) != 3)
+            throw std::runtime_error("a training structure's forces must have shape (n_atoms, 3)");
+        s.forces.assign(f.data(), f.data() + f.size());
+        s.has_forces = true;
+    }
+    if (!virial.is_none()) {
+        DoubleArray v = virial.cast<DoubleArray>();
+        if (v.size() != 6)
+            throw std::runtime_error("a training structure's virial must have 6 components");
+        std::copy(v.data(), v.data() + 6, s.virial);
+        s.has_virial = true;
+    }
+    s.number = t[4].cast<int>();
+    return s;
+}
+
+// The stream a trainer's log option names: stdout (or empty), none, or a file, opened into file.
+inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
+    if (target == "stdout" || target.empty()) return &std::cout;
+    if (target == "none") return nullptr;
+    file.open(target);
+    if (!file)
+        throw std::runtime_error("cannot open log '" + target + "'");
+    return &file;
+}
+
 // Raises unless every atom of nb has one of the potential's species, which the
 // kernels index their coefficients with.
 template <class Potential>
@@ -123,3 +176,4 @@ void bind_maxvol(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
 void bind_etn_potential(py::module_& m);
 void bind_etn_training(py::module_& m);
+void bind_etn_trainer(py::module_& m);

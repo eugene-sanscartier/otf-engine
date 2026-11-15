@@ -267,12 +267,12 @@ def self_tests(potentials, cells):
 # ---------------------------------------------------------------- capture
 
 
-def compile_probe(build_dir, workdir):
-    """Compile the probe against mlip-4's build, with the include flags of its ETN module."""
+def compile_probe(build_dir, workdir, source=PROBE_SOURCE):
+    """Compile a probe against mlip-4's build, with the include flags of its ETN module."""
     flags = (Path(build_dir) / "src/python/CMakeFiles/mlip_etn.dir/flags.make").read_text()
     includes = re.search(r"^CXX_INCLUDES = (.*)$", flags, re.M).group(1).split()
-    probe = Path(workdir) / "mlip4_probe"
-    subprocess.run(["g++", "-O2", "-std=gnu++17", *includes, str(PROBE_SOURCE), str(Path(build_dir) / "lib_mlip_4_interface.a"), "-lpthread", "-ldl", "-o", str(probe)], check=True)
+    probe = Path(workdir) / Path(source).stem
+    subprocess.run(["g++", "-O2", "-std=gnu++17", *includes, str(source), str(Path(build_dir) / "lib_mlip_4_interface.a"), "-lpthread", "-ldl", "-o", str(probe)], check=True)
     return probe
 
 

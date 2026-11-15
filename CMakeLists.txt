@@ -73,11 +73,15 @@ pybind11_add_module(_etn_ext
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/etn_potential.cpp
     ${ETN_CSRC}/etn_training.cpp
+    ${ETN_CSRC}/wolfe_bfgs.cpp
+    ${ETN_CSRC}/etn_trainer.cpp
+    ${MTP_CSRC}/thread_mpi.cpp
     ${ETN_CSRC}/etn_bindings.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/etn_potential_bindings.cpp
     ${ETN_CSRC}/etn_training_bindings.cpp
+    ${ETN_CSRC}/etn_trainer_bindings.cpp
 )
 target_include_directories(_etn_ext PRIVATE ${ETN_CSRC})
-target_link_libraries(_etn_ext PRIVATE mtp_core Eigen3::Eigen)
+target_link_libraries(_etn_ext PRIVATE mtp_core Threads::Threads Eigen3::Eigen)
 install(TARGETS _etn_ext DESTINATION otf_engine/_etn)

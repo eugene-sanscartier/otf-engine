@@ -14,7 +14,9 @@
 #pragma once
 
 #include "bfgs.h"
+#include "error_table.h"
 #include "mtp_training.h"
+#include "training_structure.h"
 
 #ifdef MTP_MPI
 #include <mpi.h>
@@ -26,29 +28,6 @@
 #include <ostream>
 #include <string>
 #include <vector>
-
-// A structure to fit: its neighbor list at the potential's cutoff and its reference values.
-struct TrainingStructure {
-    std::vector<int> types, ilist, numneigh, firstneigh;
-    std::vector<double> displacements;    // [sum(numneigh) * 3]
-
-    bool has_energy = false, has_forces = false, has_virial = false;
-    double energy = 0.0;
-    std::vector<double> forces;    // [n_atoms * 3]
-    double virial[6] = {};         // xx,yy,zz,xy,xz,yz in eV, mlip-3's PlusStress
-    int number = 0;                // the caller's number for it, which the error table names
-    std::vector<double> species_factors;    // force-weight factor by species index under balance_species
-
-    int n_atoms() const { return (int) types.size(); }
-    NeighList list() const {
-        return NeighList{n_atoms(), types.data(), (int) ilist.size(), ilist.data(), numneigh.data(), firstneigh.data(), displacements.data()};
-    }
-};
-
-// The errors of potential on the structures of every rank of comm, as a table under title, with a
-// force row per species (named by species, or by index past its end) and the structures with the
-// largest energy and force errors; on rank 0, and empty on the others.
-std::string error_table(PairMTP& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title);
 
 // `mlp train`'s options, under its names and with its defaults, and the trainer's own, whose defaults
 // are the recipe; varpro, reg_once, no_orthogonalize, riemannian and reg_at_main false and init_noise 5
