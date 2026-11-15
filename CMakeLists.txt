@@ -65,3 +65,15 @@ pybind11_add_module(_mtp_mpi
 target_compile_definitions(_mtp_mpi PRIVATE MTP_MPI)
 target_link_libraries(_mtp_mpi PRIVATE mtp_core MPI::MPI_CXX Eigen3::Eigen)
 install(TARGETS _mtp_mpi DESTINATION otf_engine/_mtp)
+
+# The ETN potential, which uses mtp_core's TextFileReader and _mtp_ext's NeighList
+set(ETN_CSRC src/otf_engine/_etn/csrc)
+pybind11_add_module(_etn_ext
+    ${ETN_CSRC}/etn_radial_basis.cpp
+    ${ETN_CSRC}/etn_harmonics.cpp
+    ${ETN_CSRC}/etn_potential.cpp
+    ${ETN_CSRC}/etn_bindings.cpp
+)
+target_include_directories(_etn_ext PRIVATE ${ETN_CSRC})
+target_link_libraries(_etn_ext PRIVATE mtp_core Eigen3::Eigen)
+install(TARGETS _etn_ext DESTINATION otf_engine/_etn)

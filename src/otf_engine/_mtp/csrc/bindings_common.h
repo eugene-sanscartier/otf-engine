@@ -7,6 +7,7 @@
      mtp_training_bindings.cpp      <- mtp_training.{h,cpp}
      mtp_trainer_bindings.cpp       <- mtp_trainer.{h,cpp}
      maxvol_bindings.cpp            <- maxvol.{h,cpp}
+   and, in the _etn_ext module, ../../_etn/csrc/etn_bindings.cpp.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -72,7 +73,8 @@ py::dict potential_results(const PairMTP& self, int n_atoms);
 
 // Raises unless every atom of nb has one of the potential's species, which the
 // kernels index their coefficients with.
-inline void check_species(const PairMTP& self, const PyNeighbors& nb) {
+template <class Potential>
+void check_species(const Potential& self, const PyNeighbors& nb) {
     const NeighList& list = nb.view();
     for (int i = 0; i < list.n_atoms; i++)
         if (list.types[i] < 0 || list.types[i] >= self.get_species_count())

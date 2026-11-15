@@ -1,5 +1,5 @@
 """
-ASE Calculator wrapping the MTP potential.
+ASE Calculators wrapping the MTP potential, or any potential with the same compute.
 
 Usage
 -----
@@ -21,20 +21,20 @@ from ._mtp import MTPTraining
 from .neighbors import mtp_types, neighbors
 
 
-class MTPCalculator(Calculator):
-    """ASE Calculator for the Moment Tensor Potential.
+class PotentialCalculator(Calculator):
+    """ASE Calculator for a potential whose compute takes a NeighList, as PairMTP's and ETN's do.
 
     Parameters
     ----------
-    filename : str
-        Path to the .mtp potential file (version 1.1.0).
+    potential
+        The potential object, with compute(neighbors) and get_max_cutoff().
     """
 
     implemented_properties = ["energy", "free_energy", "energies", "forces", "stress"]
 
-    def __init__(self, filename: str, **kwargs):
+    def __init__(self, potential, **kwargs):
         super().__init__(**kwargs)
-        self.potential = MTPTraining(filename)
+        self.potential = potential
         self.cutoff = self.potential.get_max_cutoff()
 
     def _atoms_to_types(self, atoms) -> ndarray:
@@ -66,6 +66,19 @@ class MTPCalculator(Calculator):
             # Our virials are (xx,yy,zz,xy,xz,yz), sign: virial = -stress * vol
             v = result["virials"]
             self.results["stress"] = numpy.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]], dtype=float64) / vol
+
+
+class MTPCalculator(PotentialCalculator):
+    """ASE Calculator for the Moment Tensor Potential.
+
+    Parameters
+    ----------
+    filename : str
+        Path to the .mtp potential file (version 1.1.0).
+    """
+
+    def __init__(self, filename: str, **kwargs):
+        super().__init__(MTPTraining(filename), **kwargs)
 
     def get_basis_values(self, atoms) -> ndarray:
         """Evaluate MTP basis functions for each atom.
