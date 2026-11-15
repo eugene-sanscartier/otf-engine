@@ -15,9 +15,9 @@
 
 #include <vector>
 
-// mlip-4's TrainingParams with their defaults, under mlp's names where mlp has the option (mlip-4's
-// max_iter_count, linstop and pretrain inverted) and mlip-4's otherwise; mlip-4's LossCfg doubles
-// stress_weight on the virial's off-diagonal components, and has no balance_species.
+// mlip-4's TrainingParams with their defaults, under mlp's names where mlp has the option (iteration_limit,
+// tolerance, skip_preinit). The loss doubles stress_weight on the virial's off-diagonal components, as mlip-4's
+// LossCfg does.
 struct ETNTrainerOptions : TrainerOptions {
     int iteration_limit = 1000;
     int max_func_eval = 10000;

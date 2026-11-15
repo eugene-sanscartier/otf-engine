@@ -211,7 +211,7 @@ class OTFCycle:
         """
         state = self.state
         # The size of the active set the dumps were graded against, recorded with the cycle
-        self.record["active_set_size"] = len(read_mvs_state(self.potential).selected_cfgs)
+        self.record["active_set_size"] = len(read_mvs_state(self.potential)[2])
         candidates = []
         for k, (dump, structures) in enumerate(graded.items(), 1):
             logger.info(f"Graded dump {k}/{len(graded)}: {dump} with {len(structures)} structures")

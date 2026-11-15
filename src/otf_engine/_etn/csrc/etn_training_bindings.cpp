@@ -1,9 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
    Python bindings for ETNTraining (see etn_training.h). Its eval_grad and
    eval_loss_grad are Pair's bindings.
-
-   mlip-4 takes these derivatives by differentiating its program; nothing
-   here binds a function of its.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"

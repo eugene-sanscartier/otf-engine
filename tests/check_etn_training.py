@@ -112,7 +112,8 @@ def write_training_file(path, pot, labelled, settings):
     lines += [str(len(coeffs)), floats(coeffs), floats(WEIGHTS.values())]
     lines += [" ".join(str(int(v)) if isinstance(v, bool) else repr(v) for v in settings.values())]
     lines += [str(len(labelled))]
-    for atoms, (_, energy, forces, virial, _) in labelled:
+    for atoms, s in labelled:
+        energy, forces, virial = s.energy, s.forces, s.virial
         lines += [str(len(atoms))] + [floats(row) for row in atoms.cell.array]
         lines += [f"{t} {floats(p)}" for t, p in zip(atoms.arrays["type_index"], atoms.positions)]
         lines += [floats([energy]), "0" if virial is None else f"1 {floats(virial)}"] + [floats(row) for row in forces]

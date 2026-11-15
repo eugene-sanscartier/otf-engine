@@ -21,15 +21,15 @@ import sys
 import numpy
 from numpy import float64
 
-from ._core import error_table, neighbors
+from ._core import TrainingStructure, error_table, neighbors
 from .almtp_io import read_mvs_header
 from .io_cfg import read_cfg
 from .models import model_of
 from .selection import DEFAULT_SELECTION_WEIGHTS, update_active_set
 
 
-def training_structure(atoms, cutoff: float, number: int) -> tuple:
-    """*atoms* as train_mtp and error_table take a structure: its neighbor list, its energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz), None where absent, and *number*."""
+def training_structure(atoms, cutoff: float, number: int) -> TrainingStructure:
+    """*atoms* as the trainers and error_table take it: its neighbor list, its energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz), None where absent, and *number*."""
     results = atoms.calc.results
     forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
     virial = None
@@ -37,7 +37,8 @@ def training_structure(atoms, cutoff: float, number: int) -> tuple:
         # read_cfg divides PlusStress by -det(cell); ASE's Voigt order is xx yy zz yz xz xy.
         v = -numpy.asarray(results["stress"], dtype=float64) * numpy.linalg.det(atoms.cell.array)
         virial = v[[0, 1, 2, 5, 4, 3]]
-    return neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number
+    structure = TrainingStructure(neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number)
+    return structure
 
 
 def errors(potential: str, structures: list, title: str, first: int = 1, species: list | None = None) -> str:
@@ -56,7 +57,7 @@ def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int |
     """train_mtp or train_etn, as the file *potential* holds, on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
 
     inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's; an MTP's only
-    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp and mlip-4 do
+    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike
     """
     model = model_of(potential)
     extra = {} if inverse_hessian is None else {"inverse_hessian": inverse_hessian}
@@ -76,7 +77,7 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     al_mode  : selection weights when *potential* has no #MVS_v1.1 block, "cfg" or "nbh"
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
                same *training_structs*, and rank 0 writes *save_to*.
-    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike, as mlp does
+    balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike
     """
     try:
         weights = read_mvs_header(potential)[0]

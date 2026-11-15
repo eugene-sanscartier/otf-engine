@@ -68,7 +68,7 @@ class PairETN : public Pair {
     int get_bonds_size() const { return bonds_size; }
     const CovariantShape& get_input_shape() const { return input_shape; }
 
-    // Length of mlip-4's params: every block below, in their order.
+    // Length of the coefficient vector: every block below, in their order.
     int coeff_count() const override;
     // The coefficients as one vector in mlip-4's params order.
     void get_coeffs(double* c) const override;
@@ -122,7 +122,7 @@ class PairETN : public Pair {
     std::vector<int> radial_ranks;
     std::vector<std::vector<int>> bond_ranks;
 
-    // Coefficients, in mlip-4's params order
+    // Coefficients, in get_coeffs' order
     std::vector<std::vector<double>> radial_coeffs;        // [l] B_l
     std::vector<std::vector<double>> species_pair_coeffs;  // [l] A_l
     std::vector<std::vector<double>> core_coeffs;          // [core] real part

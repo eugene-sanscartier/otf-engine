@@ -38,7 +38,7 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
         .def("get_alpha_index_basic_count", &PairMTP::get_alpha_index_basic_count)
         .def("get_alpha_index_times_count", &PairMTP::get_alpha_index_times_count)
         .def("set_min_cutoff", &PairMTP::set_min_cutoff, py::arg("d"),
-             "Update radial basis minimum distance. Mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(training distances).")
+             "Set the radial basis's minimum distance.")
 
         .def("get_radial_basis_coeffs",
              [](const PairMTP& self) {

@@ -20,26 +20,15 @@ n is NOT stored explicitly; it is inferred from the binary block size.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from io import StringIO
 
 import numpy
 from numpy import intp, ndarray
 
+from ._core import MaxVol
+
 _MARKER = b"#MVS_v1.1"
 _END_MARKER = b"\n#\n"
-
-
-@dataclass
-class MVSState:
-    """Persisted MaxVol state; active_cfg_indices index into selected_cfgs."""
-
-    weights: dict
-    A: ndarray
-    invA: ndarray
-    active_cfg_indices: ndarray
-    active_eqn_indices: ndarray
-    selected_cfgs: list
 
 
 def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndarray, int]:
@@ -102,8 +91,8 @@ def _read_links_and_cfgs(data: bytes, n: int, end_pos: int) -> tuple[ndarray, nd
     return active_cfg_indices, active_eqn_indices, selected_cfgs
 
 
-def read_mvs_header(almtp_path: str) -> tuple[dict, ndarray, ndarray]:
-    """Return the selection weights, A and invA, without parsing the stored configurations."""
+def read_mvs_header(almtp_path: str) -> tuple[dict, MaxVol]:
+    """The selection weights and the active set stored in *almtp_path*, without the stored structures or the rows' provenance."""
     with open(almtp_path, "rb") as f:
         data = f.read()
 
@@ -111,11 +100,14 @@ def read_mvs_header(almtp_path: str) -> tuple[dict, ndarray, ndarray]:
         weights, A, invA, _ = _read_header_and_binary(data, almtp_path)
     except RuntimeError as exc:
         raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
-    return weights, A, invA
+    return weights, MaxVol(A, invA)
 
 
-def read_mvs_state(almtp_path: str) -> MVSState:
-    """Return the full mlip-3 active-learning footer state."""
+def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, list]:
+    """The selection weights, the active set and the stored structures of *almtp_path*.
+
+    An active row linked to a stored structure gets *pool_id* as its pool and the structure's index in the returned list.
+    """
     with open(almtp_path, "rb") as f:
         data = f.read()
 
@@ -125,60 +117,55 @@ def read_mvs_state(almtp_path: str) -> MVSState:
         raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
 
     active_cfg_indices, active_eqn_indices, selected_cfgs = _read_links_and_cfgs(data, A.shape[0], end_pos)
-    return MVSState(weights=weights, A=A, invA=invA, active_cfg_indices=active_cfg_indices, active_eqn_indices=active_eqn_indices, selected_cfgs=selected_cfgs)
+    active_set = MaxVol(A, invA)
+    active_set.restore_active(active_cfg_indices, active_eqn_indices, pool_id)
+    return weights, active_set, selected_cfgs
 
 
-def _encode_mvs_state(state: MVSState) -> bytes:
+def write_mvs_state(almtp_path: str, weights: dict, active_set: MaxVol, structures: list, pool_id: int) -> list:
+    """Write *weights* and *active_set* as the #MVS_v1.1 section of *almtp_path*, with the structures of *structures*
+    that the rows of pool *pool_id* come from. Returns those structures."""
     from .io_cfg import write_cfg
 
-    n = state.A.shape[0]
-    if state.invA.shape != (n, n):
-        raise ValueError(f"invA shape {state.invA.shape} does not match A shape {state.A.shape}")
-
-    active_cfg_indices = numpy.asarray(state.active_cfg_indices, dtype=intp)
-    active_eqn_indices = numpy.asarray(state.active_eqn_indices, dtype=intp)
-    if active_cfg_indices.shape != (n, ):
-        raise ValueError(f"active_cfg_indices shape {active_cfg_indices.shape} does not match ({n},)")
-    if active_eqn_indices.shape != (n, ):
-        raise ValueError(f"active_eqn_indices shape {active_eqn_indices.shape} does not match ({n},)")
+    # The structures rows of pool_id come from, each with the indices of its rows' equations, and each row's index among them
+    rows = [(int(p), int(s), int(e)) for p, s, e in zip(active_set.active_pool_ids, active_set.active_struct_indices, active_set.active_eqn_indices, strict=True)]
+    labels = sorted({s for p, s, _ in rows if p == pool_id and 0 <= s < len(structures)})
+    stored = []
+    for label in labels:
+        atoms = structures[label].copy()
+        atoms.calc = structures[label].calc
+        eqn_indices = sorted({e for p, s, e in rows if p == pool_id and s == label and e >= 0})
+        if eqn_indices:
+            atoms.info.setdefault("features", {})["selected_eqn_inds"] = ",".join(str(e) for e in eqn_indices)
+        stored += [atoms]
+    index_of = {label: i for i, label in enumerate(labels)}
+    cfg_indices = [index_of.get(s, -1) if p == pool_id else -1 for p, s, _ in rows]
 
     section = b"".join((
         b"#MVS_v1.1\n",
-        f"energy_weight {state.weights.get('energy_weight', 1.0):.16e}\n".encode(),
-        f"force_weight {state.weights.get('force_weight', 0.0):.16e}\n".encode(),
-        f"stress_weight {state.weights.get('stress_weight', 0.0):.16e}\n".encode(),
-        f"site_en_weight {state.weights.get('site_en_weight', 1.0):.16e}\n".encode(),
-        f"weight_scaling {int(state.weights.get('weight_scaling', 0))}\n".encode(),
+        f"energy_weight {weights.get('energy_weight', 1.0):.16e}\n".encode(),
+        f"force_weight {weights.get('force_weight', 0.0):.16e}\n".encode(),
+        f"stress_weight {weights.get('stress_weight', 0.0):.16e}\n".encode(),
+        f"site_en_weight {weights.get('site_en_weight', 1.0):.16e}\n".encode(),
+        f"weight_scaling {int(weights.get('weight_scaling', 0))}\n".encode(),
         b"#",
-        state.A.astype("<f8").tobytes(),
-        state.invA.astype("<f8").tobytes(),
+        numpy.asarray(active_set.A).astype("<f8").tobytes(),
+        numpy.asarray(active_set.invA).astype("<f8").tobytes(),
         b"\n#\n",
     ))
-
-    link_lines = [f"{int(cfg_idx)} {int(eqn_idx)}\n".encode() for cfg_idx, eqn_idx in zip(active_cfg_indices, active_eqn_indices, strict=True)]
-    section += b"".join(link_lines) + b"#\n"
-
-    if state.selected_cfgs:
+    section += b"".join(f"{int(c)} {int(e)}\n".encode() for c, e in zip(cfg_indices, active_set.active_eqn_indices, strict=True)) + b"#\n"
+    if stored:
         sio = StringIO()
-        write_cfg(sio, state.selected_cfgs)
+        write_cfg(sio, stored)
         section += sio.getvalue().encode()
-
-    return section
-
-
-def write_mvs_state(almtp_path: str, state: MVSState) -> None:
-    """Write the full mlip-3 active-learning footer state."""
-    new_section = _encode_mvs_state(state)
 
     with open(almtp_path, "rb") as f:
         data = f.read()
-
     marker_pos = data.find(_MARKER)
     if marker_pos == -1:
         with open(almtp_path, "ab") as f:
-            f.write(b"\n" + new_section)
-        return
-
-    with open(almtp_path, "wb") as f:
-        f.write(data[:marker_pos])
-        f.write(new_section)
+            f.write(b"\n" + section)
+    else:
+        with open(almtp_path, "wb") as f:
+            f.write(data[:marker_pos] + section)
+    return stored

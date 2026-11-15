@@ -25,7 +25,7 @@
 #include <string>
 #include <vector>
 
-// The options of both trainers, under mlp's and mlip-4's names, with their defaults.
+// The options of both trainers, with their defaults.
 struct TrainerOptions {
     double energy_weight = 1.0;
     double force_weight = 0.01;

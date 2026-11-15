@@ -10,7 +10,7 @@ The three classes mirror the C++ hierarchy, on _core's Pair:
     MTPTraining             + basis values and derivatives
                               w.r.t. the coefficients    (a PairMTP)
 
-train_mtp fits an MTPTraining as mlip-3's `mlp train` does.
+train_mtp fits an MTPTraining with MTPTrainer.
 """
 
 from importlib import import_module as _import_module

@@ -5,7 +5,7 @@ from _core_ext's Pair.
 
     PairETN          energy, forces, virial, and each atom's input and bond vectors (a Pair)
     ETNTraining      + derivatives of site energies and of a loss w.r.t. the coefficients
-    train_etn        fits an ETNTraining as mlip-4's Train does
+    train_etn        fits an ETNTraining with ETNTrainer
     real_harmonics   the real spherical harmonics the input vector is built on
     wigner_3j        3-j symbols of complex harmonics
     real_wigner_3j   3-j symbols of real harmonics, which the cores carry

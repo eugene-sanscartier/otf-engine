@@ -402,7 +402,7 @@ void PairETN::read_file(std::istream& is) {
 
     prepare_cores();
 
-    // An untrained potential may omit every coefficient, and takes mlip-4's initial values
+    // An untrained potential may omit every coefficient, and takes fill_initial_coeffs' values
     if (!tfr.next_line() || tfr.keyword() != "radial_coeffs") {
         trained = false;
         fill_initial_coeffs();

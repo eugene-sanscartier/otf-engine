@@ -1,4 +1,4 @@
-"""calculate_grade, select_add and update_active_set, in place of mlip-3's `mlp` commands.
+"""calculate_grade, select_add and update_active_set, in place of mlp's commands.
 
 All functions take ASE Atoms objects, with no intermediate files, and a potential of either model.
 """
@@ -8,12 +8,12 @@ from __future__ import annotations
 import logging
 
 import numpy
-from numpy import intp, float64
+from numpy import float64
 
 logger = logging.getLogger(__name__)
 
 from ._core import Equations, MaxVol, PotentialCalculator, species_indices
-from .almtp_io import MVSState, read_mvs_header, read_mvs_state, write_mvs_state
+from .almtp_io import read_mvs_header, read_mvs_state, write_mvs_state
 from .models import model_of
 
 # ---------------------------------------------------------------------------
@@ -68,47 +68,16 @@ def _open_calculator(potential) -> tuple[PotentialCalculator, str | None]:
     return potential, None
 
 
-def _maxvol(pot, *args, **kwargs) -> MaxVol:
-    """A MaxVol for the potential object *pot*, under its model's selection rules."""
-    mv = MaxVol(*args, **kwargs)
-    mv.threshold_swap = model_of(pot).threshold_swap
-    return mv
-
-
-def _build_saved_mvs_state(weights: dict, mv: MaxVol, structs: list, pool_id: int) -> MVSState:
-    selected_labels = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == pool_id and 0 <= int(struct_index) < len(structs)})
-    selected_cfgs = []
-    for label in selected_labels:
-        atoms = structs[label].copy()
-        atoms.calc = structs[label].calc
-        eqn_indices = sorted({int(eqn_index)
-                              for active_pool_id, struct_index, eqn_index in zip(
-                                  mv.active_pool_ids,
-                                  mv.active_struct_indices,
-                                  mv.active_eqn_indices,
-                                  strict=True,
-                              ) if int(active_pool_id) == pool_id and int(struct_index) == label and int(eqn_index) >= 0})
-        if eqn_indices:
-            atoms.info.setdefault("features", {})["selected_eqn_inds"] = ",".join(str(eqn_index) for eqn_index in eqn_indices)
-        selected_cfgs += [atoms]
-
-    cfg_index_of_label = {label: i for i, label in enumerate(selected_labels)}
-    active_cfg_indices = numpy.array([cfg_index_of_label.get(int(struct_index), -1) if int(active_pool_id) == pool_id else -1 for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True)], dtype=intp)
-    return MVSState(weights=weights, A=mv.A, invA=mv.invA, active_cfg_indices=active_cfg_indices, active_eqn_indices=numpy.asarray(mv.active_eqn_indices, dtype=intp), selected_cfgs=selected_cfgs)
-
-
 # ---------------------------------------------------------------------------
 # calculate_grade
 # ---------------------------------------------------------------------------
 
 
-def calculate_grade(potential, structures: list, state: MVSState | None = None) -> list:
+def calculate_grade(potential, structures: list, weights: dict | None = None, active_set: MaxVol | None = None) -> list:
     """Compute per-atom extrapolation grades for each structure.
 
-    Reads the MaxVol active set (invA) from the #MVS_v1.1 section of
-    *potential_path* and applies the grade formula:
-        per_atom_grade = max |v_atom @ invA.T|
-    where v_atom is the per-atom information vector (full CoeffCount dim).
+    Grades against an active set: per_atom_grade = max |v_atom @ invA.T|, where v_atom is the per-atom
+    information vector (full CoeffCount dim).
 
     Parameters
     ----------
@@ -117,6 +86,8 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     structures : list of ase.Atoms
         Input structures (must have the correct calculator / species info
         set so that the calculator can build neighbor lists).
+    weights, active_set : the selection weights and the active set to grade against; by default those stored
+        in the #MVS_v1.1 section of *potential*
 
     Returns
     -------
@@ -126,19 +97,17 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
     """
     calc, potential_path = _open_calculator(potential)
 
-    if state is None:
-        weights, A, invA = read_mvs_header(potential_path)
-    else:
-        weights, A, invA = state.weights, state.A, state.invA
+    if active_set is None:
+        stored_weights, active_set = read_mvs_header(potential_path)
+        weights = weights or stored_weights
+    weights = weights or dict(DEFAULT_SELECTION_WEIGHTS["nbh"])
     site_en_w = float(weights.get("site_en_weight", 1.0))
-    mv = MaxVol(A, invA)
 
     for i, atoms in enumerate(structures):
-        grades = mv.grade(selection_equations(calc, [atoms], weights))
+        grades = active_set.grade(selection_equations(calc, [atoms], weights))
         cfg_grade = float(grades.max())
 
-        # Per-atom grades come from the site-energy equations, which mlip-3
-        # appends last.
+        # Per-atom grades come from the site-energy equations, which come last.
         n_atoms = len(atoms)
         if site_en_w and len(grades) >= n_atoms:
             per_atom = grades[-n_atoms:]
@@ -160,7 +129,7 @@ def calculate_grade(potential, structures: list, state: MVSState | None = None) 
 # ---------------------------------------------------------------------------
 
 
-def select_add(potential, training_structs: list, candidate_structs: list, threshold: float = 1.001, state: MVSState | None = None, weights: dict | None = None, al_mode: str = "nbh", train_eqns: Equations | None = None, comm=None) -> tuple:
+def select_add(potential, training_structs: list, candidate_structs: list, threshold: float = 1.001, active_set: MaxVol | None = None, weights: dict | None = None, al_mode: str = "nbh", train_eqns: Equations | None = None, comm=None) -> tuple:
     """D-optimality greedy structure selection.
 
     Rebuilds the MaxVol active set from *training_structs*, then greedily
@@ -172,7 +141,11 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     potential : str or PotentialCalculator
     training_structs : list of ase.Atoms  (current training set)
     candidate_structs : list of ase.Atoms  (pre-filtered candidates)
-    threshold : float  (mlip-3 default: 1.001)
+    threshold : float
+    active_set : MaxVol or None
+        The active set to start from, by default the one stored in *potential*; select_add
+        searches a copy of it.
+    weights : the selection weights, by default those stored with the active set, else al_mode's
     train_eqns : Equations or None
         Equations already built for *training_structs* with these coefficients
         and weights, as returned by update_active_set.  Rebuilt when absent.
@@ -183,35 +156,30 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
 
     Returns
     -------
-    tuple of (selected_structs, (weights, A, invA)) — the selected candidate
-    structures, and the updated active-set state the caller may persist via
-    write_mvs_state.
+    tuple of (selected_structs, active_set) — the selected candidate structures, and the
+    extended active set, which write_mvs_state stores.
     """
     calc, potential_path = _open_calculator(potential)
     pot = calc.potential
+    threshold_swap = model_of(pot).threshold_swap
 
-    n = pot.get_coeff_count()
-    if state is None and potential_path is not None:
+    if active_set is None and potential_path is not None:
         try:
-            state = read_mvs_state(potential_path)
+            stored_weights, active_set = read_mvs_header(potential_path)
+            weights = weights or stored_weights
         except RuntimeError:
-            state = None
-
-    if state is not None:
-        if weights is None:
-            weights = state.weights
-        mv = _maxvol(pot, state.A, state.invA, threshold=threshold)
-        mv.restore_active(state.active_cfg_indices, state.active_eqn_indices, _POOL_SAVED)
+            pass
+    weights = weights or dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
+    if active_set is None:
+        mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=threshold_swap)
     else:
-        if weights is None:
-            weights = dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
-        mv = _maxvol(pot, n, threshold=threshold)
+        mv = MaxVol(active_set.A, active_set.invA, threshold=threshold, threshold_swap=threshold_swap)
 
     if train_eqns is None:
         train_eqns = selection_equations(calc, training_structs, weights, comm)
     cand_eqns = selection_equations(calc, candidate_structs, weights, comm)
 
-    # This three-pass sequence matches mlip-3 select_add and must stay ordered:
+    # This three-pass sequence matches mlip-3's select_add and must stay ordered:
     # training rebuild at 1.001, candidate selection at threshold, training pass again, if the model makes it.
     mv.threshold = 1.001
     maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
@@ -228,7 +196,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
         grade = float(initial.grade(selection_equations(calc, [atoms], weights)).max())
         logger.info(f"  selected structure[{i}]: extrapolation grade (gamma) = {grade:.4f}")
 
-    return selected_structs, (weights, mv.A, mv.invA)
+    return selected_structs, mv
 
 
 def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh", comm=None) -> Equations:
@@ -242,11 +210,10 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     calc, _ = _open_calculator(potential)
     pot = calc.potential
     try:
-        saved = read_mvs_state(potential)
+        stored_weights, saved, stored_cfgs = read_mvs_state(potential, _POOL_SAVED)
     except RuntimeError:
-        saved = None
-    if weights is None:
-        weights = saved.weights if saved is not None else dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
+        stored_weights, saved = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None
+    weights = weights or stored_weights
 
     train_eqns = selection_equations(calc, training_structs, weights, comm)
 
@@ -256,16 +223,15 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     if saved is not None:
         def key(atoms): return species_indices(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
         index_of = {key(atoms): i for i, atoms in enumerate(training_structs)}
-        match = [index_of.get(key(cfg)) for cfg in saved.selected_cfgs]
-        saved_rows = {(match[c], e) for c, e in zip(saved.active_cfg_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if c >= 0 and match[c] is not None}
+        match = [index_of.get(key(cfg)) for cfg in stored_cfgs]
+        saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_struct_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
-    mv = _maxvol(pot, pot.get_coeff_count(), threshold=threshold)
+    mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=model_of(pot).threshold_swap)
     maximize_volume(mv, seed, _POOL_TRAIN, comm)
     maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
 
     if comm is None or comm.Get_rank() == 0:
-        state = _build_saved_mvs_state(weights, mv, training_structs, _POOL_TRAIN)
-        logger.info(f"Active set: {len(state.selected_cfgs)}/{len(training_structs)} active structures.")
-        write_mvs_state(potential, state)
+        stored = write_mvs_state(potential, weights, mv, training_structs, _POOL_TRAIN)
+        logger.info(f"Active set: {len(stored)}/{len(training_structs)} active structures.")
     return train_eqns

@@ -37,7 +37,7 @@ BENCH_SOURCE = kernels.REFERENCE / "mlip4_bench.cpp"
 
 def ours(pot, labelled, repeats):
     """Our eval (without and with the neighbor build) and loss-gradient times, in ms."""
-    lists = [s[0] for _, s in labelled]
+    lists = [s.neighbors for _, s in labelled]
     start = time.perf_counter()
     for _ in range(repeats):
         for nl in lists:
@@ -53,7 +53,8 @@ def ours(pot, labelled, repeats):
     weights = training.WEIGHTS
     start = time.perf_counter()
     for _ in range(repeats):
-        for _, (nl, energy, forces, virial, _) in labelled:
+        for _, s in labelled:
+            nl, energy, forces, virial = s.neighbors, s.energy, s.forces, s.virial
             result = pot.compute(nl)
             dforces = 2 * weights["force_weight"] * (result["forces"] - forces)
             dvirial = None

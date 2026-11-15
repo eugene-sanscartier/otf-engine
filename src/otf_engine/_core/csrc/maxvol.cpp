@@ -68,16 +68,16 @@ Equations Equations::subset(const bool* keep) const {
 // MaxVol
 // ---------------------------------------------------------------------------
 
-MaxVol::MaxVol(int n, double init_scale, double threshold)
-    : n(n), threshold(threshold), A((size_t) n * n, 0.0), invA((size_t) n * n, 0.0), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {
+MaxVol::MaxVol(int n, double init_scale, double threshold, std::optional<double> threshold_swap)
+    : n(n), threshold(threshold), threshold_swap(threshold_swap), A((size_t) n * n, 0.0), invA((size_t) n * n, 0.0), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {
     for (int k = 0; k < n; k++) {
         A[(size_t) k * n + k] = init_scale;
         invA[(size_t) k * n + k] = 1.0 / init_scale;
     }
 }
 
-MaxVol::MaxVol(int n, const double* A, const double* invA, double threshold)
-    : n(n), threshold(threshold), A(A, A + (size_t) n * n), invA(invA, invA + (size_t) n * n), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {}
+MaxVol::MaxVol(int n, const double* A, const double* invA, double threshold, std::optional<double> threshold_swap)
+    : n(n), threshold(threshold), threshold_swap(threshold_swap), A(A, A + (size_t) n * n), invA(invA, invA + (size_t) n * n), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {}
 
 void MaxVol::grade(const double* rows, int count, double* grades) {
     block.resize((size_t) std::min(sweep_block_rows, count) * n);

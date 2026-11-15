@@ -115,10 +115,13 @@ def main():
     from otf_engine.otf_mtp import grade_dump
 
     def same_active_set(mpi_set, serial_set):
-        """Whether the workers' active set is the one-rank search's: the same active equations, and A to 1e-12 relatively."""
-        dA = float(numpy.abs(mpi_set.A - serial_set.A).max() / numpy.abs(serial_set.A).max())
-        same = numpy.array_equal(mpi_set.active_cfg_indices, serial_set.active_cfg_indices) and numpy.array_equal(mpi_set.active_eqn_indices, serial_set.active_eqn_indices)
-        return same and dA <= 1e-12, f"{len(mpi_set.selected_cfgs)} active structures against {len(serial_set.selected_cfgs)} on one rank, equations {'the same' if same else 'DIFFER'}, A {dA:.1e} apart"
+        """Whether the workers' active set is the one-rank search's, each as read_mvs_state returns it: the same active
+        equations, and A to 1e-12 relatively."""
+        (_, mpi, mpi_stored), (_, serial, serial_stored) = mpi_set, serial_set
+        dA = float(numpy.abs(mpi.A - serial.A).max() / numpy.abs(serial.A).max())
+        rows = lambda mv: [numpy.asarray(mv.active_pool_ids), numpy.asarray(mv.active_struct_indices), numpy.asarray(mv.active_eqn_indices)]
+        same = all(numpy.array_equal(a, b) for a, b in zip(rows(mpi), rows(serial)))
+        return same and dA <= 1e-12, f"{len(mpi_stored)} active structures against {len(serial_stored)} on one rank, equations {'the same' if same else 'DIFFER'}, A {dA:.1e} apart"
 
     start = time.perf_counter()
     failures = 0

@@ -7,7 +7,7 @@
 #include "bindings_common.h"
 #include "etn_trainer.h"
 
-// mlip-4's training settings beside the weights, under mlp's names where mlp has the option.
+// ETNTrainerOptions' fields beside the weights.
 void add_option_fields(ETNTrainerOptions& o, OptionFields& fields) {
     fields.doubles.insert({{"tolerance", &o.tolerance}, {"wolfe_c1", &o.wolfe_c1}, {"wolfe_c2", &o.wolfe_c2}});
     fields.ints = {{"iteration_limit", &o.iteration_limit}, {"max_func_eval", &o.max_func_eval}, {"bfgs_max_iters_no_improve", &o.bfgs_max_iters_no_improve}};
@@ -30,7 +30,7 @@ PYBIND11_MODULE(_etn_mpi, m) {
     py::module_::import("otf_engine._etn._etn_ext");    // registers ETNTraining
 
     m.def("train_etn", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("balance_species") = true, R"doc(
-Train the potential in filename as mlip-4's Train does, over the ranks of comm, and return it.
+Train the potential in filename with ETNTrainer over the ranks of comm, and return it.
 
 Every rank calls it with its own share of the structures and the same other arguments, and returns
 the fitted potential. An error on any rank is raised on every rank.
@@ -40,8 +40,7 @@ options    : as _etn_ext.train_etn's; rank 0 writes the log
 comm       : an mpi4py communicator
 checkpoint : called on rank 0 with the potential being trained at every step outside a line
              search; a failure ends checkpointing and is raised after the fit
-balance_species : give every species of a structure an equal share of its force weight; False
-             weighs every force alike, as mlip-4 does
+balance_species : give every species of a structure an equal share of its force weight
 )doc");
 }
 
@@ -56,17 +55,13 @@ static py::object train(const std::string& filename, py::iterable structures, co
 
 void bind_etn_trainer(py::module_& m) {
     m.def("train_etn", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks") = 1, py::arg("checkpoint") = py::none(), py::arg("balance_species") = true, R"doc(
-Train the potential in filename as mlip-4's Train does, on `ranks` threads, and return it.
-structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None, number),
-             neighbor lists at the potential's cutoff, virial in eV, xx,yy,zz,xy,xz,yz, and the
-             number the error tables name it by
-options    : mlip-4's training settings as strings, under mlp's names where mlp has the option
-             (energy_weight, force_weight, stress_weight, iteration_limit, max_func_eval, tolerance,
-             rescale, skip_preinit, wolfe_c1, wolfe_c2, bfgs_max_iters_no_improve), log (stdout,
-             none or a file), and species, the species' names for the error tables, comma-separated
+Train the potential in filename with ETNTrainer on `ranks` threads, and return it.
+
+structures : iterable of TrainingStructure
+options    : the fields of ETNTrainerOptions without the leading "--", as strings, log (stdout, none
+             or a file), and species, the species' names for the error tables, comma-separated
 checkpoint : called with the potential being trained at every step outside a line search
-balance_species : give every species of a structure an equal share of its force weight; False
-             weighs every force alike, as mlip-4 does
+balance_species : give every species of a structure an equal share of its force weight
 )doc");
 }
 

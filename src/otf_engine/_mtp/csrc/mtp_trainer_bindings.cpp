@@ -8,7 +8,7 @@
 
 #include "mtp_trainer.h"
 
-// mlp train's options beside the weights, and the trainer's own.
+// MTPTrainerOptions' fields beside the weights.
 void add_option_fields(MTPTrainerOptions& o, OptionFields& fields) {
     fields.doubles.insert({{"penalty_weight", &o.penalty_weight}, {"scale_by_force", &o.scale_by_force}, {"select_factor", &o.select_factor},
                            {"tolerance", &o.tolerance}, {"reg_param", &o.reg_param}, {"init_noise", &o.init_noise}});
@@ -46,24 +46,18 @@ PYBIND11_MODULE(_mtp_mpi, m) {
     py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining
 
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
-Train the potential in filename as mlip-3's `mlp train` does, over the ranks of comm, and return it.
+Train the potential in filename with MTPTrainer over the ranks of comm, and return it.
 
 Every rank calls it with its own share of the structures and the same other arguments, and returns
 the fitted potential. An error on any rank is raised on every rank.
 
-structures : this rank's share, an iterable of (NeighList, energy|None, forces(n_atoms,3)|None,
-             virial(6)|None, number), neighbor lists at the potential's cutoff, virial as mlip-3's
-             PlusStress in eV, xx,yy,zz,xy,xz,yz, and the number the error tables name it by
-options    : mlp train's options without the leading "--", as strings, and species, the species'
-             names for the error tables, comma-separated; rank 0 writes the log
+structures : this rank's share, an iterable of TrainingStructure
+options    : as _mtp_ext.train_mtp's; rank 0 writes the log
 comm       : an mpi4py communicator
-checkpoint : called on rank 0 with the potential being trained wherever mlp saves it during the
-             fit; a failure ends checkpointing and is raised after the fit
-inverse_hessian : (n, n) float64 array, n the coefficients BFGS trains (the radial ones under
-             radial_only, else all); BFGS starts from it and leaves its final inverse Hessian in
-             rank 0's. Every rank passes one of the same shape. None starts from the identity
-balance_species : give every species of a structure an equal share of its force weight; False
-             weighs every force alike, as mlp does
+checkpoint : called on rank 0 with the potential being trained at each save of the fit; a failure
+             ends checkpointing and is raised after the fit
+inverse_hessian : as _mtp_ext.train_mtp's, left in rank 0's; every rank passes one of the same shape
+balance_species : give every species of a structure an equal share of its force weight
 )doc");
 }
 
@@ -84,7 +78,7 @@ static py::tuple objective(const std::string& filename, py::iterable structures,
     trainer_options.balance_species = balance_species;
     std::vector<TrainingStructure> share;
     for (py::handle item : structures)
-        share.push_back(make_structure(item));
+        share.push_back(item.cast<TrainingStructure>());
 
     MTPTraining potential(filename);
     std::vector<double> at(coeffs.data(), coeffs.data() + coeffs.size()), grad;
@@ -99,19 +93,16 @@ void bind_mtp_trainer(py::module_& m) {
     m.def("trainer_objective", &objective, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("balance_species") = true,
           "The loss the trainer's BFGS minimizes and its gradient at coeffs, for gradient tests; the potential in filename must hold every species of structures.");
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
-Train the potential in filename as mlip-3's `mlp train` does, on `ranks` threads, and return it.
+Train the potential in filename with MTPTrainer on `ranks` threads, and return it.
 
-structures : iterable of (NeighList, energy|None, forces(n_atoms,3)|None, virial(6)|None, number),
-             neighbor lists at the potential's cutoff, virial as mlip-3's PlusStress in eV,
-             xx,yy,zz,xy,xz,yz, and the number the error tables name it by
-options    : mlp train's options without the leading "--", as strings, and species, the species'
-             names for the error tables, comma-separated
-checkpoint : called with the potential being trained wherever mlp saves it during the fit
+structures : iterable of TrainingStructure
+options    : the fields of MTPTrainerOptions without the leading "--", as strings, log (stdout, none
+             or a file), and species, the species' names for the error tables, comma-separated
+checkpoint : called with the potential being trained at each save of the fit
 inverse_hessian : (n, n) float64 array, n the coefficients BFGS trains (the radial ones under
              radial_only, else all); BFGS starts from it and leaves its final inverse Hessian
              there. None starts from the identity
-balance_species : give every species of a structure an equal share of its force weight; False
-             weighs every force alike, as mlp does
+balance_species : give every species of a structure an equal share of its force weight
 )doc");
 }
 

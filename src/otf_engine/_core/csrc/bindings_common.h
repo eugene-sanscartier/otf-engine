@@ -110,44 +110,6 @@ inline py::dict potential_results(const Pair& self, int n_atoms) {
     return result;
 }
 
-// A training structure from (NeighList, energy|None, forces (n_atoms, 3)|None, virial (6)|None, number).
-inline TrainingStructure make_structure(py::handle item) {
-    py::tuple t = py::reinterpret_borrow<py::tuple>(item);
-    if (t.size() != 5)
-        throw std::runtime_error("a training structure is (NeighList, energy, forces, virial, number)");
-    const NeighList& list = t[0].cast<const PyNeighbors&>().view();
-    py::object energy = t[1], forces = t[2], virial = t[3];
-    const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
-
-    TrainingStructure s;
-    s.types.assign(list.types, list.types + list.n_atoms);
-    s.ilist.assign(list.ilist, list.ilist + list.inum);
-    s.numneigh.assign(list.numneigh, list.numneigh + list.inum);
-    s.firstneigh.assign(list.firstneigh, list.firstneigh + n_pairs);
-    s.displacements.assign(list.displacements, list.displacements + (size_t) n_pairs * 3);
-
-    if (!energy.is_none()) {
-        s.energy = energy.cast<double>();
-        s.has_energy = true;
-    }
-    if (!forces.is_none()) {
-        DoubleArray f = forces.cast<DoubleArray>();
-        if (f.ndim() != 2 || f.shape(0) != list.n_atoms || f.shape(1) != 3)
-            throw std::runtime_error("a training structure's forces must have shape (n_atoms, 3)");
-        s.forces.assign(f.data(), f.data() + f.size());
-        s.has_forces = true;
-    }
-    if (!virial.is_none()) {
-        DoubleArray v = virial.cast<DoubleArray>();
-        if (v.size() != 6)
-            throw std::runtime_error("a training structure's virial must have 6 components");
-        std::copy(v.data(), v.data() + 6, s.virial);
-        s.has_virial = true;
-    }
-    s.number = t[4].cast<int>();
-    return s;
-}
-
 // The stream a trainer's log option names: stdout (or empty), none, or a file, opened into file.
 inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     if (target == "stdout" || target.empty()) return &std::cout;
@@ -187,8 +149,7 @@ inline void check_species(const Pair& self, const PyNeighbors& nb) {
             throw std::runtime_error("NeighList: atom " + std::to_string(i) + " has species " + std::to_string(list.types[i]) + ", outside the potential's " + std::to_string(self.get_species_count()) + " species");
 }
 
-// Binds fn under two signatures: one taking a NeighList, and one taking the
-// five loose arrays the older API passes, both checking the species first.
+// Binds fn, which takes a NeighList, checking the species first.
 // `extra` carries the py::arg entries for any trailing parameters.
 template <class Cls, class Self, class Ret, class... Args, class... Extra>
 void def_neighbors(Cls& cls, const char* name, Ret (*fn)(Self&, const PyNeighbors&, Args...), const char* doc, Extra... extra) {
@@ -199,14 +160,6 @@ void def_neighbors(Cls& cls, const char* name, Ret (*fn)(Self&, const PyNeighbor
             return fn(self, nb, args...);
         },
         py::arg("neighbors"), extra..., doc);
-    cls.def(
-        name,
-        [fn](Self& self, IntArray types, IntArray ilist, IntArray numneigh, IntArray firstneigh, DoubleArray displacements, Args... args) {
-            const PyNeighbors nb(types, ilist, numneigh, firstneigh, displacements);
-            check_species(self, nb);
-            return fn(self, nb, args...);
-        },
-        py::arg("types"), py::arg("ilist"), py::arg("numneigh"), py::arg("firstneigh"), py::arg("displacements"), extra...);
 }
 
 // d(E_i, F, virial)/dc of the structure nb, as eval(site_energy_grad, force_grad, virial_grad) fills them for
@@ -293,7 +246,7 @@ py::object train_over_mpi(const char* name, const std::string& filename, py::ite
         std::string log_target = "stdout";
         trainer_options = make_options(log_target);
         for (py::handle item : structures)
-            share.push_back(make_structure(item));
+            share.push_back(item.cast<TrainingStructure>());
         if (rank == 0) log = open_log(log_target, log_file);
         potential = py::cast(std::make_unique<Training>(filename));
     } catch (const std::exception& e) {
@@ -345,9 +298,7 @@ py::object train_on_threads(const char* name, const std::string& filename, py::i
     std::vector<std::vector<TrainingStructure>> shares(ranks);
     int count = 0;
     for (py::handle item : structures)
-        shares[count++ % ranks].push_back(make_structure(item));
-    if (count == 0)
-        throw std::runtime_error(std::string(name) + ": no training structures");
+        shares[count++ % ranks].push_back(item.cast<TrainingStructure>());
 
     std::ofstream log_file;
     std::ostream* log = open_log(log_target, log_file);

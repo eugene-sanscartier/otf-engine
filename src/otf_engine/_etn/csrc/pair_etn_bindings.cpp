@@ -5,7 +5,7 @@
 #include "bindings_common.h"
 #include "pair_etn.h"
 
-// --- the computation of mlip-4's ETN ---------------------------------------
+// --- the computation of the ETN --------------------------------------------
 
 // potential_results, plus "inputs" (inum, input size) and "bonds" and "bonds_im",
 // one (inum, bond size) array per bond.
@@ -46,7 +46,7 @@ void bind_pair_etn(py::module_& m) {
     auto cls = py::class_<PairETN, Pair>(m, "PairETN", "Energy, forces and virial for an ETN potential file.")
                    .def(py::init<const std::string&>(), py::arg("filename"), "Load an ETN potential from an .etn file (version 1.0.0).");
 
-    // ---- the computation of mlip-4's ETN ----
+    // ---- the computation of the ETN ----
     def_neighbors(cls, "compute", &compute,
                   R"doc(
 Compute energy, per-atom energies, forces and virial, and each central atom's tensors.
@@ -59,7 +59,6 @@ entry (l, m, n) at offset(l) + (m + l) * rank(l) + n.
 
     // ---- no counterpart in mlip-4 ----
     // Accessors for the Python boundary beside Pair's: shape, hyperparameters and coefficient blocks.
-    // get_coeffs orders the blocks as mlip-4's params.
     cls.def("get_core_count", &PairETN::get_core_count)
         .def("get_species_ranks", [](const PairETN& self) { return to_array(self.get_species_ranks()); }, "ndarray int32 (l_count)")
         .def("get_radial_func_counts", [](const PairETN& self) { return to_array(self.get_radial_func_counts()); }, "ndarray int32 (l_count)")

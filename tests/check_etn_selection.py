@@ -96,12 +96,12 @@ def parse_probe(printed):
 
 def active_rows(path, training):
     """(structure, equation) of each row of A in the active set of the .etn at path, -1 -1 for an unset row."""
-    state = read_mvs_state(path)
+    _, active_set, stored = read_mvs_state(path)
     key = lambda atoms: numpy.round(atoms.positions, 6).tobytes()
     index_of = {key(atoms): s for s, atoms in enumerate(training)}
-    labels = [index_of[key(cfg)] for cfg in state.selected_cfgs]
-    rows = numpy.array([[labels[c], e] if c >= 0 else [-1, -1] for c, e in zip(state.active_cfg_indices, state.active_eqn_indices)])
-    return rows, state.A
+    labels = [index_of[key(cfg)] for cfg in stored]
+    rows = numpy.array([[labels[c], e] if p == 0 else [-1, -1] for p, c, e in zip(active_set.active_pool_ids, active_set.active_struct_indices, active_set.active_eqn_indices)])
+    return rows, active_set.A
 
 
 def equation(pot, training, structure, eqn):
@@ -152,11 +152,11 @@ def run_mode(mode, golden, training, candidates, workdir, tol):
         compare(f"grade of candidate {c}", atoms.info["features"]["MV_grade"], theirs[0])
         if mode == "nbh": compare(f"per-atom grades of candidate {c}", atoms.arrays["nbh_grades"], theirs[1:])
 
-    selected, (_, A_after, _) = select_add(path, training, candidates)
+    selected, after = select_add(path, training, candidates)
     ours = sorted(next(c for c, atoms in enumerate(candidates) if atoms is s) for s in selected)
     theirs = sorted(int(c) for c in golden[f"{mode}/selected"])
     if ours != theirs: failures.append(f"{mode} selection: {ours}, mlip-4 {theirs}")
-    compare("log det after selection", log_det(A_after), golden[f"{mode}/log_det_after"])
+    compare("log det after selection", log_det(after.A), golden[f"{mode}/log_det_after"])
 
     account = f"{mode}  {int(numpy.sum(rows[:, 0] >= 0))} active rows, selected {ours}, worst {worst:.2e}  ({time.perf_counter() - start:.1f} s)"
     return failures, account

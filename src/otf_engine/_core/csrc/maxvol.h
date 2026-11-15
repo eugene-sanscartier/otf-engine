@@ -73,10 +73,10 @@ class PoolRanks {
 
 class MaxVol {
   public:
-    // A = init_scale * I, mlip-3's INIT_VALUE 1e-6; threshold is mlip-3's SELECT_THRESHOLD.
-    explicit MaxVol(int n, double init_scale = 1e-6, double threshold = 1.001);
+    // A = init_scale * I; the defaults are mlip-3's.
+    explicit MaxVol(int n, double init_scale = 1e-6, double threshold = 1.001, std::optional<double> threshold_swap = std::nullopt);
     // A and invA [n * n] as stored in an #MVS_v1.1 block.
-    MaxVol(int n, const double* A, const double* invA, double threshold = 1.001);
+    MaxVol(int n, const double* A, const double* invA, double threshold = 1.001, std::optional<double> threshold_swap = std::nullopt);
 
     // grades[r] = max_i |rows[r] . invA[i]| for count rows of n.
     void grade(const double* rows, int count, double* grades);
@@ -95,8 +95,8 @@ class MaxVol {
 
     const int n;
     double threshold;
-    // mlip-4's MaximizeVol: once a search has swapped, it goes on while a grade exceeds threshold_swap.
-    // Unset, threshold, as mlip-3's.
+    // Once a search has swapped, it goes on while a grade exceeds threshold_swap, as mlip-4's MaximizeVol
+    // does; unset, threshold.
     std::optional<double> threshold_swap;
     std::vector<double> A, invA;                // [n * n] row k of A is active equation k
     std::vector<int> active_pool_ids;           // [n] -1 where row k is still init_scale * e_k
