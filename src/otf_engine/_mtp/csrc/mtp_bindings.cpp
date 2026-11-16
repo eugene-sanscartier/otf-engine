@@ -11,6 +11,6 @@ PYBIND11_MODULE(_mtp_ext, m) {
 
     bind_pair_mtp(m);
     bind_pair_mtp_extrapolation(m);
-    bind_mtp_training(m);
+    bind_pair_mtp_grad(m);
     bind_mtp_trainer(m);
 }

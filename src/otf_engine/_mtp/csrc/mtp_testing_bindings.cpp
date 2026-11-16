@@ -19,9 +19,9 @@ class MTPTrainerStages {
         std::string log_target;
         MTPTrainerOptions o = parse_options<MTPTrainerOptions>("MTPTrainerStages", options, log_target);
         o.balance_species = balance_species;
-        std::vector<TrainingStructure> share;
+        std::vector<Sample> share;
         for (py::handle item : structures)
-            share.push_back(item.cast<TrainingStructure>());
+            share.push_back(item.cast<Sample>());
         trainer = std::make_unique<MTPTrainer>(potential, std::move(share), o, &comm, &log);
     }
 
@@ -48,7 +48,7 @@ class MTPTrainerStages {
     py::array_t<double> get_reg_vector() const { return py::array_t<double>(trainer->reg_vector.size(), trainer->reg_vector.data()); }
     void set_reg_vector(const std::vector<double>& r) { trainer->reg_vector = r; }
 
-    MTPTraining potential;
+    PairMTPGrad potential;
     std::ostringstream log;
 
   private:
@@ -100,10 +100,10 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
     std::string log_target;
     MTPTrainerOptions o = parse_options<MTPTrainerOptions>("objective_on_threads", options, log_target);
     o.balance_species = balance_species;
-    std::vector<std::vector<TrainingStructure>> shares(ranks);
+    std::vector<std::vector<Sample>> shares(ranks);
     int count = 0;
     for (py::handle item : structures)
-        shares[count++ % ranks].push_back(item.cast<TrainingStructure>());
+        shares[count++ % ranks].push_back(item.cast<Sample>());
 
     ThreadGroup group(ranks);
     std::vector<ThreadComm> comms(ranks);
@@ -111,7 +111,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
     double loss = 0.0;
     std::vector<double> grad;
     auto run_rank = [&](int r) {
-        MTPTraining potential(filename);
+        PairMTPGrad potential(filename);
         MTPTrainer trainer(potential, std::move(shares[r]), o, &comms[r]);
         std::vector<double> rank_grad;
         const double rank_loss = trainer.objective(coeffs, rank_grad);
@@ -132,7 +132,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
 
 PYBIND11_MODULE(_mtp_testing, m) {
     m.doc() = "MTPTrainer's stages and BFGS, for the tests.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining and TrainingStructure
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers PairMTPGrad and Sample
 
     py::class_<MTPTrainerStages>(m, "MTPTrainerStages")
         .def(py::init<const std::string&, py::iterable, const std::map<std::string, std::string>&, bool>(), py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("balance_species") = false)
@@ -150,7 +150,7 @@ PYBIND11_MODULE(_mtp_testing, m) {
         .def_property("scaling", [](MTPTrainerStages& s) { return s.potential.get_scaling(); }, [](MTPTrainerStages& s, double v) { s.potential.set_scaling(v); })
         .def_property_readonly("min_dist", [](MTPTrainerStages& s) { return s.potential.get_min_cutoff(); })
         .def_property_readonly("log", [](MTPTrainerStages& s) { return s.log.str(); })
-        .def_property_readonly("potential", [](MTPTrainerStages& s) -> MTPTraining& { return s.potential; }, py::return_value_policy::reference_internal);
+        .def_property_readonly("potential", [](MTPTrainerStages& s) -> PairMTPGrad& { return s.potential; }, py::return_value_policy::reference_internal);
 
     m.def("bfgs_rosenbrock", &bfgs_rosenbrock, py::arg("n"), py::arg("steps"));
     m.def("objective_on_threads", &objective_on_threads, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("ranks"), py::arg("balance_species") = false);

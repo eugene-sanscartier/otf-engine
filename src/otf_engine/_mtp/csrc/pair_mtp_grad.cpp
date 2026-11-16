@@ -3,7 +3,7 @@
    virial, and of a loss built on them, with respect to its coefficients.
 ------------------------------------------------------------------------- */
 
-#include "mtp_training.h"
+#include "pair_mtp_grad.h"
 
 #include <cmath>
 
@@ -22,7 +22,7 @@ static inline void accumulate_virial_grad(double* virial_grad, int width, int d,
 /* ----------------------------------------------------------------------
    Basis values per central atom, before the linear coefficients are applied
 ------------------------------------------------------------------------- */
-void MTPTraining::eval_basis(const NeighList& list, double* basis_out) {
+void PairMTPGrad::eval_basis(const NeighList& list, double* basis_out) {
     int nbr_offset = 0;
 
     for (int ii = 0; ii < list.inum; ii++) {
@@ -80,7 +80,7 @@ void MTPTraining::eval_basis(const NeighList& list, double* basis_out) {
 }
 
 /* ---------------------------------------------------------------------- */
-void MTPTraining::grow_neighbor_rows(int jnum) {
+void PairMTPGrad::grow_neighbor_rows(int jnum) {
     if (rows_size >= jnum) return;
     rows_size = jnum;
     neighbor_units.resize((size_t) 4 * rows_size);
@@ -98,7 +98,7 @@ void MTPTraining::grow_neighbor_rows(int jnum) {
    products. The angular monomials' derivatives follow the shared tree, with
    du_b/dr_a = (delta_ab - u_a u_b) / |r|.
 ------------------------------------------------------------------------- */
-void MTPTraining::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool radial) {
+void PairMTPGrad::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool radial) {
     const int width = coeff_count();
     const int n_radial = radial_coeff_count;
     const int n_linear = alpha_scalar_count;
@@ -474,7 +474,7 @@ void MTPTraining::eval_grad(const NeighList& list, double* site_e_grad, double* 
    shared tree, and their tangents follow the same tree along
    v = (w - (w.u) u) / |r|, the tangent of u.
 ------------------------------------------------------------------------- */
-void MTPTraining::add_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
+void PairMTPGrad::add_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
     const int sp_off = n_radial;
     const int lin_off = n_radial + species_count;

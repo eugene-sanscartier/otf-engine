@@ -12,9 +12,8 @@ from numpy import float64
 
 logger = logging.getLogger(__name__)
 
-from ._core import Equations, MaxVol, PotentialCalculator, species_indices
+from ._core import Equations, MaxVol, PotentialCalculator, read_potential, species_indices
 from .almtp_io import read_mvs_header, read_mvs_state, write_mvs_state
-from .models import model_of
 
 # ---------------------------------------------------------------------------
 # Selection equations
@@ -64,7 +63,7 @@ def maximize_volume(mv: MaxVol, equations: Equations, pool_id: int, comm=None) -
 def _open_calculator(potential) -> tuple[PotentialCalculator, str | None]:
     """Accept either a potential path or a preloaded calculator."""
     if isinstance(potential, str):
-        return PotentialCalculator(model_of(potential).training(potential)), potential
+        return PotentialCalculator(read_potential(potential)), potential
     return potential, None
 
 
@@ -161,7 +160,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     """
     calc, potential_path = _open_calculator(potential)
     pot = calc.potential
-    threshold_swap = model_of(pot).threshold_swap
+    threshold_swap = pot.threshold_swap
 
     if active_set is None and potential_path is not None:
         try:
@@ -186,7 +185,7 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     initial = MaxVol(mv.A, mv.invA)
     mv.threshold = threshold
     maximize_volume(mv, cand_eqns, _POOL_CAND, comm)
-    if model_of(pot).retrain_pass: maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
+    if pot.retrain_pass: maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
 
     active_indices = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0})
     selected_structs = [candidate_structs[i] for i in active_indices]
@@ -227,7 +226,7 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
         saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_struct_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
-    mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=model_of(pot).threshold_swap)
+    mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=pot.threshold_swap)
     maximize_volume(mv, seed, _POOL_TRAIN, comm)
     maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
 

@@ -17,7 +17,7 @@ from ase import Atoms
 from conftest import ETN_REFERENCE, StoredOutputs
 from etn_potentials import MAX_DIST, MIN_DIST, POTENTIALS, RADIAL_BASIS_SIZE, coeff_blocks, compile_probe, get_block, params, parse_tensors, reference_potential, set_params, species_of, template
 from otf_engine._core import neighbors
-from otf_engine._core.selftest import check_forces, check_invariance, check_virial
+from otf_engine._core.derivative_checks import check_forces, check_invariance, check_virial
 
 TOL = 1e-12
 ROW_TOL = 1e-9    # rows whose terms cancel, such as small net forces, round to 1e-11 of themselves
@@ -115,9 +115,9 @@ def run_probe(probe, pot, cells, workdir):
 
 @pytest.fixture(scope="module")
 def potentials(recapture, mlip4_build, cells, tmp_path_factory):
-    """The test potentials, ETNTraining's of etn_reference/; under --recapture written first from their templates with
+    """The test potentials, PairETNGrad's of etn_reference/; under --recapture written first from their templates with
     seeded coefficients, and mlip-4's tensors stored."""
-    from otf_engine._etn import ETNTraining, PairETN, write_etn
+    from otf_engine._etn import PairETNGrad, PairETN, write_etn
 
     if recapture:
         stored = StoredOutputs(ETN_REFERENCE / "kernels.npz", True)
@@ -134,7 +134,7 @@ def potentials(recapture, mlip4_build, cells, tmp_path_factory):
             for key, value in run_probe(probe, pot, cells, workdir).items():
                 stored[f"{name}/{key}" if key.startswith("s") else key] = value
         stored.save()
-    return {name: ETNTraining(str(reference_potential(name))) for name in POTENTIALS}
+    return {name: PairETNGrad(str(reference_potential(name))) for name in POTENTIALS}
 
 
 def relative_differences(got, want):

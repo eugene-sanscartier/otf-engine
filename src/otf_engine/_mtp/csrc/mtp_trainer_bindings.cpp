@@ -43,7 +43,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
 
 PYBIND11_MODULE(_mtp_mpi, m) {
     m.doc() = "MTPTrainer over MPI.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTPTraining
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers PairMTPGrad
 
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename with MTPTrainer over the ranks of comm, and return it.
@@ -51,7 +51,7 @@ Train the potential in filename with MTPTrainer over the ranks of comm, and retu
 Every rank calls it with its own share of the structures and the same other arguments, and returns
 the fitted potential. An error on any rank is raised on every rank.
 
-structures : this rank's share, an iterable of TrainingStructure
+structures : this rank's share, an iterable of Sample
 options    : as _mtp_ext.train_mtp's; rank 0 writes the log
 comm       : an mpi4py communicator
 checkpoint : called on rank 0 with the potential being trained at each save of the fit; a failure
@@ -76,11 +76,11 @@ static py::tuple objective(const std::string& filename, py::iterable structures,
     std::string log_target;
     MTPTrainerOptions trainer_options = parse_options<MTPTrainerOptions>("train_mtp", options, log_target);
     trainer_options.balance_species = balance_species;
-    std::vector<TrainingStructure> share;
+    std::vector<Sample> share;
     for (py::handle item : structures)
-        share.push_back(item.cast<TrainingStructure>());
+        share.push_back(item.cast<Sample>());
 
-    MTPTraining potential(filename);
+    PairMTPGrad potential(filename);
     std::vector<double> at(coeffs.data(), coeffs.data() + coeffs.size()), grad;
     ThreadGroup group(1);
     ThreadComm comm{&group, 0};
@@ -95,7 +95,7 @@ void bind_mtp_trainer(py::module_& m) {
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename with MTPTrainer on `ranks` threads, and return it.
 
-structures : iterable of TrainingStructure
+structures : iterable of Sample
 options    : the fields of MTPTrainerOptions without the leading "--", as strings, log (stdout, none
              or a file), and species, the species' names for the error tables, comma-separated
 checkpoint : called with the potential being trained at each save of the fit

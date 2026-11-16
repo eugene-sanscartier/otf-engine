@@ -27,7 +27,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
 
 PYBIND11_MODULE(_etn_mpi, m) {
     m.doc() = "ETNTrainer over MPI.";
-    py::module_::import("otf_engine._etn._etn_ext");    // registers ETNTraining
+    py::module_::import("otf_engine._etn._etn_ext");    // registers PairETNGrad
 
     m.def("train_etn", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename with ETNTrainer over the ranks of comm, and return it.
@@ -57,7 +57,7 @@ void bind_etn_trainer(py::module_& m) {
     m.def("train_etn", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks") = 1, py::arg("checkpoint") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename with ETNTrainer on `ranks` threads, and return it.
 
-structures : iterable of TrainingStructure
+structures : iterable of Sample
 options    : the fields of ETNTrainerOptions without the leading "--", as strings, log (stdout, none
              or a file), and species, the species' names for the error tables, comma-separated
 checkpoint : called with the potential being trained at every step outside a line search

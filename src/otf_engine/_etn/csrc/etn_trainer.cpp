@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-ETNTrainer::ETNTrainer(ETNTraining& potential, std::vector<TrainingStructure> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+ETNTrainer::ETNTrainer(PairETNGrad& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
     : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
 
 /* ---------------------------------------------------------------------- */
@@ -268,7 +268,7 @@ double ETNTrainer::loss_grad(std::vector<double>& grad) {
     std::fill(grad.begin(), grad.end(), 0.0);
     double loss = 0.0;
 
-    for (const TrainingStructure& s : structures) {
+    for (const Sample& s : structures) {
         const NeighList list = s.list();
         potential.compute(list);
         const double* forces = potential.get_forces().data();

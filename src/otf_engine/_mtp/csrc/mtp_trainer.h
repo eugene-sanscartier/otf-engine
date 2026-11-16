@@ -2,7 +2,7 @@
    Fits an MTP to reference energies, forces and stresses.
    Algorithm of mlip-3's `mlp train` (mlip-3/src/mtpr_trainer.cpp,
    non_linear_regression.cpp, basic_trainer.h, and MLMTPR::AddPenaltyGrad and
-   Orthogonalize in mtpr.cpp), on MTPTraining's kernels.
+   Orthogonalize in mtpr.cpp), on PairMTPGrad's kernels.
    Copyright (c) 2023, Alexander Shapeev (Skoltech). BSD 2-Clause, see LICENSE.mlip-3.
 
    SPMD over the ranks of a communicator, as every Trainer is (see trainer.h).
@@ -11,7 +11,7 @@
 #pragma once
 
 #include "bfgs.h"
-#include "mtp_training.h"
+#include "pair_mtp_grad.h"
 #include "trainer.h"
 
 #include <string>
@@ -48,11 +48,11 @@ struct MTPTrainerOptions : TrainerOptions {
     int inverse_hessian_size = 0;
 };
 
-class MTPTrainer : public Trainer<MTPTraining, MTPTrainerOptions> {
+class MTPTrainer : public Trainer<PairMTPGrad, MTPTrainerOptions> {
   public:
     // log receives mlp's fit log on the rank given one; checkpoint is called
     // on rank 0 wherever mlp saves the potential during the fit.
-    MTPTrainer(MTPTraining& potential, std::vector<TrainingStructure> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    MTPTrainer(PairMTPGrad& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, with the
     // species of the training set it lacked added, and logs the errors on the
@@ -99,11 +99,11 @@ class MTPTrainer : public Trainer<MTPTraining, MTPTrainerOptions> {
     // QR retraction: Gram-Schmidt over the rows of the radial block of c, in order, a lower-triangular change of the radial functions.
     void retract(std::vector<double>& c) const;
 
-    double energy_weight(const TrainingStructure& s) const;
+    double energy_weight(const Sample& s) const;
     // The weight of atom i's force, scale_by_force taking it at forces: the reference ones in the linear fit, the
     // predicted ones in the loss, as mlip-3 takes them.
-    double force_weight(const TrainingStructure& s, int i, const double* forces) const;
-    double stress_weight(const TrainingStructure& s) const;
+    double force_weight(const Sample& s, int i, const double* forces) const;
+    double stress_weight(const Sample& s) const;
 
     double loss_terms[3] = {};    // the energy, force and stress terms of the last loss_grad
 

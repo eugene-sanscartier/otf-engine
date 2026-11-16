@@ -31,7 +31,7 @@ def parse_gammas(path):
     return gammas
 
 
-def apply_gamma_obs(state, obs, floor, window, percentile, factor):
+def apply_gamma_observations(state, obs, floor, window, percentile, factor):
     history = state.get("gamma_max0_history", [])
     history = (history + [float(obs)])[-window:]
     gamma_max0_new = max(factor * numpy.percentile(history, percentile), floor)
@@ -105,7 +105,7 @@ def main():
     print(f"Total observations to apply: {len(all_gammas)}")
 
     for obs in all_gammas:
-        apply_gamma_obs(
+        apply_gamma_observations(
             state, obs,
             floor=args.gamma_max0_floor,
             window=args.gamma_max0_window,

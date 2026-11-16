@@ -9,7 +9,7 @@ from ase import Atoms
 
 from conftest import DATA, two_species
 from otf_engine import NestedLauncher
-from otf_engine.otf_mtp import OTFCycle
+from otf_engine.otf_cycle import OTFCycle
 
 
 @pytest.fixture

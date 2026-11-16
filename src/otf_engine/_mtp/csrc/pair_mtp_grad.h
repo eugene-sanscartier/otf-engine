@@ -7,9 +7,9 @@
 
 #include "pair_mtp.h"
 
-class MTPTraining : public PairMTP {
+class PairMTPGrad : public PairMTP {
   public:
-    explicit MTPTraining(const std::string& filename) : PairMTP(filename) {}
+    explicit PairMTPGrad(const std::string& filename) : PairMTP(filename) {}
 
     // Scalar moment values per central atom: [inum * alpha_scalar_count].
     // Row ii holds the basis values for ilist[ii]; dot with linear_coeffs and

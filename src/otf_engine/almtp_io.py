@@ -25,7 +25,7 @@ from io import StringIO
 import numpy
 from numpy import intp, ndarray
 
-from ._core import MaxVol
+from ._core import MaxVol, read_potential
 
 _MARKER = b"#MVS_v1.1"
 _END_MARKER = b"\n#\n"
@@ -53,8 +53,7 @@ def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndar
     if binary_start == -1:
         raise ValueError("Binary payload marker '#' not found in #MVS_v1.1 section")
     binary_start += 1
-    from .models import model_of    # loads the extensions, which reading the section's header does not need
-    n = model_of(path).training(path).get_coeff_count()
+    n = read_potential(path).get_coeff_count()
     n_bytes = 2 * n * n * 8
     end_pos = binary_start + n_bytes
     if data[end_pos:end_pos + len(_END_MARKER)] != _END_MARKER:

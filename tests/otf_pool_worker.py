@@ -17,8 +17,8 @@ from pykmc.manager import ManagerFactory
 
 from otf_engine import NestedLauncher, otf_pool
 from otf_engine._core import PotentialCalculator
-from otf_engine._mtp import MTPTraining
-from otf_engine.otf_mtp import OTFCycle
+from otf_engine._mtp import PairMTPGrad
+from otf_engine.otf_cycle import OTFCycle
 
 session_size, iterations, candidate_count, species = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4:]
 
@@ -39,7 +39,7 @@ manager.global_train_potential(potential="potential.almtp", training_set="train.
 
 def evaluator(structure):
     atoms = structure.copy()
-    atoms.calc = PotentialCalculator(MTPTraining("potential.almtp"))
+    atoms.calc = PotentialCalculator(PairMTPGrad("potential.almtp"))
     results = dict(energy=atoms.get_potential_energy(), forces=atoms.get_forces(), stress=atoms.get_stress())
     atoms.calc = SinglePointCalculator(atoms, **results)
     return atoms

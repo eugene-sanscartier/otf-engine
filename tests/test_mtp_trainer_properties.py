@@ -5,14 +5,15 @@ import pytest
 
 from conftest import DATA, MTP_REFERENCE
 from otf_engine._core.calculator import PotentialCalculator
-from otf_engine.train import MLP_ALGORITHM, training_structure
+from otf_engine._core import Sample
+from otf_engine.train import MLP_ALGORITHM
 
 TEACHER = MTP_REFERENCE / "potential-16.mtp"
 TEMPLATE = MTP_REFERENCE / "template-08.almtp"
 
 
 def labelled(structures):
-    return [training_structure(atoms, 5.0, k) for k, atoms in enumerate(structures)]
+    return [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)]
 
 
 def stages(potential, structures, **options):

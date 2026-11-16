@@ -1,14 +1,14 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for MTPTraining (see mtp_training.h).
+   Python bindings for PairMTPGrad (see pair_mtp_grad.h).
 
    Nothing here has a counterpart in the reference, which is a pair style and
    differentiates nothing w.r.t. the coefficients.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
-#include "mtp_training.h"
+#include "pair_mtp_grad.h"
 
-static DoubleArray eval_basis(MTPTraining& self, const PyNeighbors& nb) {
+static DoubleArray eval_basis(PairMTPGrad& self, const PyNeighbors& nb) {
     auto out = zeros({nb.inum(), self.get_alpha_scalar_count()});
     double* out_ptr = out.mutable_data();
     {
@@ -18,12 +18,12 @@ static DoubleArray eval_basis(MTPTraining& self, const PyNeighbors& nb) {
     return out;
 }
 
-static py::object eval_grad(MTPTraining& self, const PyNeighbors& nb, bool forces, bool virial, bool radial) {
+static py::object eval_grad(PairMTPGrad& self, const PyNeighbors& nb, bool forces, bool virial, bool radial) {
     return grad_arrays(nb, self.coeff_count(), forces, virial, [&](double* eg, double* fg, double* vg) { self.eval_grad(nb.view(), eg, fg, vg, radial); });
 }
 
-void bind_mtp_training(py::module_& m) {
-    auto cls = py::class_<MTPTraining, PairMTP>(m, "MTPTraining", "An MTP potential that also gives its basis values, and differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
+void bind_pair_mtp_grad(py::module_& m) {
+    auto cls = py::class_<PairMTPGrad, PairMTP>(m, "PairMTPGrad", "An MTP potential that also gives its basis values, and differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
                    .def(py::init<const std::string&>(), py::arg("filename"));
 
     def_neighbors(cls, "eval_basis", &eval_basis,

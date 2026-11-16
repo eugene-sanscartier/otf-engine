@@ -1,17 +1,17 @@
 """The operations pyKMC's workers run for an OTF-MTP cycle, registered in its extra_ops.
 
 Each is called as fn(comm, **kwargs) on every rank of the communicator it runs on, and returns its
-result on rank 0 of it. pyKMC steps an otf_mtp.OTFCycle on its manager and runs these for it:
+result on rank 0 of it. pyKMC steps an otf_cycle.OTFCycle on its manager and runs these for it:
 grade_dump as a local operation per dump on the sessions, update_active_set, select_add and
 train_potential as global ones over every worker. The workers share the manager's working directory.
 """
 
-from . import otf_mtp, selection, train
+from . import otf_cycle, selection, train
 
 
 def update_active_set(comm, potential, training_set, species=None) -> None:
     """Converge the active set in potential over training_set, over the ranks of comm; rank 0 writes potential."""
-    selection.update_active_set(potential, otf_mtp.load_structures(training_set, species), comm=comm)
+    selection.update_active_set(potential, otf_cycle.load_structures(training_set, species), comm=comm)
 
 
 def grade_dump(comm, dump, potential, species=None) -> list | None:
@@ -20,7 +20,7 @@ def grade_dump(comm, dump, potential, species=None) -> list | None:
     Returns the graded structures on rank 0, None on the other ranks.
     """
     if comm.Get_rank() != 0: return None
-    structures = otf_mtp.grade_dump(dump, potential, species)
+    structures = otf_cycle.grade_dump(dump, potential, species)
     return structures
 
 
@@ -29,10 +29,10 @@ def select_add(comm, potential, training_set, candidates, species=None) -> list 
 
     Returns the selected candidates on rank 0, None on the other ranks.
     """
-    selected, _ = selection.select_add(potential, otf_mtp.load_structures(training_set, species), candidates, comm=comm)
+    selected, _ = selection.select_add(potential, otf_cycle.load_structures(training_set, species), candidates, comm=comm)
     return selected if comm.Get_rank() == 0 else None
 
 
 def train_potential(comm, potential, training_set, save_to, species=None, settings=None) -> None:
     """Train potential on training_set over the ranks of comm, and write it with an active set to save_to on rank 0."""
-    train.train(potential, otf_mtp.load_structures(training_set, species), save_to, settings=settings, comm=comm)
+    train.train(potential, otf_cycle.load_structures(training_set, species), save_to, settings=settings, comm=comm)

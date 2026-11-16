@@ -7,9 +7,9 @@
 
 #include "pair_etn.h"
 
-class ETNTraining : public PairETN {
+class PairETNGrad : public PairETN {
   public:
-    explicit ETNTraining(const std::string& filename);
+    explicit PairETNGrad(const std::string& filename);
 
     // dE_i/dc per central atom: [inum * coeff_count]; row ii for atom ilist[ii]. Throws when
     // given force_grad, since the ETN has no force gradients here.

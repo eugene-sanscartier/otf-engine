@@ -34,7 +34,7 @@ class Pair {
     virtual void set_coeffs(const double* c) = 0;
 
     // d(E_i, F, virial)/dc. force_grad and virial_grad may be null, and virial_grad
-    // is filled only with force_grad. Throws unless a training class implements it.
+    // is filled only with force_grad. Throws unless PairMTPGrad or PairETNGrad implements it.
     //   site_energy_grad : [inum * coeff_count]      per-atom dE_i/dc
     //   force_grad       : [n_atoms * 3 * coeff_count]
     //   virial_grad      : [6 * coeff_count]
@@ -43,7 +43,7 @@ class Pair {
     // Adds dL/dc to loss_grad [coeff_count], for a loss L whose derivatives
     // with respect to the energy, forces and virial of this structure are
     // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
-    // Throws unless a training class implements it.
+    // Throws unless PairMTPGrad or PairETNGrad implements it.
     virtual void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad);
 
     // Radial basis values and derivatives at dist, into arrays of radial_basis_size.

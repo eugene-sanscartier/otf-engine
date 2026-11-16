@@ -1,4 +1,4 @@
-from .otf_mtp import OTFCycle, grade_dump, run_cycle
+from .otf_cycle import OTFCycle, grade_dump, run_cycle
 from .launchers import (
     Launcher,
     NestedLauncher,

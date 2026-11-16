@@ -11,16 +11,17 @@ import numpy
 import pytest
 
 from conftest import DATA, MTP_REFERENCE, StoredOutputs, parse_probe
-from otf_engine.train import MLP_ALGORITHM, training_structure
+from otf_engine._core import Sample
+from otf_engine.train import MLP_ALGORITHM
 
 TEACHER = MTP_REFERENCE / "potential-16.mtp"
 
 
 def perturbed_coeffs(path, scale, seed):
     """The coefficients of the potential in path, the radial ones multiplied by 1 + scale * N(0, 1)."""
-    from otf_engine._mtp import MTPTraining
+    from otf_engine._mtp import PairMTPGrad
 
-    potential = MTPTraining(str(path))
+    potential = PairMTPGrad(str(path))
     coeffs = numpy.array(potential.get_coeffs())
     n_radial = potential.get_radial_coeff_count()
     coeffs[:n_radial] *= 1 + scale * numpy.random.default_rng(seed).standard_normal(n_radial)
@@ -48,7 +49,7 @@ def run_ours(potential, settings, script, structures):
     """The script's outputs from MTPTrainerStages, as mlip3_probe prints them: (name, values, whether a linear solve came before, radial coefficient count)."""
     from otf_engine._mtp._mtp_testing import MTPTrainerStages
 
-    stages = MTPTrainerStages(str(potential), [training_structure(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
+    stages = MTPTrainerStages(str(potential), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
     outputs = []
     solved = False
     for line in script:
@@ -175,7 +176,7 @@ def test_fit_log(name, structures, stored, recapture, mlip3, tmp_path):
         printed = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=tmp_path).stdout
         stored[f"fit_{name}/log"] = numpy.array(fit_log(printed, last))
 
-    stages = MTPTrainerStages(str(potential), [training_structure(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
+    stages = MTPTrainerStages(str(potential), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
     stages.train()
     ours, theirs = fit_log(stages.log, last), list(stored[f"fit_{name}/log"])
 

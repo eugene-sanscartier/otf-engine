@@ -65,12 +65,12 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
         .def_property_readonly("types", &PyNeighbors::types)
         .def_property_readonly("displacements", &PyNeighbors::displacements);
 
-    py::class_<TrainingStructure>(m, "TrainingStructure", "A structure to fit: its neighbor list at the potential's cutoff and its reference values, which the trainers and error_table take.")
+    py::class_<Sample>(m, "Sample", "A structure to fit: its neighbor list at the potential's cutoff and its reference values, which the trainers and error_table take.")
         .def(py::init([](const PyNeighbors& nb, py::object energy, py::object forces, py::object virial, int number) {
                  const NeighList& list = nb.view();
                  const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
 
-                 TrainingStructure s;
+                 Sample s;
                  s.types.assign(list.types, list.types + list.n_atoms);
                  s.ilist.assign(list.ilist, list.ilist + list.inum);
                  s.numneigh.assign(list.numneigh, list.numneigh + list.inum);
@@ -84,14 +84,14 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
                  if (!forces.is_none()) {
                      DoubleArray f = forces.cast<DoubleArray>();
                      if (f.ndim() != 2 || f.shape(0) != list.n_atoms || f.shape(1) != 3)
-                         throw std::runtime_error("TrainingStructure: forces must have shape (n_atoms, 3)");
+                         throw std::runtime_error("Sample: forces must have shape (n_atoms, 3)");
                      s.forces.assign(f.data(), f.data() + f.size());
                      s.has_forces = true;
                  }
                  if (!virial.is_none()) {
                      DoubleArray v = virial.cast<DoubleArray>();
                      if (v.size() != 6)
-                         throw std::runtime_error("TrainingStructure: virial must have 6 components");
+                         throw std::runtime_error("Sample: virial must have 6 components");
                      std::copy(v.data(), v.data() + 6, s.virial);
                      s.has_virial = true;
                  }
@@ -105,13 +105,13 @@ virial    : (6) | None, mlip-3's PlusStress in eV, xx,yy,zz,xy,xz,yz
 number    : the number the error tables name it by
 )doc")
         .def_property_readonly("neighbors",
-                               [](const TrainingStructure& s) {
+                               [](const Sample& s) {
                                    return PyNeighbors(to_array(s.types), to_array(s.ilist), to_array(s.numneigh), to_array(s.firstneigh), to_array(s.displacements, {(py::ssize_t) s.firstneigh.size(), 3}));
                                })
-        .def_property_readonly("energy", [](const TrainingStructure& s) { return s.has_energy ? py::object(py::float_(s.energy)) : py::none(); })
-        .def_property_readonly("forces", [](const TrainingStructure& s) { return s.has_forces ? py::object(to_array(s.forces, {s.n_atoms(), 3})) : py::none(); })
-        .def_property_readonly("virial", [](const TrainingStructure& s) { return s.has_virial ? py::object(DoubleArray({6}, s.virial)) : py::none(); })
-        .def_readonly("number", &TrainingStructure::number);
+        .def_property_readonly("energy", [](const Sample& s) { return s.has_energy ? py::object(py::float_(s.energy)) : py::none(); })
+        .def_property_readonly("forces", [](const Sample& s) { return s.has_forces ? py::object(to_array(s.forces, {s.n_atoms(), 3})) : py::none(); })
+        .def_property_readonly("virial", [](const Sample& s) { return s.has_virial ? py::object(DoubleArray({6}, s.virial)) : py::none(); })
+        .def_readonly("number", &Sample::number);
 
     auto cls = py::class_<Pair>(m, "Pair", "The base of PairMTP and PairETN: what a potential gives whatever its kind.");
     cls.def("get_coeff_count", &Pair::coeff_count, "Length of the coefficient vector get_coeffs gives.")
@@ -161,7 +161,7 @@ number    : the number the error tables name it by
 
     def_neighbors(cls, "eval_grad", &eval_grad,
                   R"doc(
-d(E_i, F, virial)/dc, c as get_coeffs orders it; a training class only.
+d(E_i, F, virial)/dc, c as get_coeffs orders it; PairMTPGrad and PairETNGrad only.
 
 Without forces, returns site_energy_grad (inum, cc); row ii is dE_i/dc for
 atom ilist[ii], the information vector extrapolation grades are taken from.
@@ -173,14 +173,14 @@ With forces, returns (site_energy_grad (inum, cc), force_grad (n_atoms, 3, cc), 
                   R"doc(
 dL/dc (cc,) for a loss L with the given derivatives w.r.t. the energy,
 the forces (n_atoms, 3) and the virial (6, xx,yy,zz,xy,xz,yz); None is zero;
-a training class only.
+PairMTPGrad and PairETNGrad only.
 )doc",
                   py::arg("dloss_denergy"), py::arg("dloss_dforces") = py::none(), py::arg("dloss_dvirial") = py::none());
 
     m.def("error_table", [](Pair& potential, py::iterable structures, const std::vector<std::string>& species, const std::string& title) {
-        std::vector<TrainingStructure> share;
+        std::vector<Sample> share;
         for (py::handle item : structures)
-            share.push_back(item.cast<TrainingStructure>());
+            share.push_back(item.cast<Sample>());
         ThreadGroup group(1);
         ThreadComm comm{&group, 0};
         py::gil_scoped_release unlocked;
@@ -188,7 +188,7 @@ a training class only.
     }, py::arg("potential"), py::arg("structures"), py::arg("species"), py::arg("title"), R"doc(
 The errors of potential on the structures, as the table train_mtp and train_etn log, under title.
 
-structures : iterable of TrainingStructure
+structures : iterable of Sample
 species    : the species' names
 )doc");
 }

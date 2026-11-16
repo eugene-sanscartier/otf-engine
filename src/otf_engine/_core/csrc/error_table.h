@@ -6,7 +6,7 @@
 #pragma once
 
 #include "pair.h"
-#include "training_structure.h"
+#include "sample.h"
 
 #ifdef MTP_MPI
 #include <mpi.h>
@@ -34,7 +34,7 @@
    the structures with the largest energy and force errors; on rank 0, and
    empty on the others.
 ------------------------------------------------------------------------- */
-inline std::string error_table(Pair& potential, const std::vector<TrainingStructure>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title) {
+inline std::string error_table(Pair& potential, const std::vector<Sample>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title) {
     enum { ENE, EPA, FRC, VIR, KINDS };    // then the forces of each species
     const int species_count = potential.get_species_count();
     const int rows = KINDS + species_count;
@@ -43,7 +43,7 @@ inline std::string error_table(Pair& potential, const std::vector<TrainingStruct
     // the normal equations of the per-species energies: the sums of counts * counts and of counts * energy, and the
     // number of energies
     std::vector<double> fit(C * C + C + 1, 0.0), total_fit(C * C + C + 1), counts(C);
-    for (const TrainingStructure& s : structures) {
+    for (const Sample& s : structures) {
         if (!s.has_energy) continue;
         std::fill(counts.begin(), counts.end(), 0.0);
         for (int t : s.types)
@@ -98,7 +98,7 @@ inline std::string error_table(Pair& potential, const std::vector<TrainingStruct
         max[2] = std::max(max[2], -value);
     };
 
-    for (const TrainingStructure& s : structures) {
+    for (const Sample& s : structures) {
         const NeighList list = s.list();
         potential.compute(list);
         const double* forces = potential.get_forces().data();

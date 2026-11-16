@@ -8,12 +8,12 @@
    in the _mtp_ext module under ../../_mtp/csrc/:
      pair_mtp_bindings.cpp                <- pair_mtp.{h,cpp}
      pair_mtp_extrapolation_bindings.cpp  <- pair_mtp_extrapolation.{h,cpp}
-     mtp_training_bindings.cpp            <- mtp_training.{h,cpp}
+     pair_mtp_grad_bindings.cpp            <- pair_mtp_grad.{h,cpp}
      mtp_trainer_bindings.cpp             <- mtp_trainer.{h,cpp}
    and in the _etn_ext module under ../../_etn/csrc/:
      etn_harmonics_bindings.cpp           <- etn_harmonics.{h,cpp}
      pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
-     etn_training_bindings.cpp            <- etn_training.{h,cpp}
+     pair_etn_grad_bindings.cpp            <- pair_etn_grad.{h,cpp}
      etn_trainer_bindings.cpp             <- etn_trainer.{h,cpp}
    Built with MTP_MPI, core_bindings.cpp and maxvol_bindings.cpp are the
    _core_mpi module, mtp_trainer_bindings.cpp the _mtp_mpi module, and
@@ -23,7 +23,7 @@
 #pragma once
 
 #include "pair.h"
-#include "training_structure.h"
+#include "sample.h"
 
 #ifdef MTP_MPI
 #include <mpi.h>
@@ -230,7 +230,7 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
 // job with MPI_Abort. name (train_mtp, train_etn) prefixes the errors.
 template <class TrainerT>
 py::object train_over_mpi(const char* name, const std::string& filename, py::iterable structures, const std::function<typename TrainerT::Options(std::string&)>& make_options, py::object comm_object, py::object checkpoint) {
-    using Training = typename TrainerT::Training;
+    using Potential = typename TrainerT::Potential;
     const MPI_Comm comm = MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>());
     int rank = 0;
     MPI_Comm_rank(comm, &rank);
@@ -238,7 +238,7 @@ py::object train_over_mpi(const char* name, const std::string& filename, py::ite
     // A rank failing to set up fails every rank, before the trainer's first collective.
     std::string error;
     typename TrainerT::Options trainer_options;
-    std::vector<TrainingStructure> share;
+    std::vector<Sample> share;
     std::ofstream log_file;
     std::ostream* log = nullptr;
     py::object potential;
@@ -246,15 +246,15 @@ py::object train_over_mpi(const char* name, const std::string& filename, py::ite
         std::string log_target = "stdout";
         trainer_options = make_options(log_target);
         for (py::handle item : structures)
-            share.push_back(item.cast<TrainingStructure>());
+            share.push_back(item.cast<Sample>());
         if (rank == 0) log = open_log(log_target, log_file);
-        potential = py::cast(std::make_unique<Training>(filename));
+        potential = py::cast(std::make_unique<Potential>(filename));
     } catch (const std::exception& e) {
         error = e.what();
     }
     raise_together(comm, error);
 
-    Training& potential_ref = potential.cast<Training&>();
+    Potential& potential_ref = potential.cast<Potential&>();
     std::string checkpoint_error;    // the first failed checkpoint, which ends checkpointing
     std::function<void()> save;
     if (rank == 0 && !checkpoint.is_none())
@@ -291,20 +291,20 @@ py::object train_over_mpi(const char* name, const std::string& filename, py::ite
 // name (train_mtp, train_etn) prefixes the errors.
 template <class TrainerT>
 py::object train_on_threads(const char* name, const std::string& filename, py::iterable structures, const typename TrainerT::Options& options, const std::string& log_target, int ranks, py::object checkpoint) {
-    using Training = typename TrainerT::Training;
+    using Potential = typename TrainerT::Potential;
     if (ranks < 1)
         throw std::runtime_error(std::string(name) + ": ranks must be at least 1");
 
-    std::vector<std::vector<TrainingStructure>> shares(ranks);
+    std::vector<std::vector<Sample>> shares(ranks);
     int count = 0;
     for (py::handle item : structures)
-        shares[count++ % ranks].push_back(item.cast<TrainingStructure>());
+        shares[count++ % ranks].push_back(item.cast<Sample>());
 
     std::ofstream log_file;
     std::ostream* log = open_log(log_target, log_file);
 
-    py::object potential = py::cast(std::make_unique<Training>(filename));
-    Training& potential_ref = potential.cast<Training&>();
+    py::object potential = py::cast(std::make_unique<Potential>(filename));
+    Potential& potential_ref = potential.cast<Potential&>();
     std::function<void()> save;
     if (!checkpoint.is_none())
         save = [&]() {
@@ -321,9 +321,9 @@ py::object train_on_threads(const char* name, const std::string& filename, py::i
     std::mutex failure_mutex;
     auto run_rank = [&](int r) {
         try {
-            std::unique_ptr<Training> own;
-            if (r != 0) own = std::make_unique<Training>(filename);
-            Training& pot = r == 0 ? potential_ref : *own;
+            std::unique_ptr<Potential> own;
+            if (r != 0) own = std::make_unique<Potential>(filename);
+            Potential& pot = r == 0 ? potential_ref : *own;
             TrainerT trainer(pot, std::move(shares[r]), options, &comms[r], r == 0 ? log : nullptr, r == 0 ? save : nullptr);
             trainer.train();
         } catch (const CommAborted&) {
@@ -354,9 +354,9 @@ void bind_core(py::module_& m);
 void bind_maxvol(py::module_& m);
 void bind_pair_mtp(py::module_& m);
 void bind_pair_mtp_extrapolation(py::module_& m);
-void bind_mtp_training(py::module_& m);
+void bind_pair_mtp_grad(py::module_& m);
 void bind_mtp_trainer(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
 void bind_pair_etn(py::module_& m);
-void bind_etn_training(py::module_& m);
+void bind_pair_etn_grad(py::module_& m);
 void bind_etn_trainer(py::module_& m);

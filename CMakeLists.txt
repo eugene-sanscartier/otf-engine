@@ -52,7 +52,7 @@ install(TARGETS _core_mpi DESTINATION otf_engine/_core)
 add_library(mtp STATIC
     ${MTP_CSRC}/pair_mtp.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation.cpp
-    ${MTP_CSRC}/mtp_training.cpp
+    ${MTP_CSRC}/pair_mtp_grad.cpp
 )
 target_include_directories(mtp PUBLIC ${MTP_CSRC})
 target_link_libraries(mtp PUBLIC core)
@@ -65,7 +65,7 @@ pybind11_add_module(_mtp_ext
     ${MTP_CSRC}/mtp_bindings.cpp
     ${MTP_CSRC}/pair_mtp_bindings.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation_bindings.cpp
-    ${MTP_CSRC}/mtp_training_bindings.cpp
+    ${MTP_CSRC}/pair_mtp_grad_bindings.cpp
     ${MTP_CSRC}/mtp_trainer_bindings.cpp
 )
 target_link_libraries(_mtp_ext PRIVATE mtp Threads::Threads Eigen3::Eigen)
@@ -96,7 +96,7 @@ install(TARGETS _mtp_testing DESTINATION otf_engine/_mtp)
 add_library(etn STATIC
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/pair_etn.cpp
-    ${ETN_CSRC}/etn_training.cpp
+    ${ETN_CSRC}/pair_etn_grad.cpp
     ${ETN_CSRC}/wolfe_bfgs.cpp
 )
 target_include_directories(etn PUBLIC ${ETN_CSRC})
@@ -109,7 +109,7 @@ pybind11_add_module(_etn_ext
     ${ETN_CSRC}/etn_bindings.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/pair_etn_bindings.cpp
-    ${ETN_CSRC}/etn_training_bindings.cpp
+    ${ETN_CSRC}/pair_etn_grad_bindings.cpp
     ${ETN_CSRC}/etn_trainer_bindings.cpp
 )
 target_link_libraries(_etn_ext PRIVATE etn Threads::Threads Eigen3::Eigen)

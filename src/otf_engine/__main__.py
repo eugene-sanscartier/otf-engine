@@ -5,7 +5,7 @@ import re
 import sys
 import argparse
 from pathlib import Path
-from .otf_mtp import OTFCycle, run_cycle
+from .otf_cycle import OTFCycle, run_cycle
 from .launchers import NestedLauncher, ForkLauncher, SlurmLauncher
 from .cycles import next_cycle_dir, LOG_FILE, LOG_FORMAT
 from .evaluate import load_evaluator

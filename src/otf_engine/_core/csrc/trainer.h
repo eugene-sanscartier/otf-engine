@@ -10,7 +10,7 @@
 #pragma once
 
 #include "error_table.h"
-#include "training_structure.h"
+#include "sample.h"
 
 #ifdef MTP_MPI
 #include <mpi.h>
@@ -34,22 +34,22 @@ struct TrainerOptions {
     std::vector<std::string> species;    // the species' names in the error tables
 };
 
-// Training is the potential's training class, Options its trainer's options.
-template <class TrainingT, class OptionsT>
+// Potential is PairMTPGrad or PairETNGrad, Options its trainer's options.
+template <class PotentialT, class OptionsT>
 class Trainer {
   public:
-    using Training = TrainingT;
+    using Potential = PotentialT;
     using Options = OptionsT;
 
     // log receives the fit log on the rank given one; checkpoint saves the potential, which then
     // holds the coefficients. Throws on every rank together when no rank has a structure.
-    Trainer(Training& potential, std::vector<TrainingStructure> structures, const Options& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+    Trainer(Potential& potential, std::vector<Sample> structures, const Options& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
         : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log), checkpoint(std::move(checkpoint)) {
         MPI_Comm_rank(comm, &rank);
         MPI_Comm_size(comm, &size);
 
         if (options.balance_species)
-            for (TrainingStructure& s : this->structures) s.balance_species();
+            for (Sample& s : this->structures) s.balance_species();
 
         int local_count = (int) this->structures.size();
         MPI_Allreduce(&local_count, &structure_count, 1, MPI_INT, MPI_SUM, comm);
@@ -66,7 +66,7 @@ class Trainer {
     int training_species_count() {
         // the species count, and minus the lowest species when it is negative, so that every rank raises together
         int local[2] = {0, 0}, global[2] = {0, 0};
-        for (const TrainingStructure& s : structures)
+        for (const Sample& s : structures)
             for (int t : s.types) {
                 local[0] = std::max(local[0], t + 1);
                 local[1] = std::max(local[1], -t);
@@ -77,7 +77,7 @@ class Trainer {
         const int type_count = global[0];
 
         std::vector<int> present(type_count, 0), present_anywhere(type_count, 0);
-        for (const TrainingStructure& s : structures)
+        for (const Sample& s : structures)
             for (int t : s.types)
                 present[t] = 1;
         MPI_Allreduce(present.data(), present_anywhere.data(), type_count, MPI_INT, MPI_MAX, comm);
@@ -97,8 +97,8 @@ class Trainer {
         if (log) *log << table;
     }
 
-    Training& potential;
-    std::vector<TrainingStructure> structures;
+    Potential& potential;
+    std::vector<Sample> structures;
     Options options;
     MPI_Comm comm;
     int rank = 0, size = 1;

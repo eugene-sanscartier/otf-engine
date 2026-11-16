@@ -17,35 +17,19 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from importlib import import_module
 
-import numpy
-from numpy import float64
-
-from ._core import TrainingStructure, error_table, neighbors
+from ._core import Sample, error_table, read_potential
 from .almtp_io import read_mvs_header
 from .io_cfg import read_cfg
-from .models import model_of
 from .selection import DEFAULT_SELECTION_WEIGHTS, update_active_set
-
-
-def training_structure(atoms, cutoff: float, number: int) -> TrainingStructure:
-    """*atoms* as the trainers and error_table take it: its neighbor list, its energy, forces and virial (mlip-3's PlusStress, eV, xx yy zz xy xz yz), None where absent, and *number*."""
-    results = atoms.calc.results
-    forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
-    virial = None
-    if "stress" in results:
-        # ASE's stress is -virial / volume, in Voigt order xx yy zz yz xz xy
-        v = -numpy.asarray(results["stress"], dtype=float64) * atoms.get_volume()
-        virial = v[[0, 1, 2, 5, 4, 3]]
-    structure = TrainingStructure(neighbors(atoms, cutoff), float(results["energy"]) if "energy" in results else None, forces, virial, number)
-    return structure
 
 
 def errors(potential: str, structures: list, title: str, first: int = 1, species: list | None = None) -> str:
     """The errors of *potential* on the labelled *structures*, numbered from *first*, as the table training logs, under *title*."""
-    pot = model_of(potential).training(potential)
+    pot = read_potential(potential)
     cutoff = pot.get_max_cutoff()
-    table = error_table(pot, [training_structure(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
+    table = error_table(pot, [Sample(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
     return table
 
 
@@ -59,10 +43,13 @@ def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int |
     inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's; an MTP's only
     balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike
     """
-    model = model_of(potential)
+    pot = read_potential(potential)
     extra = {} if inverse_hessian is None else {"inverse_hessian": inverse_hessian}
-    if comm is None: return model.train_on_threads(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, balance_species=balance_species, **extra)
-    return model.train_over_mpi()(potential, structures, options, comm, checkpoint=checkpoint, balance_species=balance_species, **extra)
+    if comm is None: return pot.train_on_threads(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, balance_species=balance_species, **extra)
+
+    module, name = pot.mpi_trainer    # imported here, so a process without a communicator never loads the MPI library
+    train_over_mpi = getattr(import_module(module), name)
+    return train_over_mpi(potential, structures, options, comm, checkpoint=checkpoint, balance_species=balance_species, **extra)
 
 
 def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None, balance_species: bool = True) -> None:
@@ -84,15 +71,14 @@ def train(potential: str, training_structs: list, save_to: str, settings: dict |
     except RuntimeError:
         weights = dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
 
-    model = model_of(potential)
-    cutoff = model.training(potential).get_max_cutoff()
+    cutoff = read_potential(potential).get_max_cutoff()
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
-    structures = (training_structure(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
+    structures = (Sample(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
     options = {key: str(value) for key, value in (settings or {}).items()}
-    pot = fit(potential, structures, options, checkpoint=lambda pot: model.write(pot, save_to), ranks=ranks, comm=comm, balance_species=balance_species)
+    pot = fit(potential, structures, options, checkpoint=lambda pot: pot.write(save_to), ranks=ranks, comm=comm, balance_species=balance_species)
 
-    if rank == 0: model.write(pot, save_to)
+    if rank == 0: pot.write(save_to)
     if comm is not None: comm.Barrier()    # every rank reads save_to back
 
     # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with

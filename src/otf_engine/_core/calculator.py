@@ -1,4 +1,4 @@
-"""An ASE Calculator wrapping a Pair: an MTP, an ETN, or their training classes."""
+"""An ASE Calculator wrapping a Pair: an MTP or an ETN, plain or with its coefficient gradients (PairMTPGrad, PairETNGrad)."""
 
 import numpy
 from numpy import float64

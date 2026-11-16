@@ -11,6 +11,6 @@ PYBIND11_MODULE(_etn_ext, m) {
 
     bind_etn_harmonics(m);
     bind_pair_etn(m);
-    bind_etn_training(m);
+    bind_pair_etn_grad(m);
     bind_etn_trainer(m);
 }

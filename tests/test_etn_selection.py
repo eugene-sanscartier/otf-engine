@@ -112,7 +112,7 @@ def stored(recapture, mlip4_build, structures, candidates, tmp_path_factory):
 
 @pytest.mark.parametrize("mode", MODES)
 def test_against_mlip4(mode, structures, candidates, stored, tmp_path):
-    from otf_engine._etn import ETNTraining
+    from otf_engine._etn import PairETNGrad
 
     path = str(tmp_path / f"{POTENTIAL}.etn")
     shutil.copy(reference_potential(POTENTIAL), path)
@@ -120,7 +120,7 @@ def test_against_mlip4(mode, structures, candidates, stored, tmp_path):
     rows, A = active_rows(path, structures)
     theirs = numpy.asarray(stored[f"{mode}/active_set"], dtype=int).reshape(-1, 2)
     # atoms of the same environment in two structures give one equation twice, and rounding picks either
-    pot = ETNTraining(path)
+    pot = PairETNGrad(path)
     mismatched = [k for k in numpy.nonzero(numpy.any(rows != theirs, axis=1))[0] if relative(equation(pot, structures, *rows[k]), equation(pot, structures, *theirs[k])) > EQUAL_EQUATIONS]
     assert not mismatched, f"{len(mismatched)} of {len(rows)} rows hold another equation than mlip-4's"
     assert relative(log_det(A), stored[f"{mode}/log_det"]) <= TOL

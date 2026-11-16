@@ -7,19 +7,28 @@ suppressing diagnostics.
 The three classes mirror the C++ hierarchy, on _core's Pair:
     PairMTP                 energy, forces, virial       (a Pair)
     PairMTPExtrapolation    + extrapolation grades       (a PairMTP)
-    MTPTraining             + basis values and derivatives
+    PairMTPGrad             + basis values and derivatives
                               w.r.t. the coefficients    (a PairMTP)
 
-train_mtp fits an MTPTraining with MTPTrainer.
+train_mtp fits a PairMTPGrad with MTPTrainer. PairMTP carries what the selection and the
+training call for every MTP: write, its trainers, threshold_swap and retrain_pass.
 """
 
 from importlib import import_module as _import_module
+
+from .io import write_mtp
 
 _ext = _import_module("._mtp_ext", __package__)
 
 PairMTP = _ext.PairMTP
 PairMTPExtrapolation = _ext.PairMTPExtrapolation
-MTPTraining = _ext.MTPTraining
+PairMTPGrad = _ext.PairMTPGrad
 train_mtp = _ext.train_mtp
 
-__all__ = ["PairMTP", "PairMTPExtrapolation", "MTPTraining", "train_mtp"]
+PairMTP.write = write_mtp                                  # pot.write(path)
+PairMTP.train_on_threads = staticmethod(train_mtp)
+PairMTP.mpi_trainer = ("otf_engine._mtp._mtp_mpi", "train_mtp")    # imported only under a communicator
+PairMTP.threshold_swap = None                              # MaxVol.threshold_swap of its searches
+PairMTP.retrain_pass = True                                # select_add searches the training set again after the candidates
+
+__all__ = ["PairMTP", "PairMTPExtrapolation", "PairMTPGrad", "train_mtp"]

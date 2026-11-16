@@ -26,7 +26,7 @@ import pytest
 from conftest import ETN_REFERENCE, StoredOutputs, TESTS
 from etn_potentials import compile_probe, template
 from otf_engine._core import neighbors
-from otf_engine.train import training_structure
+from otf_engine._core import Sample
 
 SETTINGS = {"max_iter_count": 1000, "max_func_eval": 10000, "linstop": 5e-4, "rescale": True, "pretrain": True, "wolfe_c1": 0.1, "wolfe_c2": 0.5, "bfgs_max_iters_no_improve": 10}
 WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
@@ -76,13 +76,13 @@ def case_inputs(name, structures, workdir):
     The file is written unless it exists: the MPI ranks of etn_mpi_fit.py read the one the test wrote, since a rank
     rewriting it under another's reading fails that rank and leaves the other waiting in a collective.
     """
-    from otf_engine._etn import ETNTraining
+    from otf_engine._etn import PairETNGrad
 
     potential, overrides, chosen, _, _, _ = CASES[name]
     path = Path(workdir) / f"{potential}.etn"
     if not path.exists(): path.write_text(template(potential))
     settings = dict(SETTINGS, **overrides)
-    labelled = [(structures[k], training_structure(structures[k], ETNTraining(str(path)).get_max_cutoff(), k + 1)) for k in chosen]
+    labelled = [(structures[k], Sample(structures[k], PairETNGrad(str(path)).get_max_cutoff(), k + 1)) for k in chosen]
     return path, settings, labelled
 
 
@@ -117,7 +117,7 @@ def tensors(pot, coeffs, atoms):
 @pytest.fixture(scope="module")
 def stored(recapture, mlip4_build, structures, tmp_path_factory):
     """mlip-4's fits, rerun first under --recapture."""
-    from otf_engine._etn import ETNTraining
+    from otf_engine._etn import PairETNGrad
 
     outputs = StoredOutputs(ETN_REFERENCE / "training.npz", recapture)
     if recapture:
@@ -126,7 +126,7 @@ def stored(recapture, mlip4_build, structures, tmp_path_factory):
         for name in sorted({case[4] for case in CASES.values()}):
             path, settings, labelled = case_inputs(name, structures, workdir)
             training_file = workdir / f"{name}.txt"
-            write_training_file(training_file, ETNTraining(str(path)), labelled, settings)
+            write_training_file(training_file, PairETNGrad(str(path)), labelled, settings)
             printed = subprocess.run([str(probe), str(training_file)], check=True, capture_output=True, text=True).stdout
             steps, lines = parse_log(printed)
             outputs[f"{name}/losses"] = numpy.concatenate(steps)
@@ -139,14 +139,14 @@ def stored(recapture, mlip4_build, structures, tmp_path_factory):
 
 @pytest.mark.parametrize("name", [pytest.param(name, marks=pytest.mark.mpi) if name == "mpi" else name for name in CASES])
 def test_fit(name, structures, stored, tmp_path):
-    from otf_engine._etn import ETNTraining, train_etn
+    from otf_engine._etn import PairETNGrad, train_etn
 
     _, _, _, ranks, reference, steps = CASES[name]
     path, settings, labelled = case_inputs(name, structures, tmp_path)
     log_file = tmp_path / f"{name}.log"
     if ranks == "mpi":
         subprocess.run(["mpirun", "-n", str(len(labelled)), sys.executable, str(TESTS / "etn_mpi_fit.py"), name, str(tmp_path)], check=True, timeout=120)
-        trained = ETNTraining(str(path))
+        trained = PairETNGrad(str(path))
         trained.set_coeffs(numpy.load(tmp_path / f"{name}-coeffs.npy"))
     else:
         trained = train_etn(str(path), [s for _, s in labelled], trainer_options(settings, str(log_file)), len(labelled) if ranks == "threads" else 1, balance_species=False)
