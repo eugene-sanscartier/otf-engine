@@ -68,8 +68,8 @@ def untrained(name, min_dist, species_count=3):
     """The untrained potential *name* of the families, with the shared radial cutoffs."""
     model, shape = FAMILIES[name]
     radial = dict(species_count=species_count, min_dist=min_dist, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
-    pot = MTP(**shape, **radial) if model == "mtp" else ETN(**shape, **radial)
-    return pot
+    potential = MTP(**shape, **radial) if model == "mtp" else ETN(**shape, **radial)
+    return potential
 
 
 def split(cfg, n_train, n_test, seed):
@@ -81,30 +81,30 @@ def split(cfg, n_train, n_test, seed):
     return parts
 
 
-def timings(pot, labelled, repeats, weights):
+def timings(potential, labelled, repeats, weights):
     """Per structure, in ms: compute on a built neighbor list, compute with its build, and compute + eval_loss_grad."""
     lists = [s.neighbors for _, s in labelled]
     start = time.perf_counter()
     for _ in range(repeats):
         for nl in lists:
-            pot.compute(nl)
+            potential.compute(nl)
     eval_ms = (time.perf_counter() - start) * 1e3 / (repeats * len(lists))
 
     start = time.perf_counter()
     for _ in range(repeats):
         for atoms, _ in labelled:
-            pot.compute(neighbors(atoms, pot.get_max_cutoff()))
+            potential.compute(neighbors(atoms, potential.get_max_cutoff()))
     eval_build_ms = (time.perf_counter() - start) * 1e3 / (repeats * len(lists))
 
     start = time.perf_counter()
     for _ in range(repeats):
         for _, s in labelled:
-            result = pot.compute(s.neighbors)
+            result = potential.compute(s.neighbors)
             dforces = 2 * weights["force_weight"] * (result["forces"] - s.forces)
             dvirial = None
             if s.virial is not None:
                 dvirial = 2 * weights["stress_weight"] * (result["virial"] - s.virial) * numpy.array([1, 1, 1, 2, 2, 2])
-            pot.eval_loss_grad(s.neighbors, 2 * weights["energy_weight"] * (result["energy"] - s.energy), dforces, dvirial)
+            potential.eval_loss_grad(s.neighbors, 2 * weights["energy_weight"] * (result["energy"] - s.energy), dforces, dvirial)
     loss_grad_ms = (time.perf_counter() - start) * 1e3 / (repeats * len(lists))
     return eval_ms, eval_build_ms, loss_grad_ms
 
@@ -126,13 +126,13 @@ def run(name, args):
             options = {"log": str(workdir / "fit.log")} | ({"no_mindist_update": "true"} if model == "mtp" else {})
 
             start = time.perf_counter()
-            pot = fit(str(template), samples, options, ranks=args.ranks)
+            potential = fit(str(template), samples, options, ranks=args.ranks)
             seconds = time.perf_counter() - start
 
-            pot.write(str(trained))
+            potential.write(str(trained))
             with open(workdir / "fit.log") as f:
                 steps = sum(1 for line in f if STEP_LINE.match(line))
-            record = dict(fit_s=seconds, steps=steps, s_per_step=seconds / steps, ranks=args.ranks, min_dist=min_dist, coefficients=pot.get_coeff_count(), host=socket.gethostname())
+            record = dict(fit_s=seconds, steps=steps, s_per_step=seconds / steps, ranks=args.ranks, min_dist=min_dist, coefficients=potential.get_coeff_count(), host=socket.gethostname())
             (workdir / "fit.json").write_text(json.dumps(record, indent=1))
         bar.update()
 
@@ -143,9 +143,9 @@ def run(name, args):
             (workdir / "errors.json").write_text(json.dumps(record, indent=1))
         bar.update()
 
-        pot = read_potential(str(trained))
-        labelled = [(atoms, Sample(atoms, pot.get_max_cutoff(), k + 1)) for k, atoms in enumerate(test_set[: args.timed])]
-        eval_ms, eval_build_ms, loss_grad_ms = timings(pot, labelled, args.repeats, LOSS_WEIGHTS)
+        potential = read_potential(str(trained))
+        labelled = [(atoms, Sample(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(test_set[: args.timed])]
+        eval_ms, eval_build_ms, loss_grad_ms = timings(potential, labelled, args.repeats, LOSS_WEIGHTS)
         record = dict(eval_ms=eval_ms, eval_build_ms=eval_build_ms, loss_grad_ms=loss_grad_ms, atoms=float(numpy.mean([len(a) for a, _ in labelled])), structures=len(labelled), host=socket.gethostname())
         (workdir / f"timing-{os.environ.get('SLURM_JOB_ID', os.getpid())}.json").write_text(json.dumps(record, indent=1))
         bar.update()

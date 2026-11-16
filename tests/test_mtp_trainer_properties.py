@@ -16,10 +16,10 @@ def labelled(structures):
     return [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)]
 
 
-def stages(potential, structures, **options):
+def stages(potential_path, structures, **options):
     from otf_engine._mtp._mtp_testing import MTPTrainerStages
 
-    return MTPTrainerStages(str(potential), labelled(structures), {"log": "none", **options})
+    return MTPTrainerStages(str(potential_path), labelled(structures), {"log": "none", **options})
 
 
 def radial_rows(stage):
@@ -245,16 +245,16 @@ def renamed(structures, mapping):
     return out
 
 
-@pytest.mark.parametrize("case, potential, mapping, message", [
+@pytest.mark.parametrize("case, potential_path, mapping, message", [
     ("gap", TEMPLATE, {1: 3}, "has species 3 but not species 1"),
     ("missing from training", TEACHER, {2: 1}, "species 2 of the potential is not present"),
 ])
-def test_species_errors(case, potential, mapping, message, structures):
+def test_species_errors(case, potential_path, mapping, message, structures):
     """Species must run from 0 without a gap, and cover a trained potential's."""
     from otf_engine._mtp import train_mtp
 
     with pytest.raises(RuntimeError, match=message):
-        train_mtp(str(potential), labelled(renamed(structures, mapping)), {"iteration_limit": "1", "log": "none"}, 2)
+        train_mtp(str(potential_path), labelled(renamed(structures, mapping)), {"iteration_limit": "1", "log": "none"}, 2)
 
 
 @pytest.mark.parametrize("options, message", [

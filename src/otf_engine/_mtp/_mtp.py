@@ -27,7 +27,7 @@ MTP = _ext.MTP
 train_mtp = _ext.train_mtp
 level_basis_functions = _ext.level_basis_functions
 
-PairMTP.write = write_mtp                                  # pot.write(path)
+PairMTP.write = write_mtp                                  # potential.write(path)
 PairMTP.fit = staticmethod(train_mtp)
 PairMTP.threshold_swap = None                              # MaxVol.threshold_swap of its searches
 PairMTP.retrain_pass = True                                # select_add searches the training set again after the candidates

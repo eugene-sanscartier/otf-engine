@@ -83,14 +83,14 @@ def test_mtp_round_trip(name, tmp_path):
     untrained, written without its species as mlip-3 writes it."""
     from otf_engine._mtp import MTP, write_mtp
 
-    pot = MTP(str(MTP_REFERENCE / name))
-    write_mtp(pot, str(tmp_path / "back.mtp"))
+    potential = MTP(str(MTP_REFERENCE / name))
+    write_mtp(potential, str(tmp_path / "back.mtp"))
     back = MTP(str(tmp_path / "back.mtp"))
-    assert back.is_trained() == pot.is_trained()
-    assert (back.get_min_cutoff(), back.get_max_cutoff(), back.get_scaling(), back.get_radial_basis_size(), back.get_alpha_scalar_count()) == (pot.get_min_cutoff(), pot.get_max_cutoff(), pot.get_scaling(), pot.get_radial_basis_size(), pot.get_alpha_scalar_count())
-    if pot.is_trained():
-        assert back.get_species_count() == pot.get_species_count()
-        numpy.testing.assert_array_equal(back.get_coeffs(), pot.get_coeffs())
+    assert back.is_trained() == potential.is_trained()
+    assert (back.get_min_cutoff(), back.get_max_cutoff(), back.get_scaling(), back.get_radial_basis_size(), back.get_alpha_scalar_count()) == (potential.get_min_cutoff(), potential.get_max_cutoff(), potential.get_scaling(), potential.get_radial_basis_size(), potential.get_alpha_scalar_count())
+    if potential.is_trained():
+        assert back.get_species_count() == potential.get_species_count()
+        numpy.testing.assert_array_equal(back.get_coeffs(), potential.get_coeffs())
 
 
 @pytest.mark.parametrize("case", ["sheared", "short", "open"])

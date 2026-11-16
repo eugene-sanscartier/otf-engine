@@ -27,14 +27,14 @@ manager = ManagerFactory(obj_factory=lambda comm, mode: None, session_size=sessi
 if manager is None: sys.exit(0)    # a worker, once the manager has shut the pool down
 
 shutil.copy("potential.almtp", "mpi_updated.almtp")
-manager.global_update_active_set(potential="mpi_updated.almtp", training_set="train.cfg", species=species)
-graded = manager.grade_dump(dump="dump.lammps", potential="potential.almtp", species=species).result()
+manager.global_update_active_set(potential_path="mpi_updated.almtp", training_set_path="train.cfg", species=species)
+graded = manager.grade_dump(dump="dump.lammps", potential_path="potential.almtp", species=species).result()
 grades = [atoms.info["features"]["MV_grade"] for atoms in graded]
 numpy.save("mpi_grades.npy", grades)
 candidates = [graded[i] for i in numpy.argsort(grades)[::-1][:candidate_count]]
-selected = manager.global_select_add(potential="mpi_updated.almtp", training_set="train.cfg", candidates=candidates, species=species)
+selected = manager.global_select_add(potential_path="mpi_updated.almtp", training_set_path="train.cfg", candidates=candidates, species=species)
 numpy.save("mpi_selected.npy", [next(i for i, c in enumerate(candidates) if numpy.array_equal(c.positions, s.positions)) for s in selected])
-manager.global_train_potential(potential="potential.almtp", training_set="train.cfg", save_path="mpi.almtp", species=species, settings={"iteration_limit": iterations, "log": "mpi_train.log"})
+manager.global_train_potential(potential_path="potential.almtp", training_set_path="train.cfg", save_path="mpi.almtp", species=species, settings={"iteration_limit": iterations, "log": "mpi_train.log"})
 
 
 def evaluator(structure):
@@ -49,9 +49,9 @@ def evaluator(structure):
 outcomes = {}
 for name, dumps in [("ok", ["dump.lammps"]), ("fail", ["dump.lammps", "missing.lammps"])]:
     try:
-        with OTFCycle(dumps, NestedLauncher(), potential="potential.almtp", training_set="train.cfg", species=species, iteration_limit=iterations, evaluator_fn=evaluator) as cycle:
+        with OTFCycle(dumps, NestedLauncher(), potential_path="potential.almtp", training_set_path="train.cfg", species=species, iteration_limit=iterations, evaluator_fn=evaluator) as cycle:
             manager.global_update_active_set(**cycle.active_set_update)
-            futures = {dump: manager.grade_dump(dump=dump, potential=cycle.potential, species=cycle.species) for dump in dumps}
+            futures = {dump: manager.grade_dump(dump=dump, potential_path=cycle.potential_path, species=cycle.species) for dump in dumps}
             chosen = cycle.preselect({dump: future.result() for dump, future in futures.items()})
             cycle.evaluate(manager.global_select_add(**cycle.selection(chosen)))
             manager.global_train_potential(**cycle.training)

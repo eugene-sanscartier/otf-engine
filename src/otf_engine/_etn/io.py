@@ -7,14 +7,14 @@ from pathlib import Path
 from .._core.io import format_floats, format_ints, write_header, write_radial_basis
 
 
-def write_etn(potential, filename):
+def write_etn(potential, path):
     """Write an ETN potential to an .etn file.
 
     The file structure is the one PairETN::read_file() expects. An untrained
     potential is written without its coefficients, as write_mtp writes one, and
     without its species count if it has none.
     """
-    path = Path(filename)
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     l_count = len(potential.get_species_ranks())

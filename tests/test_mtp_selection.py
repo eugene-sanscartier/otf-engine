@@ -91,21 +91,21 @@ def test_against_mlp(mode, sets, stored, recapture, mlip3, tmp_path):
         (tmp_path / "mlp").mkdir()
         capture(mode, training, cands, stored, mlip3, tmp_path / "mlp")
 
-    potential = tmp_path / "pot.almtp"
-    shutil.copy(POTENTIAL, potential)
-    update_active_set(str(potential), unlabelled(training), al_mode=mode)
-    rows, log_det = active_rows(potential, training)
+    potential_path = tmp_path / "pot.almtp"
+    shutil.copy(POTENTIAL, potential_path)
+    update_active_set(str(potential_path), unlabelled(training), al_mode=mode)
+    rows, log_det = active_rows(potential_path, training)
     numpy.testing.assert_array_equal(rows, stored[f"{mode}/rows"])
     assert abs(log_det - stored[f"{mode}/log_det"][0]) <= 1e-10 * abs(log_det)
 
     # mlp writes a grade to 5 decimals or 7 significant digits
-    graded = calculate_grade(str(potential), unlabelled(cands))
+    graded = calculate_grade(str(potential_path), unlabelled(cands))
     grades = numpy.array([atoms.info["features"]["MV_grade"] for atoms in graded])
     numpy.testing.assert_allclose(grades, stored[f"{mode}/grades"], rtol=1e-6, atol=5e-6)
     if mode == "nbh":
         numpy.testing.assert_allclose(numpy.concatenate([atoms.arrays["nbh_grades"] for atoms in graded]), stored[f"{mode}/nbh_grades"], rtol=1e-6, atol=5e-6)
 
-    selected, _ = select_add(str(potential), unlabelled(training), unlabelled(cands))
+    selected, _ = select_add(str(potential_path), unlabelled(training), unlabelled(cands))
     index_of = {fingerprint(atoms): k for k, atoms in enumerate(cands)}
     assert sorted(index_of[fingerprint(atoms)] for atoms in selected) == stored[f"{mode}/selected"].astype(int).tolist()
 
@@ -116,12 +116,12 @@ def test_extrapolation_grades(sets, tmp_path):
     from otf_engine._mtp import PairMTPExtrapolation
 
     training, cands = sets
-    potential = tmp_path / "pot.almtp"
-    shutil.copy(POTENTIAL, potential)
-    update_active_set(str(potential), unlabelled(training), al_mode="nbh")
-    graded = calculate_grade(str(potential), unlabelled(cands))
+    potential_path = tmp_path / "pot.almtp"
+    shutil.copy(POTENTIAL, potential_path)
+    update_active_set(str(potential_path), unlabelled(training), al_mode="nbh")
+    graded = calculate_grade(str(potential_path), unlabelled(cands))
 
-    _, active_set = read_mvs_header(str(potential))
+    _, active_set = read_mvs_header(str(potential_path))
     grader = PairMTPExtrapolation(str(POTENTIAL))
     grader.set_active_set(numpy.asarray(active_set.invA), False, 2)
     for atoms in graded:
@@ -133,10 +133,10 @@ def test_extrapolation_grades(sets, tmp_path):
 def test_mvs_round_trip(sets, tmp_path):
     """write_mvs_state then read_mvs_state gives back the weights, A, invA, the active rows and the structures they come from."""
     training, _ = sets
-    potential = tmp_path / "pot.almtp"
-    shutil.copy(POTENTIAL, potential)
-    update_active_set(str(potential), unlabelled(training), al_mode="nbh")
-    weights, active_set, stored = read_mvs_state(str(potential))
+    potential_path = tmp_path / "pot.almtp"
+    shutil.copy(POTENTIAL, potential_path)
+    update_active_set(str(potential_path), unlabelled(training), al_mode="nbh")
+    weights, active_set, stored = read_mvs_state(str(potential_path))
 
     again = tmp_path / "again.almtp"
     shutil.copy(POTENTIAL, again)

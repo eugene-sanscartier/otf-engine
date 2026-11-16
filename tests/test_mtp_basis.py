@@ -28,9 +28,9 @@ def build(level, species_count=SPECIES_COUNT):
     return MTP(level=level, species_count=species_count, radial_basis_type="RBCinf", min_dist=MIN_DIST, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
 
 
-def coeffs(pot):
+def coeffs(potential):
     """The coefficients the comparison uses, 0.1 sin(10 + k^2), spread and free of a random stream."""
-    k = numpy.arange(pot.get_coeff_count(), dtype=numpy.float64)
+    k = numpy.arange(potential.get_coeff_count(), dtype=numpy.float64)
     return 0.1 * numpy.sin(10 + k * k)
 
 
@@ -71,11 +71,11 @@ def golden(recapture, mlip4_build, cells, tmp_path_factory):
 @pytest.mark.parametrize("level", LEVELS)
 def test_level_against_mlip4(level, golden, cells):
     """The MTP of a level gives mlip-4's energy, site energies, forces and virial at the same coefficients."""
-    pot = build(level)
-    pot.set_coeffs(coeffs(pot))
+    potential = build(level)
+    potential.set_coeffs(coeffs(potential))
     failures = []
     for s, (atoms, types) in enumerate(cells):
-        result = pot.compute(neighbors(atoms, MAX_DIST, types=types))
+        result = potential.compute(neighbors(atoms, MAX_DIST, types=types))
         for key in KEYS:
             want, got = golden[f"{level}/s{s}/{key}"], numpy.asarray(result[key], dtype=numpy.float64)
             rel = numpy.abs(got - want).max() / numpy.abs(want).max()
@@ -89,10 +89,10 @@ def test_basis_functions_give_level():
     from otf_engine._mtp import MTP, level_basis_functions
 
     functions = level_basis_functions(16)[::-1]
-    pot = MTP(basis_functions=functions, species_count=SPECIES_COUNT, radial_basis_type="RBCinf", min_dist=MIN_DIST, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
+    potential = MTP(basis_functions=functions, species_count=SPECIES_COUNT, radial_basis_type="RBCinf", min_dist=MIN_DIST, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
     level = build(16)
     for get in ("get_alpha_index_basic", "get_alpha_index_times", "get_alpha_moment_mapping", "get_coeffs"):
-        numpy.testing.assert_array_equal(getattr(pot, get)(), getattr(level, get)(), err_msg=get)
+        numpy.testing.assert_array_equal(getattr(potential, get)(), getattr(level, get)(), err_msg=get)
 
 
 def test_untrained_round_trip(tmp_path):

@@ -32,7 +32,7 @@ def coeffs_line(coeffs):
     return f"coeffs {len(coeffs)} " + " ".join(repr(float(c)) for c in coeffs)
 
 
-# name: (potential, settings, script); the settings are mlp's, which the trainer shares
+# name: (potential_path, settings, script); the settings are mlp's, which the trainer shares
 SCRIPTS = {
     "untrained": (MTP_REFERENCE / "template-08.almtp", {}, ["add_species", "print", "lin_optimize", "print", "objective", "rescale", "print", "objective"]),
     "trained": (TEACHER, {}, ["add_species", coeffs_line(perturbed_coeffs(TEACHER, 0.01, 1)), "objective", "lin_optimize", "print", "objective", "rescale", "print", "objective"]),
@@ -45,11 +45,11 @@ SCRIPTS = {
 }
 
 
-def run_ours(potential, settings, script, structures):
+def run_ours(potential_path, settings, script, structures):
     """The script's outputs from MTPTrainerStages, as mlip3_probe prints them: (name, values, whether a linear solve came before, radial coefficient count)."""
     from otf_engine._mtp._mtp_testing import MTPTrainerStages
 
-    stages = MTPTrainerStages(str(potential), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
+    stages = MTPTrainerStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
     outputs = []
     solved = False
     for line in script:
@@ -94,16 +94,16 @@ def reference(stored, name, run_probe):
 
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_stage(name, structures, stored, mlip3_probe, tmp_path):
-    potential, settings, script = SCRIPTS[name]
+    potential_path, settings, script = SCRIPTS[name]
 
     def run_probe():
         script_file = tmp_path / "script.txt"
         script_file.write_text("".join(f"set {k} {v}\n" for k, v in settings.items()) + "trainer\n" + "\n".join(script) + "\n")
-        printed = subprocess.run([str(mlip3_probe), str(potential), str(DATA / "structures.cfg"), str(script_file)], check=True, capture_output=True, text=True).stdout
+        printed = subprocess.run([str(mlip3_probe), str(potential_path), str(DATA / "structures.cfg"), str(script_file)], check=True, capture_output=True, text=True).stdout
         return parse_probe(printed)
 
     theirs = reference(stored, name, run_probe)
-    ours = run_ours(potential, settings, script, structures)
+    ours = run_ours(potential_path, settings, script, structures)
     assert [label for label, *_ in ours] == [label for label, _ in theirs]
 
     # A linear solve is ill-conditioned on so few structures: rounding moves its coefficients along flat directions by up to
@@ -147,7 +147,7 @@ BFGS_LINE = re.compile(r"BFGS iter +\d+: +(?:f=)?(\S+)")    # mlp's, and the tra
 TRAINER_LINE = re.compile(r"^\d+ coefficients \(|^ +loss +energy |^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: |^min_dist = |^Minimal interatomic distance ")
 LOSS_TERMS = re.compile(r"( +\S+ \( *\d+%\)){4}$")    # the trainer's terms of the loss, after mlp's loss
 
-# name: (potential, options, the log's last line compared); the options are mlp's. After the 200 steps to the tolerance
+# name: (potential_path, options, the log's last line compared); the options are mlp's. After the 200 steps to the tolerance
 # stop, rounding has moved the coefficients enough to flip the rescaling's choice between close condition numbers.
 FITS = {
     "preinit": (MTP_REFERENCE / "template-08.almtp", {"iteration_limit": "30"}, "Rescaling to"),
@@ -171,13 +171,13 @@ def test_fit_log(name, structures, stored, recapture, mlip3, tmp_path):
     """
     from otf_engine._mtp._mtp_testing import MTPTrainerStages
 
-    potential, options, last = FITS[name]
+    potential_path, options, last = FITS[name]
     if recapture:
-        cmd = [str(mlip3 / "bin" / "mlp"), "train", str(potential), str(DATA / "structures.cfg"), "--log=stdout", f"--save_to={tmp_path / 'out.mtp'}"] + [f"--{k}={v}" for k, v in options.items()]
+        cmd = [str(mlip3 / "bin" / "mlp"), "train", str(potential_path), str(DATA / "structures.cfg"), "--log=stdout", f"--save_to={tmp_path / 'out.mtp'}"] + [f"--{k}={v}" for k, v in options.items()]
         printed = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=tmp_path).stdout
         stored[f"fit_{name}/log"] = numpy.array(fit_log(printed, last))
 
-    stages = MTPTrainerStages(str(potential), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
+    stages = MTPTrainerStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
     stages.train()
     ours, theirs = fit_log(stages.log, last), list(stored[f"fit_{name}/log"])
 

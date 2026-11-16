@@ -78,22 +78,22 @@ def case_inputs(name, structures, workdir):
     """
     from otf_engine._etn import ETN
 
-    potential, overrides, chosen, _, _, _ = CASES[name]
-    path = Path(workdir) / f"{potential}.etn"
-    if not path.exists(): untrained_etn(potential).write(path)
+    potential_name, overrides, chosen, _, _, _ = CASES[name]
+    path = Path(workdir) / f"{potential_name}.etn"
+    if not path.exists(): untrained_etn(potential_name).write(path)
     settings = dict(SETTINGS, **overrides)
     labelled = [(structures[k], Sample(structures[k], ETN(str(path)).get_max_cutoff(), k + 1)) for k in chosen]
     return path, settings, labelled
 
 
-def write_training_file(path, pot, labelled, settings):
-    """mlip4_train's input: shape and params of pot, the weights and settings, and the labelled structures."""
+def write_training_file(path, potential, labelled, settings):
+    """mlip4_train's input: shape and params of potential, the weights and settings, and the labelled structures."""
     ints = lambda values: " ".join(map(str, values))
     floats = lambda values: " ".join(repr(float(x)) for x in values)
-    lines = [f"{pot.get_species_count()} {len(pot.get_species_ranks())} {pot.get_core_count()} {pot.get_radial_basis_size()} {pot.get_min_cutoff()!r} {pot.get_max_cutoff()!r}"]
-    lines += [ints(pot.get_species_ranks()), ints(pot.get_radial_func_counts()), ints(pot.get_radial_ranks())]
-    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in pot.get_bond_ranks()]
-    coeffs = pot.get_coeffs()
+    lines = [f"{potential.get_species_count()} {len(potential.get_species_ranks())} {potential.get_core_count()} {potential.get_radial_basis_size()} {potential.get_min_cutoff()!r} {potential.get_max_cutoff()!r}"]
+    lines += [ints(potential.get_species_ranks()), ints(potential.get_radial_func_counts()), ints(potential.get_radial_ranks())]
+    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in potential.get_bond_ranks()]
+    coeffs = potential.get_coeffs()
     lines += [str(len(coeffs)), floats(coeffs), floats(WEIGHTS.values())]
     lines += [" ".join(str(int(v)) if isinstance(v, bool) else repr(v) for v in settings.values())]
     lines += [str(len(labelled))]
@@ -104,10 +104,10 @@ def write_training_file(path, pot, labelled, settings):
     Path(path).write_text("\n".join(lines) + "\n")
 
 
-def tensors(pot, coeffs, atoms):
-    """Energy, forces, virial, input and bond vectors of pot at coeffs on atoms."""
-    pot.set_coeffs(coeffs)
-    result = pot.compute(neighbors(atoms, pot.get_max_cutoff()))
+def tensors(potential, coeffs, atoms):
+    """Energy, forces, virial, input and bond vectors of potential at coeffs on atoms."""
+    potential.set_coeffs(coeffs)
+    result = potential.compute(neighbors(atoms, potential.get_max_cutoff()))
     out = {key: numpy.asarray(result[key]) for key in ("energy", "forces", "virial", "inputs")}
     for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
         out[f"bonds/{b}"], out[f"bonds_im/{b}"] = numpy.asarray(re_part), numpy.asarray(im_part)

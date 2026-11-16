@@ -29,8 +29,8 @@ def main():
     defaults = {name: parameter.default for name, parameter in inspect.signature(OTFCycle).parameters.items()}
 
     parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
-    parser.add_argument("-p", "--potential", help="input potential file name (default: %(default)s)", type=str, default=defaults["potential"])
-    parser.add_argument("-t", "--training_set", help="Training dataset file name (default: %(default)s)", type=str, default=defaults["training_set"])
+    parser.add_argument("-p", "--potential_path", help="input potential file (default: %(default)s)", type=str, default=defaults["potential_path"])
+    parser.add_argument("-t", "--training_set_path", help="Training set file (default: %(default)s)", type=str, default=defaults["training_set_path"])
 
     parser.add_argument("-P", "--no_preselection_filtering", help="Preselection filtering", dest='preselection_filtering', action='store_false', default=defaults["preselection_filtering"])
 

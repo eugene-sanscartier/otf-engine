@@ -72,18 +72,18 @@ def test_otf_pool(structures, candidates, tmp_path):
         write_cfg(f, two_species(structures))
     shutil.copy(DATA / "two-species-08.mtp", work / "potential.almtp")
     with open(work / "train.cfg") as f:
-        structs = read_cfg(f, SPECIES)
-    update_active_set(str(work / "potential.almtp"), structs)
+        training_set = read_cfg(f, SPECIES)
+    update_active_set(str(work / "potential.almtp"), training_set)
     write_dump(work / "dump.lammps", two_species(candidates))
 
     # the references, in this process
     shutil.copy(work / "potential.almtp", work / "serial_updated.almtp")
-    update_active_set(str(work / "serial_updated.almtp"), structs)
+    update_active_set(str(work / "serial_updated.almtp"), training_set)
     graded = grade_dump(str(work / "dump.lammps"), str(work / "potential.almtp"), SPECIES)
     grades = numpy.array([atoms.info["features"]["MV_grade"] for atoms in graded])
     offered = [graded[i] for i in numpy.argsort(grades)[::-1][:CANDIDATES]]
-    selected = [next(i for i, c in enumerate(offered) if c is s) for s in select_add(str(work / "serial_updated.almtp"), structs, offered)[0]]
-    train(str(work / "potential.almtp"), structs, str(work / "threads.almtp"), settings={"iteration_limit": ITERATIONS, "log": str(work / "threads_train.log")}, ranks=RANKS)
+    selected = [next(i for i, c in enumerate(offered) if c is s) for s in select_add(str(work / "serial_updated.almtp"), training_set, offered)[0]]
+    train(str(work / "potential.almtp"), training_set, str(work / "threads.almtp"), settings={"iteration_limit": ITERATIONS, "log": str(work / "threads_train.log")}, ranks=RANKS)
 
     cmd = ["mpirun", "-n", str(RANKS + 1), sys.executable, str(TESTS / "otf_pool_worker.py"), str(SESSION_SIZE), str(ITERATIONS), str(CANDIDATES), *SPECIES]
     proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=120)
@@ -99,7 +99,7 @@ def test_otf_pool(structures, candidates, tmp_path):
 
     # The fits differ in their linear coefficients, so the reference searches the MPI fit on one rank.
     write_mtp(MTP(str(work / "mpi.almtp")), str(work / "serial.almtp"))
-    update_active_set(str(work / "serial.almtp"), structs, weights=read_mvs_header(str(work / "potential.almtp"))[0])
+    update_active_set(str(work / "serial.almtp"), training_set, weights=read_mvs_header(str(work / "potential.almtp"))[0])
     same_active_set(read_mvs_state(str(work / "mpi.almtp")), read_mvs_state(str(work / "serial.almtp")))
 
     outcomes = json.loads((work / "outcomes.json").read_text())

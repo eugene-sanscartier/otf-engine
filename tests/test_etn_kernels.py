@@ -52,9 +52,9 @@ def outputs(potentials, cells):
     from otf_engine._etn import real_harmonics, real_wigner_3j
 
     out = {}
-    pot = next(iter(potentials.values()))
+    potential = next(iter(potentials.values()))
 
-    rb_vals, rb_ders = zip(*(pot.eval_radial_basis(d) for d in PROBE_DISTANCES))
+    rb_vals, rb_ders = zip(*(potential.eval_radial_basis(d) for d in PROBE_DISTANCES))
     out["rb_vals"], out["rb_ders"] = numpy.array(rb_vals), numpy.array(rb_ders)
 
     for k, u in enumerate(directions()):
@@ -73,10 +73,10 @@ def outputs(potentials, cells):
                             table[l1 * l1 + l1 + m1, l2 * l2 + l2 + m2, l3 * l3 + l3 + m3] = real_wigner_3j(l1, m1, l2, m2, l3, m3)
     out["wigner_re"], out["wigner_im"] = w_re, w_im
 
-    for name, pot in potentials.items():
+    for name, potential in potentials.items():
         for s, (atoms, types) in enumerate(cells):
-            nl = neighbors(atoms, MAX_DIST, types=species_of(pot, types))
-            result = pot.compute(nl)
+            nl = neighbors(atoms, MAX_DIST, types=species_of(potential, types))
+            result = potential.compute(nl)
             prefix = f"{name}/s{s}/"
             for key in ("energy", "eatom", "forces", "virial"):
                 out[prefix + key] = numpy.asarray(result[key], dtype=numpy.float64)
@@ -85,19 +85,19 @@ def outputs(potentials, cells):
                 out[prefix + f"bonds/{b}"] = numpy.asarray(re_part)
                 out[prefix + f"bonds_im/{b}"] = numpy.asarray(im_part)
             dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(s, len(atoms))
-            out[prefix + "loss_grad"] = numpy.asarray(pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial))
-            out[prefix + "grad"] = numpy.asarray(pot.eval_grad(nl))[:GRAD_ATOMS]
+            out[prefix + "loss_grad"] = numpy.asarray(potential.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial))
+            out[prefix + "grad"] = numpy.asarray(potential.eval_grad(nl))[:GRAD_ATOMS]
     return out
 
 
-def run_probe(probe, pot, cells, workdir):
-    """mlip-4's tensors for pot on cells."""
+def run_probe(probe, potential, cells, workdir):
+    """mlip-4's tensors for potential on cells."""
     ints = lambda values: " ".join(map(str, values))
     floats = lambda values: " ".join(repr(float(x)) for x in values)
-    lines = [f"{pot.get_species_count()} {len(pot.get_species_ranks())} {pot.get_core_count()} {RADIAL_BASIS_SIZE} {MIN_DIST!r} {MAX_DIST!r}"]
-    lines += [ints(pot.get_species_ranks()), ints(pot.get_radial_func_counts()), ints(pot.get_radial_ranks())]
-    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in pot.get_bond_ranks()]
-    coeffs = params(pot)
+    lines = [f"{potential.get_species_count()} {len(potential.get_species_ranks())} {potential.get_core_count()} {RADIAL_BASIS_SIZE} {MIN_DIST!r} {MAX_DIST!r}"]
+    lines += [ints(potential.get_species_ranks()), ints(potential.get_radial_func_counts()), ints(potential.get_radial_ranks())]
+    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in potential.get_bond_ranks()]
+    coeffs = params(potential)
     lines += [str(len(coeffs)), floats(coeffs)]
     lines += [str(len(PROBE_DISTANCES)), floats(PROBE_DISTANCES), str(WIGNER_L_COUNT)]
     lines += [f"{HARMONICS_L_COUNT} {len(DIRECTIONS)}"] + [floats(u) for u in directions()]
@@ -105,7 +105,7 @@ def run_probe(probe, pot, cells, workdir):
     lines += [f"{most_atoms} {GRAD_ATOMS} {len(cells)}"]
     for s, (atoms, types) in enumerate(cells):
         lines += [str(len(atoms))] + [floats(row) for row in atoms.cell.array]
-        lines += [f"{t} {floats(p)}" for t, p in zip(species_of(pot, types), atoms.positions)]
+        lines += [f"{t} {floats(p)}" for t, p in zip(species_of(potential, types), atoms.positions)]
         dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(s, len(atoms))
         lines += [floats([dloss_denergy]), floats(dloss_dvirial)] + [floats(row) for row in dloss_dforces]
     probe_file = workdir / "probe.txt"
@@ -125,11 +125,11 @@ def potentials(recapture, mlip4_build, cells, tmp_path_factory):
         workdir = tmp_path_factory.mktemp("etn_kernels")
         probe = compile_probe(mlip4_build, workdir, ETN_REFERENCE / "mlip4_probe.cpp")
         for k, name in enumerate(POTENTIALS):
-            pot = untrained_etn(name)
-            set_params(pot, numpy.random.default_rng(k).standard_normal(pot.get_coeff_count()) * 0.3)
-            pot.set_trained(True)
-            write_etn(pot, reference_potential(name))
-            for key, value in run_probe(probe, pot, cells, workdir).items():
+            potential = untrained_etn(name)
+            set_params(potential, numpy.random.default_rng(k).standard_normal(potential.get_coeff_count()) * 0.3)
+            potential.set_trained(True)
+            write_etn(potential, reference_potential(name))
+            for key, value in run_probe(probe, potential, cells, workdir).items():
                 stored[f"{name}/{key}" if key.startswith("s") else key] = value
         stored.save()
     return {name: ETN(str(reference_potential(name))) for name in POTENTIALS}
@@ -169,11 +169,11 @@ def test_derivatives(name, potentials, cells):
     """Forces and virial match central differences, and the energy is invariant under rotation and reflection."""
     atoms, types = cells[0]
     atoms = atoms.copy()
-    pot = potentials[name]
-    atoms.arrays["type_index"] = species_of(pot, types)
-    assert check_forces(pot, atoms) < 1e-6
-    assert check_virial(pot, atoms) < 1e-6
-    assert check_invariance(pot, atoms) < 1e-12
+    potential = potentials[name]
+    atoms.arrays["type_index"] = species_of(potential, types)
+    assert check_forces(potential, atoms) < 1e-6
+    assert check_virial(potential, atoms) < 1e-6
+    assert check_invariance(potential, atoms) < 1e-12
 
 
 def test_loss_grad(potentials, cells, step=1e-5):
@@ -181,23 +181,23 @@ def test_loss_grad(potentials, cells, step=1e-5):
 
     The imaginary cores' derivatives of the 5-core potential are 1e-7 of the loss, below what differences resolve.
     """
-    pot = potentials["etn-3"]
+    potential = potentials["etn-3"]
     atoms, types = cells[0]
-    nl = neighbors(atoms, MAX_DIST, types=species_of(pot, types))
+    nl = neighbors(atoms, MAX_DIST, types=species_of(potential, types))
     dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(0, len(atoms))
-    coeffs = pot.get_coeffs()
+    coeffs = potential.get_coeffs()
 
     def loss(c):
-        pot.set_coeffs(c)
-        result = pot.compute(nl)
+        potential.set_coeffs(c)
+        result = potential.compute(nl)
         return dloss_denergy * result["energy"] + (dloss_dforces * result["forces"]).sum() + (dloss_dvirial * result["virial"]).sum()
 
-    pot.set_coeffs(coeffs)
-    grad = pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial)
+    potential.set_coeffs(coeffs)
+    grad = potential.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial)
     rng = numpy.random.default_rng(0)
     offset = 0
-    for kind, arg in coeff_blocks(pot):
-        size = len(get_block(pot, kind, arg))
+    for kind, arg in coeff_blocks(potential):
+        size = len(get_block(potential, kind, arg))
         direction = numpy.zeros_like(coeffs)
         direction[offset : offset + size] = rng.standard_normal(size)
         offset += size
@@ -206,7 +206,7 @@ def test_loss_grad(potentials, cells, step=1e-5):
             continue
         numeric = (loss(coeffs + step * direction) - loss(coeffs - step * direction)) / (2 * step)
         assert abs(numeric - analytic) <= 1e-6 * abs(analytic), f"{kind} {arg}"
-    pot.set_coeffs(coeffs)
+    potential.set_coeffs(coeffs)
 
 
 @pytest.mark.parametrize("name", POTENTIALS)

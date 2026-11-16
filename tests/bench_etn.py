@@ -60,17 +60,17 @@ def main():
         bench = kernels.compile_probe(args.mlip4_build, workdir, BENCH_SOURCE)
         trainer = kernels.compile_probe(args.mlip4_build, workdir, ETN_REFERENCE / "mlip4_train.cpp")
         for name in args.potentials:
-            pot = ETN(str(ETN_REFERENCE / f"{name}.etn"))
-            labelled = [(atoms, Sample(atoms, pot.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
+            potential = ETN(str(ETN_REFERENCE / f"{name}.etn"))
+            labelled = [(atoms, Sample(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
             settings = dict(training.SETTINGS, pretrain=False, max_iter_count=args.iterations)
             training_file = Path(workdir) / f"{name}.txt"
-            training.write_training_file(training_file, pot, labelled, settings)
+            training.write_training_file(training_file, potential, labelled, settings)
 
-            eval_ms, eval_build_ms, loss_grad_ms = timings(pot, labelled, args.repeats, training.WEIGHTS)
+            eval_ms, eval_build_ms, loss_grad_ms = timings(potential, labelled, args.repeats, training.WEIGHTS)
             loss_grad_ms *= len(labelled)
             vm_eval, vm_loss = mlip4(bench, training_file, False, args.repeats)
             jit_eval, jit_loss = mlip4(bench, training_file, True, args.repeats)
-            print(f"\n{name} ({pot.get_coeff_count()} coefficients)")
+            print(f"\n{name} ({potential.get_coeff_count()} coefficients)")
             print(f"  eval        ours {eval_ms:9.2f} ({eval_build_ms:.2f} with neighbors)   mlip-4 VM {vm_eval:9.2f}   JIT {jit_eval:9.2f}")
             print(f"  loss grad   ours {loss_grad_ms:9.2f}                       mlip-4 VM {vm_loss:9.2f}   JIT {jit_loss:9.2f}")
 

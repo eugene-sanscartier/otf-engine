@@ -18,7 +18,7 @@ mlp on 1 rank from mlp on 4 ranks, which fit the same loss.
 An untrained potential (an mlip-3 template) logs 75 pre-training steps first, over which
 rounding separates even mlp's runs; tests/test_mtp_trainer.py tests the untrained paths.
 
-    python tests/bench_mtp.py --potential tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
+    python tests/bench_mtp.py --potential_path tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
 """
 
 import argparse
@@ -52,11 +52,11 @@ def extract_cfgs(cfg_path, n_structures, out_path):
                     break
 
 
-def rmse(potential_path, structs):
-    """Energy RMSE per atom and force RMSE per component of the MTP or ETN in a file on structs."""
+def rmse(potential_path, structures):
+    """Energy RMSE per atom and force RMSE per component of the MTP or ETN in a file on structures."""
     calc = PotentialCalculator(read_potential(str(potential_path)))
     e_err, f_err = [], []
-    for atoms in structs:
+    for atoms in structures:
         result = calc.potential.compute(calc.neighbors(atoms))
         e_err += [(float(result["energy"]) - atoms.get_potential_energy()) / len(atoms)]
         f_err += [(numpy.asarray(result["forces"]) - atoms.get_forces()).ravel()]
@@ -84,7 +84,7 @@ def run_logged(cmd, workdir):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--potential", required=True, type=Path)
+    parser.add_argument("--potential_path", required=True, type=Path)
     parser.add_argument("--cfg", required=True, type=Path)
     parser.add_argument("-n", "--n-structures", type=int, default=20)
     parser.add_argument("-i", "--iterations", type=int, default=30)
@@ -93,16 +93,16 @@ def main():
     parser.add_argument("--tol", type=float, default=1e-5, help="relative tolerance on logged losses (default 1e-5)")
     parser.add_argument("--options", nargs="+", default=[], help="further mlp train options for both arms, without the leading --, e.g. skip_preinit=true")
     args = parser.parse_args()
-    potential = args.potential.resolve()
+    potential_path = args.potential_path.resolve()
 
     with TemporaryDirectory() as tmp:
         workdir = Path(tmp)
-        train_cfg = workdir / "train.cfg"
-        extract_cfgs(args.cfg, args.n_structures, train_cfg)
-        with open(train_cfg) as f:
-            structs = read_cfg(f)
-        start = "untrained" if not PairMTP(str(potential)).is_trained() else "starting RMSE E {:.6e} eV/atom, F {:.6e} eV/A".format(*rmse(potential, structs))
-        print(f"{len(structs)} structures, {sum(len(a) for a in structs)} atoms, {args.iterations} iterations; {start}")
+        training_set_path = workdir / "train.cfg"
+        extract_cfgs(args.cfg, args.n_structures, training_set_path)
+        with open(training_set_path) as f:
+            structures = read_cfg(f)
+        start = "untrained" if not PairMTP(str(potential_path)).is_trained() else "starting RMSE E {:.6e} eV/atom, F {:.6e} eV/A".format(*rmse(potential_path, structures))
+        print(f"{len(structures)} structures, {sum(len(a) for a in structures)} atoms, {args.iterations} iterations; {start}")
 
         runs = {}
         for arm in args.arms:
@@ -110,13 +110,13 @@ def main():
                 out = workdir / f"{arm}_{ranks}.almtp"
                 options = [f"--save_to={out}", f"--iteration_limit={args.iterations}"] + [f"--{option}" for option in args.options]
                 if arm == "mlp":
-                    cmd = ([] if ranks == 1 else ["mpirun", "-np", str(ranks)]) + [str(MLP), "train", str(potential), str(train_cfg)] + options
+                    cmd = ([] if ranks == 1 else ["mpirun", "-np", str(ranks)]) + [str(MLP), "train", str(potential_path), str(training_set_path)] + options
                 else:
-                    cmd = [sys.executable, "-c", "import sys; from otf_engine.train import main; main(sys.argv[1:])", str(potential), str(train_cfg), f"--ranks={ranks}"] + options + [f"--{k}={v}" for k, v in MLP_ALGORITHM.items()]
+                    cmd = [sys.executable, "-c", "import sys; from otf_engine.train import main; main(sys.argv[1:])", str(potential_path), str(training_set_path), f"--ranks={ranks}"] + options + [f"--{k}={v}" for k, v in MLP_ALGORITHM.items()]
                 r = runs[arm, ranks] = run_logged(cmd, workdir)
                 steps = len(r["times"]) - 1
                 per_iter = (r["times"][-1] - r["times"][0]) / steps if steps > 0 else float("nan")
-                e, f = rmse(out, structs)
+                e, f = rmse(out, structures)
                 print(f"{arm:<4} ranks {ranks:<3d} iters {len(r['times']):4d}  f_end {r['losses'][-1]:.6e}  {per_iter:8.3f} s/iter  fit {r['train_end']:8.2f} s  total {r['total']:8.2f} s  RMSE E {e:.6e}  F {f:.6e}", flush=True)
 
         failures = 0

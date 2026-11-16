@@ -9,30 +9,30 @@ train_potential as global ones over every worker. The workers share the manager'
 from . import otf_cycle, selection, train
 
 
-def update_active_set(comm, potential, training_set, species=None) -> None:
-    """Converge the active set in potential over training_set, over the ranks of comm; rank 0 writes potential."""
-    selection.update_active_set(potential, otf_cycle.load_structures(training_set, species), comm=comm)
+def update_active_set(comm, potential_path, training_set_path, species=None) -> None:
+    """Converge the active set in potential_path over the training set in training_set_path, over the ranks of comm; rank 0 writes potential_path."""
+    selection.update_active_set(potential_path, otf_cycle.read_training_set(training_set_path, species), comm=comm)
 
 
-def grade_dump(comm, dump, potential, species=None) -> list | None:
+def grade_dump(comm, dump, potential_path, species=None) -> list | None:
     """Grade one extrapolative dump on rank 0 of comm.
 
     Returns the graded structures on rank 0, None on the other ranks.
     """
     if comm.Get_rank() != 0: return None
-    structures = otf_cycle.grade_dump(dump, potential, species)
+    structures = otf_cycle.grade_dump(dump, potential_path, species)
     return structures
 
 
-def select_add(comm, potential, training_set, candidates, species=None) -> list | None:
-    """Select, over the ranks of comm, the candidates that extend the active set of potential over training_set.
+def select_add(comm, potential_path, training_set_path, candidates, species=None) -> list | None:
+    """Select, over the ranks of comm, the candidates that extend the active set of potential_path over the training set in training_set_path.
 
     Returns the selected candidates on rank 0, None on the other ranks.
     """
-    selected, _ = selection.select_add(potential, otf_cycle.load_structures(training_set, species), candidates, comm=comm)
+    selected, _ = selection.select_add(potential_path, otf_cycle.read_training_set(training_set_path, species), candidates, comm=comm)
     return selected if comm.Get_rank() == 0 else None
 
 
-def train_potential(comm, potential, training_set, save_path, species=None, settings=None) -> None:
-    """Train potential on training_set over the ranks of comm, and write it with an active set to the file save_path on rank 0."""
-    train.train(potential, otf_cycle.load_structures(training_set, species), save_path, settings=settings, comm=comm)
+def train_potential(comm, potential_path, training_set_path, save_path, species=None, settings=None) -> None:
+    """Train the potential in potential_path on the training set in training_set_path over the ranks of comm, and write it with an active set to the file save_path on rank 0."""
+    train.train(potential_path, otf_cycle.read_training_set(training_set_path, species), save_path, settings=settings, comm=comm)

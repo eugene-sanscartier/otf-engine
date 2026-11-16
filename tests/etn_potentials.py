@@ -29,47 +29,47 @@ def untrained_etn(name, species_count=None):
     return ETN(species_ranks=species_ranks, radial_funcs_counts=radial_funcs_counts, radial_ranks=radial_ranks, bond_ranks=bond_ranks, species_count=count, min_dist=MIN_DIST, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
 
 
-def coeff_blocks(pot):
-    """The coefficient blocks of pot as (kind, argument), in mlip-4's params order."""
-    l_count, core_count = len(pot.get_species_ranks()), pot.get_core_count()
+def coeff_blocks(potential):
+    """The coefficient blocks of potential as (kind, argument), in mlip-4's params order."""
+    l_count, core_count = len(potential.get_species_ranks()), potential.get_core_count()
     blocks = [("radial", l) for l in range(l_count)] + [("species_pair", l) for l in range(l_count)]
     blocks += [("core", (i, False)) for i in range(core_count)]
     blocks += [("core", (i, True)) for i in range(1, core_count - 1) if core_count > 3]
     return blocks + [("species", None)]
 
 
-def get_block(pot, kind, arg):
-    """A coefficient block of pot, flat in mlip-4's params order."""
-    block = {"radial": lambda: pot.get_radial_coeffs(arg), "species_pair": lambda: pot.get_species_pair_coeffs(arg),
-             "core": lambda: pot.get_core_coeffs(*arg), "species": pot.get_species_coeffs}[kind]()
+def get_block(potential, kind, arg):
+    """A coefficient block of potential, flat in mlip-4's params order."""
+    block = {"radial": lambda: potential.get_radial_coeffs(arg), "species_pair": lambda: potential.get_species_pair_coeffs(arg),
+             "core": lambda: potential.get_core_coeffs(*arg), "species": potential.get_species_coeffs}[kind]()
     return numpy.ravel(block)
 
 
-def params(pot):
-    """The coefficients of pot as mlip-4's params vector."""
-    return numpy.concatenate([get_block(pot, kind, arg) for kind, arg in coeff_blocks(pot)])
+def params(potential):
+    """The coefficients of potential as mlip-4's params vector."""
+    return numpy.concatenate([get_block(potential, kind, arg) for kind, arg in coeff_blocks(potential)])
 
 
-def set_params(pot, values):
-    """Split mlip-4's params vector into pot's coefficient blocks."""
+def set_params(potential, values):
+    """Split mlip-4's params vector into potential's coefficient blocks."""
     offset = 0
-    for kind, arg in coeff_blocks(pot):
-        size = len(get_block(pot, kind, arg))
+    for kind, arg in coeff_blocks(potential):
+        size = len(get_block(potential, kind, arg))
         block = values[offset : offset + size]
         offset += size
         if kind == "radial":
-            pot.set_radial_coeffs(arg, block)
+            potential.set_radial_coeffs(arg, block)
         elif kind == "species_pair":
-            pot.set_species_pair_coeffs(arg, block)
+            potential.set_species_pair_coeffs(arg, block)
         elif kind == "core":
-            pot.set_core_coeffs(arg[0], block, imaginary=arg[1])
+            potential.set_core_coeffs(arg[0], block, imaginary=arg[1])
         else:
-            pot.set_species_coeffs(block)
+            potential.set_species_coeffs(block)
 
 
-def species_of(pot, types):
+def species_of(potential, types):
     """The species the potential sees: every atom is species 0 for a single-species potential."""
-    return types if pot.get_species_count() > 1 else numpy.zeros_like(types)
+    return types if potential.get_species_count() > 1 else numpy.zeros_like(types)
 
 
 def compile_probe(build_dir, workdir, source):

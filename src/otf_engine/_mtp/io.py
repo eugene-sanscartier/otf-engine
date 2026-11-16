@@ -7,13 +7,13 @@ from pathlib import Path
 from .._core.io import format_floats, format_ints, write_header, write_radial_basis
 
 
-def write_mtp(potential, filename):
+def write_mtp(potential, path):
     """Write an MTP potential to an .mtp file.
 
     The file structure is the one PairMTP::read_file() expects. An untrained
     potential is written without its species count and coefficients, as mlip-3 writes it.
     """
-    path = Path(filename)
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     radial_basis_coeffs = potential.get_radial_basis_coeffs()

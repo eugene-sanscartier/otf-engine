@@ -28,7 +28,7 @@ real_harmonics = _ext.real_harmonics
 wigner_3j = _ext.wigner_3j
 real_wigner_3j = _ext.real_wigner_3j
 
-PairETN.write = write_etn                                  # pot.write(path)
+PairETN.write = write_etn                                  # potential.write(path)
 PairETN.fit = staticmethod(train_etn)
 PairETN.threshold_swap = 1.00001    # mlip-4's MaximizeVol goes on swapping, once a search has swapped, while a grade exceeds this
 PairETN.retrain_pass = False        # mlip-4's CfgCalc makes no training pass after the candidates

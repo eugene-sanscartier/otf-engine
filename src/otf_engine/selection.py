@@ -40,25 +40,25 @@ _POOL_TRAIN = 1
 _POOL_CAND = 2
 
 
-def selection_equations(pot: Pair, structures: list, weights: dict, comm=None) -> Equations:
-    """The MaxVol equations of *structures* under the coefficients of *pot* and the selection *weights*.
+def selection_equations(potential: Pair, structures: list, weights: dict, comm=None) -> Equations:
+    """The MaxVol equations of *structures* under the coefficients of *potential* and the selection *weights*.
 
     comm : an mpi4py communicator; the equations are then those of this rank's share of *structures*,
            dealt round-robin, each structure numbered by its index in *structures*
     """
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
-    cutoff = pot.get_max_cutoff()
-    eqns = Equations(pot.get_coeff_count(), **weights)
+    cutoff = potential.get_max_cutoff()
+    eqns = Equations(potential.get_coeff_count(), **weights)
     for number in range(rank, len(structures), size):
-        eqns.add(pot, neighbors(structures[number], cutoff), number)
+        eqns.add(potential, neighbors(structures[number], cutoff), number)
     return eqns
 
 
-def stored_selection(potential: str, al_mode: str, coeff_count: int) -> tuple[dict, MaxVol | None]:
-    """The selection weights and the active set stored in the file *potential*, whose potential has *coeff_count* coefficients, or
+def stored_selection(potential_path: str, al_mode: str, coeff_count: int) -> tuple[dict, MaxVol | None]:
+    """The selection weights and the active set stored in the file *potential_path*, whose potential has *coeff_count* coefficients, or
     *al_mode*'s default weights and None without a #MVS_v1.1 section."""
     try:
-        return read_mvs_header(potential, coeff_count)
+        return read_mvs_header(potential_path, coeff_count)
     except RuntimeError:
         return dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None
 
@@ -68,7 +68,7 @@ def stored_selection(potential: str, al_mode: str, coeff_count: int) -> tuple[di
 # ---------------------------------------------------------------------------
 
 
-def calculate_grade(potential: str, structures: list, weights: dict | None = None, active_set: MaxVol | None = None) -> list:
+def calculate_grade(potential_path: str, structures: list, weights: dict | None = None, active_set: MaxVol | None = None) -> list:
     """Compute per-atom extrapolation grades for each structure.
 
     Grades against an active set: per_atom_grade = max |v_atom @ invA.T|, where v_atom is the per-atom
@@ -76,10 +76,10 @@ def calculate_grade(potential: str, structures: list, weights: dict | None = Non
 
     Parameters
     ----------
-    potential : the file of the potential
+    potential_path : the file of the potential
     structures : list of ase.Atoms, with the species information neighbors() reads
     weights, active_set : the selection weights and the active set to grade against; by default those stored
-        in the #MVS_v1.1 section of *potential*
+        in the #MVS_v1.1 section of *potential_path*
 
     Returns
     -------
@@ -87,16 +87,16 @@ def calculate_grade(potential: str, structures: list, weights: dict | None = Non
         Same structures with .arrays["nbh_grades"] and
         .info["features"]["MV_grade"] populated.
     """
-    pot = read_potential(potential)
+    potential = read_potential(potential_path)
 
     if active_set is None:
-        stored_weights, active_set = read_mvs_header(potential, pot.get_coeff_count())
+        stored_weights, active_set = read_mvs_header(potential_path, potential.get_coeff_count())
         weights = weights or stored_weights
     weights = weights or dict(DEFAULT_SELECTION_WEIGHTS["nbh"])
     site_en_w = float(weights["site_en_weight"])
 
     for i, atoms in enumerate(structures):
-        grades = active_set.grade(selection_equations(pot, [atoms], weights))
+        grades = active_set.grade(selection_equations(potential, [atoms], weights))
         cfg_grade = float(grades.max())
 
         # Per-atom grades come from the site-energy equations, which come last.
@@ -121,25 +121,25 @@ def calculate_grade(potential: str, structures: list, weights: dict | None = Non
 # ---------------------------------------------------------------------------
 
 
-def select_add(potential: str, training_structs: list, candidate_structs: list, threshold: float = 1.001, active_set: MaxVol | None = None, weights: dict | None = None, al_mode: str = "nbh", train_eqns: Equations | None = None, comm=None) -> tuple:
+def select_add(potential_path: str, training_set: list, candidates: list, threshold: float = 1.001, active_set: MaxVol | None = None, weights: dict | None = None, al_mode: str = "nbh", train_eqns: Equations | None = None, comm=None) -> tuple:
     """D-optimality greedy structure selection.
 
-    Rebuilds the MaxVol active set from *training_structs*, then greedily
-    selects from *candidate_structs* the structures whose information vectors
+    Rebuilds the MaxVol active set from *training_set*, then greedily
+    selects from *candidates* the structures whose information vectors
     increase the volume of A (grade > threshold).
 
     Parameters
     ----------
-    potential : the file of the potential
-    training_structs : list of ase.Atoms  (current training set)
-    candidate_structs : list of ase.Atoms  (pre-filtered candidates)
+    potential_path : the file of the potential
+    training_set : list of ase.Atoms  (current training set)
+    candidates : list of ase.Atoms  (pre-filtered candidates)
     threshold : float
     active_set : MaxVol or None
-        The active set to start from, by default the one stored in *potential*; select_add
+        The active set to start from, by default the one stored in *potential_path*; select_add
         searches a copy of it.
     weights : the selection weights, by default those stored with the active set, else al_mode's
     train_eqns : Equations or None
-        Equations already built for *training_structs* with these coefficients
+        Equations already built for *training_set* with these coefficients
         and weights, as returned by update_active_set.  Rebuilt when absent.
     comm : mpi4py communicator or None
         Search over its ranks, each holding the equations of its share of the
@@ -148,24 +148,24 @@ def select_add(potential: str, training_structs: list, candidate_structs: list, 
 
     Returns
     -------
-    tuple of (selected_structs, active_set) — the selected candidate structures, and the
+    tuple of (selected, active_set) — the selected candidate structures, and the
     extended active set, which write_mvs_state stores.
     """
-    pot = read_potential(potential)
-    threshold_swap = pot.threshold_swap
+    potential = read_potential(potential_path)
+    threshold_swap = potential.threshold_swap
 
     if active_set is None:
-        stored_weights, active_set = stored_selection(potential, al_mode, pot.get_coeff_count())
+        stored_weights, active_set = stored_selection(potential_path, al_mode, potential.get_coeff_count())
         weights = weights or stored_weights
     weights = weights or dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
     if active_set is None:
-        mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=threshold_swap)
+        mv = MaxVol(potential.get_coeff_count(), threshold=threshold, threshold_swap=threshold_swap)
     else:
         mv = MaxVol(active_set.A, active_set.invA, threshold=threshold, threshold_swap=threshold_swap)
 
     if train_eqns is None:
-        train_eqns = selection_equations(pot, training_structs, weights, comm)
-    cand_eqns = selection_equations(pot, candidate_structs, weights, comm)
+        train_eqns = selection_equations(potential, training_set, weights, comm)
+    cand_eqns = selection_equations(potential, candidates, weights, comm)
 
     # This three-pass sequence matches mlip-3's select_add and must stay ordered:
     # training rebuild at 1.001, candidate selection at threshold, training pass again, if the model makes it.
@@ -174,64 +174,64 @@ def select_add(potential: str, training_structs: list, candidate_structs: list, 
     initial = MaxVol(mv.A, mv.invA)
     mv.threshold = threshold
     mv.maximize_volume(cand_eqns, pool_id=_POOL_CAND, comm=comm)
-    if pot.retrain_pass: mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
+    if potential.retrain_pass: mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
 
-    active_indices = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0})
-    selected_structs = [candidate_structs[i] for i in active_indices]
+    active_indices = sorted({int(structure_index) for active_pool_id, structure_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(structure_index) >= 0})
+    selected = [candidates[i] for i in active_indices]
 
     # Each selected structure's grade against the active set before the candidates entered it
-    for i, atoms in enumerate(selected_structs):
-        grade = float(initial.grade(selection_equations(pot, [atoms], weights)).max())
+    for i, atoms in enumerate(selected):
+        grade = float(initial.grade(selection_equations(potential, [atoms], weights)).max())
         logger.info(f"  selected structure[{i}]: extrapolation grade (gamma) = {grade:.4f}")
 
-    return selected_structs, mv
+    return selected, mv
 
 
-def update_active_set(potential: str, training_structs: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh", comm=None) -> Equations:
-    """Converge the #MVS_v1.1 active set in *potential* over *training_structs*, seeded from the one saved there.
+def update_active_set(potential_path: str, training_set: list, threshold: float = 1.001, weights: dict | None = None, al_mode: str = "nbh", comm=None) -> Equations:
+    """Converge the #MVS_v1.1 active set in *potential_path* over *training_set*, seeded from the one saved there.
 
     comm : an mpi4py communicator to search over its ranks, each holding the equations of its share of
-           *training_structs*, dealt round-robin. Every rank passes the same arguments, and rank 0 writes *potential*.
+           *training_set*, dealt round-robin. Every rank passes the same arguments, and rank 0 writes *potential_path*.
 
-    Returns the selection equations of *training_structs*, or under *comm* of this rank's share, for select_add to reuse.
+    Returns the selection equations of *training_set*, or under *comm* of this rank's share, for select_add to reuse.
     """
-    pot = read_potential(potential)
+    potential = read_potential(potential_path)
     try:
-        stored_weights, saved, stored_structs = read_mvs_state(potential, _POOL_SAVED, pot.get_coeff_count())
+        stored_weights, saved, stored_structures = read_mvs_state(potential_path, _POOL_SAVED, potential.get_coeff_count())
     except RuntimeError:
-        stored_weights, saved, stored_structs = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None, []
+        stored_weights, saved, stored_structures = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None, []
     weights = weights or stored_weights
 
-    active_set, train_eqns = converge_active_set(pot, training_structs, weights, threshold, saved, stored_structs, comm)
-    if comm is None or comm.Get_rank() == 0: write_active_set(potential, weights, active_set, training_structs)
+    active_set, train_eqns = converge_active_set(potential, training_set, weights, threshold, saved, stored_structures, comm)
+    if comm is None or comm.Get_rank() == 0: write_active_set(potential_path, weights, active_set, training_set)
     return train_eqns
 
 
-def converge_active_set(pot: Pair, training_structs: list, weights: dict, threshold: float = 1.001, saved: MaxVol | None = None, stored_structs: list = (), comm=None) -> tuple[MaxVol, Equations]:
-    """The active set of *pot* over *training_structs*, seeded from *saved*, and the selection equations of *training_structs*.
+def converge_active_set(potential: Pair, training_set: list, weights: dict, threshold: float = 1.001, saved: MaxVol | None = None, stored_structures: list = (), comm=None) -> tuple[MaxVol, Equations]:
+    """The active set of *potential* over *training_set*, seeded from *saved*, and the selection equations of *training_set*.
 
-    saved, stored_structs : the active set saved with the potential and the structures its rows come from, as read_mvs_state reads them
+    saved, stored_structures : the active set saved with the potential and the structures its rows come from, as read_mvs_state reads them
     comm : an mpi4py communicator to search over its ranks; the equations are then those of this rank's share
     """
-    train_eqns = selection_equations(pot, training_structs, weights, comm)
+    train_eqns = selection_equations(potential, training_set, weights, comm)
 
     # The seed is the saved active equations of structures still in the training set, taken from train_eqns
     # rather than the stored A: stored rows may predate the coefficients, and the search never re-grades an active row.
     saved_rows = set()
     if saved is not None:
         def key(atoms): return species_indices(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
-        index_of = {key(atoms): i for i, atoms in enumerate(training_structs)}
-        match = [index_of.get(key(cfg)) for cfg in stored_structs]
+        index_of = {key(atoms): i for i, atoms in enumerate(training_set)}
+        match = [index_of.get(key(cfg)) for cfg in stored_structures]
         saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_struct_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
-    active_set = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=pot.threshold_swap)
+    active_set = MaxVol(potential.get_coeff_count(), threshold=threshold, threshold_swap=potential.threshold_swap)
     active_set.maximize_volume(seed, pool_id=_POOL_TRAIN, comm=comm)
     active_set.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
     return active_set, train_eqns
 
 
-def write_active_set(path: str, weights: dict, active_set: MaxVol, training_structs: list) -> None:
-    """Write *active_set*, converged over *training_structs* under the selection *weights*, as the #MVS_v1.1 section of the potential in *path*."""
-    stored = write_mvs_state(path, weights, active_set, training_structs, _POOL_TRAIN)
-    logger.info(f"Active set: {len(stored)}/{len(training_structs)} active structures.")
+def write_active_set(path: str, weights: dict, active_set: MaxVol, training_set: list) -> None:
+    """Write *active_set*, converged over *training_set* under the selection *weights*, as the #MVS_v1.1 section of the potential in *path*."""
+    stored = write_mvs_state(path, weights, active_set, training_set, _POOL_TRAIN)
+    logger.info(f"Active set: {len(stored)}/{len(training_set)} active structures.")

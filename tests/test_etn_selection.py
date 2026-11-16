@@ -32,14 +32,14 @@ EQUAL_EQUATIONS = 1e-12    # relative difference under which two equations are o
 TOL = 1e-8
 
 
-def write_selection_file(path, pot, mode, training, candidates):
-    """mlip4_selection's input: shape and params of pot, the mode, the training structures and the candidates."""
+def write_selection_file(path, potential, mode, training, candidates):
+    """mlip4_selection's input: shape and params of potential, the mode, the training structures and the candidates."""
     ints = lambda values: " ".join(map(str, values))
     floats = lambda values: " ".join(repr(float(x)) for x in values)
-    lines = [f"{pot.get_species_count()} {len(pot.get_species_ranks())} {pot.get_core_count()} {pot.get_radial_basis_size()} {pot.get_min_cutoff()!r} {pot.get_max_cutoff()!r}"]
-    lines += [ints(pot.get_species_ranks()), ints(pot.get_radial_func_counts()), ints(pot.get_radial_ranks())]
-    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in pot.get_bond_ranks()]
-    coeffs = params(pot)
+    lines = [f"{potential.get_species_count()} {len(potential.get_species_ranks())} {potential.get_core_count()} {potential.get_radial_basis_size()} {potential.get_min_cutoff()!r} {potential.get_max_cutoff()!r}"]
+    lines += [ints(potential.get_species_ranks()), ints(potential.get_radial_func_counts()), ints(potential.get_radial_ranks())]
+    lines += [f"{len(ranks)} {ints(ranks)}" for ranks in potential.get_bond_ranks()]
+    coeffs = params(potential)
     lines += [str(len(coeffs)), floats(coeffs), str(int(mode == "nbh"))]
     for group in (training, candidates):
         lines += [str(len(group))]
@@ -71,11 +71,11 @@ def active_rows(path, training):
     return rows, active_set.A
 
 
-def equation(pot, training, structure, eqn):
+def equation(potential, training, structure, eqn):
     """Equation eqn of a training structure: the energy over N (0) or a site energy's gradient (1 + 3 n + 9 + i)."""
-    if structure < 0: return numpy.zeros(pot.get_coeff_count())
+    if structure < 0: return numpy.zeros(potential.get_coeff_count())
     atoms = training[structure]
-    grads = pot.eval_grad(neighbors(atoms, pot.get_max_cutoff()))
+    grads = potential.eval_grad(neighbors(atoms, potential.get_max_cutoff()))
     return grads.sum(axis=0) / len(atoms) if eqn == 0 else grads[eqn - (1 + 3 * len(atoms) + 9)]
 
 
@@ -99,10 +99,10 @@ def stored(recapture, mlip4_build, structures, candidates, tmp_path_factory):
         outputs.arrays.clear()
         workdir = tmp_path_factory.mktemp("etn_selection")
         probe = compile_probe(mlip4_build, workdir, ETN_REFERENCE / "mlip4_selection.cpp")
-        pot = PairETN(str(reference_potential(POTENTIAL)))
+        potential = PairETN(str(reference_potential(POTENTIAL)))
         for mode in MODES:
             selection_file = workdir / f"{mode}.txt"
-            write_selection_file(selection_file, pot, mode, structures, candidates)
+            write_selection_file(selection_file, potential, mode, structures, candidates)
             printed = subprocess.run([str(probe), str(selection_file)], check=True, capture_output=True, text=True).stdout
             for key, values in parse_selection(printed).items():
                 outputs[f"{mode}/{key}"] = numpy.array(values)
@@ -120,8 +120,8 @@ def test_against_mlip4(mode, structures, candidates, stored, tmp_path):
     rows, A = active_rows(path, structures)
     theirs = numpy.asarray(stored[f"{mode}/active_set"], dtype=int).reshape(-1, 2)
     # atoms of the same environment in two structures give one equation twice, and rounding picks either
-    pot = ETN(path)
-    mismatched = [k for k in numpy.nonzero(numpy.any(rows != theirs, axis=1))[0] if relative(equation(pot, structures, *rows[k]), equation(pot, structures, *theirs[k])) > EQUAL_EQUATIONS]
+    potential = ETN(path)
+    mismatched = [k for k in numpy.nonzero(numpy.any(rows != theirs, axis=1))[0] if relative(equation(potential, structures, *rows[k]), equation(potential, structures, *theirs[k])) > EQUAL_EQUATIONS]
     assert not mismatched, f"{len(mismatched)} of {len(rows)} rows hold another equation than mlip-4's"
     assert relative(log_det(A), stored[f"{mode}/log_det"]) <= TOL
 

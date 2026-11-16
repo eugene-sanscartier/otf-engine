@@ -50,11 +50,11 @@ def next_cycle_dir(base_dir: Path = CYCLE_BASE) -> Path:
     return cycle_dir
 
 
-def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files: list[str], ok: bool) -> None:
+def archive_cycle(cycle_dir: Path, potential_path: str, training_set_path: str, dump_files: list[str], ok: bool) -> None:
     """Archive one OTF cycle's artifacts into *cycle_dir* and record whether the cycle succeeded.
 
     - Creates *cycle_dir*.
-    - Copies *potential* and *training_set* as snapshots (input and post-run state).
+    - Copies *potential_path* and *training_set_path* as snapshots (input and post-run state).
     - Moves _CYCLE_ARTIFACTS_MOVE from cwd into *cycle_dir* (if they exist).
     - Copies _CYCLE_ARTIFACTS_COPY from cwd into *cycle_dir* (if they exist).
     - Copies each file in *dump_files* into *cycle_dir* and truncates the
@@ -65,7 +65,7 @@ def archive_cycle(cycle_dir: Path, potential: str, training_set: str, dump_files
     """
     cycle_dir.mkdir(parents=True, exist_ok=True)
 
-    for src in (potential, training_set):
+    for src in (potential_path, training_set_path):
         p = Path(src)
         if p.exists():
             shutil.copy2(p, cycle_dir / p.name)
