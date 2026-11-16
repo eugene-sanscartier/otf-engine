@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 
-from ._core import PotentialCalculator, Sample, error_table, read_potential
+from ._core import PotentialCalculator, Sample, error_table, potential_class, read_potential
 from .io_cfg import read_cfg
 from .selection import converge_active_set, stored_selection, write_active_set
 
@@ -44,10 +44,9 @@ def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int |
     ranks           : threads; without comm, defaults to the CPUs this process may run on
     inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's; an MTP's only
     """
-    pot = read_potential(potential)
     extra = {} if inverse_hessian is None else {"inverse_hessian": inverse_hessian}
     if ranks is None: ranks = os.process_cpu_count() if comm is None else 1
-    trained = pot.fit(potential, structures, options, ranks, comm, checkpoint=checkpoint, **extra)
+    trained = potential_class(potential).fit(potential, structures, options, ranks, comm, checkpoint=checkpoint, **extra)
     return trained
 
 

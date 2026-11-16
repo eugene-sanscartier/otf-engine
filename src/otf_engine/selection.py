@@ -206,20 +206,20 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     """
     calc, _ = _open_calculator(potential)
     try:
-        stored_weights, saved, stored_cfgs = read_mvs_state(potential, _POOL_SAVED)
+        stored_weights, saved, stored_structs = read_mvs_state(potential, _POOL_SAVED)
     except RuntimeError:
-        stored_weights, saved, stored_cfgs = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None, []
+        stored_weights, saved, stored_structs = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None, []
     weights = weights or stored_weights
 
-    active_set, train_eqns = converge_active_set(calc, training_structs, weights, threshold, saved, stored_cfgs, comm)
+    active_set, train_eqns = converge_active_set(calc, training_structs, weights, threshold, saved, stored_structs, comm)
     if comm is None or comm.Get_rank() == 0: write_active_set(potential, weights, active_set, training_structs)
     return train_eqns
 
 
-def converge_active_set(calc: PotentialCalculator, training_structs: list, weights: dict, threshold: float = 1.001, saved: MaxVol | None = None, stored_cfgs: list = (), comm=None) -> tuple[MaxVol, Equations]:
+def converge_active_set(calc: PotentialCalculator, training_structs: list, weights: dict, threshold: float = 1.001, saved: MaxVol | None = None, stored_structs: list = (), comm=None) -> tuple[MaxVol, Equations]:
     """The active set of the calculator's potential over *training_structs*, seeded from *saved*, and the selection equations of *training_structs*.
 
-    saved, stored_cfgs : the active set saved with the potential and the structures its rows come from, as read_mvs_state reads them
+    saved, stored_structs : the active set saved with the potential and the structures its rows come from, as read_mvs_state reads them
     comm : an mpi4py communicator to search over its ranks; the equations are then those of this rank's share
     """
     pot = calc.potential
@@ -231,7 +231,7 @@ def converge_active_set(calc: PotentialCalculator, training_structs: list, weigh
     if saved is not None:
         def key(atoms): return species_indices(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
         index_of = {key(atoms): i for i, atoms in enumerate(training_structs)}
-        match = [index_of.get(key(cfg)) for cfg in stored_cfgs]
+        match = [index_of.get(key(cfg)) for cfg in stored_structs]
         saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_struct_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 

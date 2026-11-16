@@ -5,16 +5,22 @@ from __future__ import annotations
 import numpy
 
 
-def read_potential(path: str):
-    """The potential in the file *path*, as an ETN if the file's first line is ETN, else as an MTP."""
+def potential_class(path: str):
+    """The class of the potential in the file *path*: ETN if the file's first line is ETN, else MTP."""
     with open(path, "rb") as f:    # the #MVS_v1.1 section is binary
         etn = f.readline().strip() == b"ETN"
     if etn:
         from .._etn import ETN    # _mtp and _etn import _core, so _core imports them only when called
-        potential = ETN(path)
+        cls = ETN
     else:
         from .._mtp import MTP
-        potential = MTP(path)
+        cls = MTP
+    return cls
+
+
+def read_potential(path: str):
+    """The potential in the file *path*, as an ETN or an MTP."""
+    potential = potential_class(path)(path)
     return potential
 
 

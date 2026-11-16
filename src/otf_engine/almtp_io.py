@@ -102,11 +102,11 @@ def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, lis
     if data[pos:pos + 2] != b"#\n":
         raise ValueError("Active-set link terminator '#\\n' not found after link table")
     cfg_text = data[pos + 2:].decode()
-    selected_cfgs = [] if not cfg_text.strip() else read_cfg(StringIO(cfg_text))
+    stored_structs = [] if not cfg_text.strip() else read_cfg(StringIO(cfg_text))
 
     active_set = MaxVol(A, invA)
     active_set.restore_active(active_cfg_indices, active_eqn_indices, pool_id)
-    return weights, active_set, selected_cfgs
+    return weights, active_set, stored_structs
 
 
 def write_mvs_state(almtp_path: str, weights: dict, active_set: MaxVol, structures: list, pool_id: int) -> list:
