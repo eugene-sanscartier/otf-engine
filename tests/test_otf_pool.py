@@ -60,7 +60,7 @@ def same_active_set(mpi_set, serial_set):
 @pytest.mark.mpi
 def test_otf_pool(structures, candidates, tmp_path):
     from otf_engine._mtp import MTP, write_mtp
-    from otf_engine.almtp_io import read_mvs_header, read_mvs_state
+    from otf_engine.io_mvs import read_mvs_header, read_mvs_state
     from otf_engine.io_cfg import read_cfg, write_cfg
     from otf_engine.otf_cycle import grade_dump
     from otf_engine.selection import select_add, update_active_set

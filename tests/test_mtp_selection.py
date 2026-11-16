@@ -12,7 +12,7 @@ import numpy
 import pytest
 
 from conftest import DATA, MTP_REFERENCE, StoredOutputs, two_species
-from otf_engine.almtp_io import read_mvs_header, read_mvs_state, write_mvs_state
+from otf_engine.io_mvs import read_mvs_header, read_mvs_state, write_mvs_state
 from otf_engine.io_cfg import read_cfg, write_cfg
 from otf_engine.selection import calculate_grade, select_add, update_active_set
 

@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 
-from ._core import PotentialCalculator, Sample, error_table, potential_class, read_potential
+from ._core import Sample, error_table, potential_class, read_potential
 from .io_cfg import read_cfg
 from .selection import converge_active_set, stored_selection, write_active_set
 
@@ -63,9 +63,10 @@ def train(potential: str, training_structs: list, save_path: str, settings: dict
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
                same *training_structs*, and rank 0 writes *save_path*.
     """
-    weights = stored_selection(potential, al_mode)[0]
+    template = read_potential(potential)
+    weights = stored_selection(potential, al_mode, template.get_coeff_count())[0]
 
-    cutoff = read_potential(potential).get_max_cutoff()
+    cutoff = template.get_max_cutoff()
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
     structures = (Sample(training_structs[i], cutoff, i + 1) for i in range(rank, len(training_structs), size))
@@ -79,7 +80,7 @@ def train(potential: str, training_structs: list, save_path: str, settings: dict
                 pot.write(save_path)
             except Exception as e:
                 logger.warning(f"cannot save the trained potential to {save_path}: {type(e).__name__}: {e}")
-        active_set, _ = converge_active_set(PotentialCalculator(pot), training_structs, weights, comm=comm)
+        active_set, _ = converge_active_set(pot, training_structs, weights, comm=comm)
 
     if rank == 0:
         pot.write(save_path)

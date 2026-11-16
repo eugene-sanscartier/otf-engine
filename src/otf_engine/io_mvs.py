@@ -15,7 +15,7 @@ maxvol.cpp (WriteData/ReadData).  Format (mixed text + binary):
     \\n#\\n                   <- end delimiter
 
 n = CoeffCount() (radial + linear + species coefficients), or an ETN's coefficient count.
-The section does not store n; the reader takes it from the potential in the same file.
+The section does not store n; the reader takes it from the caller, or else from the potential in the same file.
 """
 
 from __future__ import annotations
@@ -31,8 +31,9 @@ _MARKER = b"#MVS_v1.1"
 _END_MARKER = b"\n#\n"
 
 
-def _read_section(path: str) -> tuple[bytes, dict, ndarray, ndarray, int]:
-    """The bytes of the file *path*, and the weights, A, invA and the end of the binary block of its #MVS_v1.1 section."""
+def _read_section(path: str, coeff_count: int | None) -> tuple[bytes, dict, ndarray, ndarray, int]:
+    """The bytes of the file *path*, and the weights, A, invA and the end of the binary block of its #MVS_v1.1 section, whose
+    matrices are *coeff_count* square, by default the coefficient count of the potential in *path*."""
     with open(path, "rb") as f:
         data = f.read()
 
@@ -57,7 +58,7 @@ def _read_section(path: str) -> tuple[bytes, dict, ndarray, ndarray, int]:
     if binary_start == -1:
         raise ValueError("Binary payload marker '#' not found in #MVS_v1.1 section")
     binary_start += 1
-    n = read_potential(path).get_coeff_count()
+    n = read_potential(path).get_coeff_count() if coeff_count is None else coeff_count
     n_bytes = 2 * n * n * 8
     end_pos = binary_start + n_bytes
     if data[end_pos:end_pos + len(_END_MARKER)] != _END_MARKER:
@@ -68,20 +69,24 @@ def _read_section(path: str) -> tuple[bytes, dict, ndarray, ndarray, int]:
     return data, weights, A, invA, end_pos
 
 
-def read_mvs_header(almtp_path: str) -> tuple[dict, MaxVol]:
-    """The selection weights and the active set stored in *almtp_path*, without the stored structures or the rows' provenance."""
-    _, weights, A, invA, _ = _read_section(almtp_path)
+def read_mvs_header(path: str, coeff_count: int | None = None) -> tuple[dict, MaxVol]:
+    """The selection weights and the active set stored in *path*, without the stored structures or the rows' provenance.
+
+    coeff_count : the coefficient count of the potential in *path*, which spares reading it
+    """
+    _, weights, A, invA, _ = _read_section(path, coeff_count)
     return weights, MaxVol(A, invA)
 
 
-def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, list]:
-    """The selection weights, the active set and the stored structures of *almtp_path*.
+def read_mvs_state(path: str, pool_id: int = 0, coeff_count: int | None = None) -> tuple[dict, MaxVol, list]:
+    """The selection weights, the active set and the stored structures of *path*.
 
     An active row linked to a stored structure gets *pool_id* as its pool and the structure's index in the returned list.
+    coeff_count : the coefficient count of the potential in *path*, which spares reading it
     """
     from .io_cfg import read_cfg
 
-    data, weights, A, invA, end_pos = _read_section(almtp_path)
+    data, weights, A, invA, end_pos = _read_section(path, coeff_count)
 
     # The link table, a structure index and an equation index per row of A, then the stored structures
     n = A.shape[0]
@@ -109,8 +114,8 @@ def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, lis
     return weights, active_set, stored_structs
 
 
-def write_mvs_state(almtp_path: str, weights: dict, active_set: MaxVol, structures: list, pool_id: int) -> list:
-    """Write *weights* and *active_set* as the #MVS_v1.1 section of *almtp_path*, with the structures of *structures*
+def write_mvs_state(path: str, weights: dict, active_set: MaxVol, structures: list, pool_id: int) -> list:
+    """Write *weights* and *active_set* as the #MVS_v1.1 section of *path*, with the structures of *structures*
     that the rows of pool *pool_id* come from. Returns those structures."""
     from .io_cfg import write_cfg
 
@@ -146,13 +151,13 @@ def write_mvs_state(almtp_path: str, weights: dict, active_set: MaxVol, structur
         write_cfg(sio, stored)
         section += sio.getvalue().encode()
 
-    with open(almtp_path, "rb") as f:
+    with open(path, "rb") as f:
         data = f.read()
     marker_pos = data.find(_MARKER)
     if marker_pos == -1:
-        with open(almtp_path, "ab") as f:
+        with open(path, "ab") as f:
             f.write(b"\n" + section)
     else:
-        with open(almtp_path, "wb") as f:
+        with open(path, "wb") as f:
             f.write(data[:marker_pos] + section)
     return stored

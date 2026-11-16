@@ -21,7 +21,7 @@ from ase.calculators.singlepoint import SinglePointCalculator
 from conftest import ETN_REFERENCE, StoredOutputs
 from etn_potentials import compile_probe, params, reference_potential, untrained_etn
 from otf_engine._core import PotentialCalculator, neighbors
-from otf_engine.almtp_io import read_mvs_state
+from otf_engine.io_mvs import read_mvs_state
 from otf_engine.selection import calculate_grade, select_add, update_active_set
 from otf_engine.train import train
 
