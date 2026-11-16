@@ -23,47 +23,16 @@ import tempfile
 import time
 from pathlib import Path
 
-import numpy
 
 import etn_potentials as kernels
+from bench_models import timings
 import test_etn_trainer as training
 from conftest import ETN_REFERENCE
 from otf_engine._etn import ETN, train_etn
-from otf_engine._core import neighbors
 from otf_engine.io_cfg import read_cfg
 from otf_engine._core import Sample
 
 BENCH_SOURCE = ETN_REFERENCE / "mlip4_bench.cpp"
-
-
-def ours(pot, labelled, repeats):
-    """Our eval (without and with the neighbor build) and loss-gradient times, in ms."""
-    lists = [s.neighbors for _, s in labelled]
-    start = time.perf_counter()
-    for _ in range(repeats):
-        for nl in lists:
-            pot.compute(nl)
-    eval_ms = (time.perf_counter() - start) * 1e3 / (repeats * len(lists))
-
-    start = time.perf_counter()
-    for _ in range(repeats):
-        for atoms, _ in labelled:
-            pot.compute(neighbors(atoms, pot.get_max_cutoff()))
-    eval_build_ms = (time.perf_counter() - start) * 1e3 / (repeats * len(lists))
-
-    weights = training.WEIGHTS
-    start = time.perf_counter()
-    for _ in range(repeats):
-        for _, s in labelled:
-            nl, energy, forces, virial = s.neighbors, s.energy, s.forces, s.virial
-            result = pot.compute(nl)
-            dforces = 2 * weights["force_weight"] * (result["forces"] - forces)
-            dvirial = None
-            if virial is not None:
-                dvirial = 2 * weights["stress_weight"] * (result["virials"] - virial) * numpy.array([1, 1, 1, 2, 2, 2])
-            pot.eval_loss_grad(nl, 2 * weights["energy_weight"] * (result["energy"] - energy), dforces, dvirial)
-    loss_grad_ms = (time.perf_counter() - start) * 1e3 / repeats
-    return eval_ms, eval_build_ms, loss_grad_ms
 
 
 def mlip4(bench, training_file, jit, repeats):
@@ -97,7 +66,8 @@ def main():
             training_file = Path(workdir) / f"{name}.txt"
             training.write_training_file(training_file, pot, labelled, settings)
 
-            eval_ms, eval_build_ms, loss_grad_ms = ours(pot, labelled, args.repeats)
+            eval_ms, eval_build_ms, loss_grad_ms = timings(pot, labelled, args.repeats, training.WEIGHTS)
+            loss_grad_ms *= len(labelled)
             vm_eval, vm_loss = mlip4(bench, training_file, False, args.repeats)
             jit_eval, jit_loss = mlip4(bench, training_file, True, args.repeats)
             print(f"\n{name} ({pot.get_coeff_count()} coefficients)")
