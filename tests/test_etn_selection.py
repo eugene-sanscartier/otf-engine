@@ -20,7 +20,7 @@ from ase.calculators.singlepoint import SinglePointCalculator
 
 from conftest import ETN_REFERENCE, StoredOutputs
 from etn_potentials import compile_probe, params, reference_potential, untrained_etn
-from otf_engine._core import PotentialCalculator, neighbors
+from otf_engine._core import PairCalculator, neighbors
 from otf_engine.io_mvs import read_mvs_state
 from otf_engine.selection import calculate_grade, select_add, update_active_set
 from otf_engine.train import train
@@ -66,8 +66,8 @@ def active_rows(path, training):
     _, active_set, stored = read_mvs_state(path)
     key = lambda atoms: numpy.round(atoms.positions, 6).tobytes()
     index_of = {key(atoms): s for s, atoms in enumerate(training)}
-    labels = [index_of[key(cfg)] for cfg in stored]
-    rows = numpy.array([[labels[c], e] if p == 0 else [-1, -1] for p, c, e in zip(active_set.active_pool_ids, active_set.active_struct_indices, active_set.active_eqn_indices)])
+    labels = [index_of[key(structure)] for structure in stored]
+    rows = numpy.array([[labels[c], e] if p == 0 else [-1, -1] for p, c, e in zip(active_set.active_pool_ids, active_set.active_structure_indices, active_set.active_eqn_indices)])
     return rows, active_set.A
 
 
@@ -145,13 +145,13 @@ def test_train_writes_active_set(structures, tmp_path):
     untrained_etn(POTENTIAL).write(untrained)
     trained = str(tmp_path / f"{POTENTIAL}-trained.etn")
     # references to fit: the stored potential's energies and forces
-    reference = PotentialCalculator(PairETN(str(reference_potential(POTENTIAL))))
+    reference = PairCalculator(PairETN(str(reference_potential(POTENTIAL))))
     labelled = []
     for atoms in structures[:4]:
         reference.calculate(atoms, ["energy", "forces"])
         labelled += [atoms.copy()]
         labelled[-1].calc = SinglePointCalculator(labelled[-1], energy=reference.results["energy"], forces=reference.results["forces"])
-    train(str(untrained), labelled, trained, settings={"iteration_limit": 3, "skip_preinit": True, "log": "none"}, ranks=2)
+    train(str(untrained), labelled, trained, options={"iteration_limit": 3, "skip_preinit": True, "log": "none"}, ranks=2)
 
     assert PairETN(trained).is_trained()
     grades = [atoms.info["features"]["MV_grade"] for atoms in calculate_grade(trained, [atoms.copy() for atoms in labelled])]

@@ -52,7 +52,7 @@ def same_active_set(mpi_set, serial_set):
     """Whether the workers' active set is the one-rank search's, each as read_mvs_state returns it: the same active
     equations, and A to 1e-12 relatively."""
     (_, mpi, _), (_, serial, _) = mpi_set, serial_set
-    rows = lambda mv: [numpy.asarray(mv.active_pool_ids), numpy.asarray(mv.active_struct_indices), numpy.asarray(mv.active_eqn_indices)]
+    rows = lambda mv: [numpy.asarray(mv.active_pool_ids), numpy.asarray(mv.active_structure_indices), numpy.asarray(mv.active_eqn_indices)]
     assert all(numpy.array_equal(a, b) for a, b in zip(rows(mpi), rows(serial)))
     assert numpy.abs(mpi.A - serial.A).max() <= 1e-12 * numpy.abs(serial.A).max()
 
@@ -83,7 +83,7 @@ def test_otf_pool(structures, candidates, tmp_path):
     grades = numpy.array([atoms.info["features"]["MV_grade"] for atoms in graded])
     offered = [graded[i] for i in numpy.argsort(grades)[::-1][:CANDIDATES]]
     selected = [next(i for i, c in enumerate(offered) if c is s) for s in select_add(str(work / "serial_updated.almtp"), training_set, offered)[0]]
-    train(str(work / "potential.almtp"), training_set, str(work / "threads.almtp"), settings={"iteration_limit": ITERATIONS, "log": str(work / "threads_train.log")}, ranks=RANKS)
+    train(str(work / "potential.almtp"), training_set, str(work / "threads.almtp"), options={"iteration_limit": ITERATIONS, "log": str(work / "threads_train.log")}, ranks=RANKS)
 
     cmd = ["mpirun", "-n", str(RANKS + 1), sys.executable, str(TESTS / "otf_pool_worker.py"), str(SESSION_SIZE), str(ITERATIONS), str(CANDIDATES), *SPECIES]
     proc = subprocess.run(cmd, cwd=work, capture_output=True, text=True, timeout=120)

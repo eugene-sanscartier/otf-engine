@@ -33,6 +33,6 @@ def select_add(comm, potential_path, training_set_path, candidates, species=None
     return selected if comm.Get_rank() == 0 else None
 
 
-def train_potential(comm, potential_path, training_set_path, save_path, species=None, settings=None) -> None:
+def train_potential(comm, potential_path, training_set_path, save_path, species=None, options=None) -> None:
     """Train the potential in potential_path on the training set in training_set_path over the ranks of comm, and write it with an active set to the file save_path on rank 0."""
-    train.train(potential_path, otf_cycle.read_training_set(training_set_path, species), save_path, settings=settings, comm=comm)
+    train.train(potential_path, otf_cycle.read_training_set(training_set_path, species), save_path, options=options, comm=comm)

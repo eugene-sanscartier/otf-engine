@@ -91,7 +91,7 @@ def read_mvs_state(path: str, pool_id: int = 0, coeff_count: int | None = None) 
     # The link table, a structure index and an equation index per row of A, then the stored structures
     n = A.shape[0]
     pos = end_pos + len(_END_MARKER)
-    active_cfg_indices = numpy.full(n, -1, dtype=intp)
+    active_structure_indices = numpy.full(n, -1, dtype=intp)
     active_eqn_indices = numpy.full(n, -1, dtype=intp)
     for i in range(n):
         nl = data.find(b"\n", pos)
@@ -101,8 +101,8 @@ def read_mvs_state(path: str, pool_id: int = 0, coeff_count: int | None = None) 
         pos = nl + 1
         if not line:
             continue
-        cfg_idx, eqn_idx = line.split(None, 1)
-        active_cfg_indices[i] = int(cfg_idx)
+        structure_index, eqn_idx = line.split(None, 1)
+        active_structure_indices[i] = int(structure_index)
         active_eqn_indices[i] = int(eqn_idx)
     if data[pos:pos + 2] != b"#\n":
         raise ValueError("Active-set link terminator '#\\n' not found after link table")
@@ -110,7 +110,7 @@ def read_mvs_state(path: str, pool_id: int = 0, coeff_count: int | None = None) 
     stored_structures = [] if not cfg_text.strip() else read_cfg(StringIO(cfg_text))
 
     active_set = MaxVol(A, invA)
-    active_set.restore_active(active_cfg_indices, active_eqn_indices, pool_id)
+    active_set.restore_active(active_structure_indices, active_eqn_indices, pool_id)
     return weights, active_set, stored_structures
 
 
@@ -120,7 +120,7 @@ def write_mvs_state(path: str, weights: dict, active_set: MaxVol, structures: li
     from .io_cfg import write_cfg
 
     # The structures rows of pool_id come from, each with the indices of its rows' equations, and each row's index among them
-    rows = [(int(p), int(s), int(e)) for p, s, e in zip(active_set.active_pool_ids, active_set.active_struct_indices, active_set.active_eqn_indices, strict=True)]
+    rows = [(int(p), int(s), int(e)) for p, s, e in zip(active_set.active_pool_ids, active_set.active_structure_indices, active_set.active_eqn_indices, strict=True)]
     labels = sorted({s for p, s, _ in rows if p == pool_id and 0 <= s < len(structures)})
     stored = []
     for label in labels:
@@ -131,7 +131,7 @@ def write_mvs_state(path: str, weights: dict, active_set: MaxVol, structures: li
             atoms.info.setdefault("features", {})["selected_eqn_inds"] = ",".join(str(e) for e in eqn_indices)
         stored += [atoms]
     index_of = {label: i for i, label in enumerate(labels)}
-    cfg_indices = [index_of.get(s, -1) if p == pool_id else -1 for p, s, _ in rows]
+    structure_indices = [index_of.get(s, -1) if p == pool_id else -1 for p, s, _ in rows]
 
     section = b"".join((
         b"#MVS_v1.1\n",
@@ -145,7 +145,7 @@ def write_mvs_state(path: str, weights: dict, active_set: MaxVol, structures: li
         numpy.asarray(active_set.invA).astype("<f8").tobytes(),
         b"\n#\n",
     ))
-    section += b"".join(f"{int(c)} {int(e)}\n".encode() for c, e in zip(cfg_indices, active_set.active_eqn_indices, strict=True)) + b"#\n"
+    section += b"".join(f"{int(c)} {int(e)}\n".encode() for c, e in zip(structure_indices, active_set.active_eqn_indices, strict=True)) + b"#\n"
     if stored:
         sio = StringIO()
         write_cfg(sio, stored)

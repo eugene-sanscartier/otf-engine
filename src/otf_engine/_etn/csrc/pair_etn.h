@@ -84,14 +84,14 @@ class PairETN : public Pair {
     const std::vector<int>& get_radial_func_counts() const { return radial_func_counts; }
     const std::vector<int>& get_radial_ranks() const { return radial_ranks; }
     const std::vector<std::vector<int>>& get_bond_ranks() const { return bond_ranks; }
-    // radial_coeffs[l]: [species_rank * radial_func_count * radial_rank], column-major (k, n', n)
-    const std::vector<double>& get_radial_coeffs(int l) const { return radial_coeffs[l]; }
+    // radial_basis_coeffs[l]: [species_rank * radial_func_count * radial_rank], column-major (k, n', n)
+    const std::vector<double>& get_radial_basis_coeffs(int l) const { return radial_basis_coeffs[l]; }
     // species_pair_coeffs[l]: [species_count^2 * species_rank], row-major (s_i, s_j, k)
     const std::vector<double>& get_species_pair_coeffs(int l) const { return species_pair_coeffs[l]; }
     // The coefficients of core i's real or imaginary part, ordered l3, n3, l2, n2, l1, n1
     const std::vector<double>& get_core_coeffs(int i, bool imaginary) const { return (imaginary ? cores_im[i] : cores[i]).coeffs; }
 
-    void set_radial_coeffs(int l, const double* c);
+    void set_radial_basis_coeffs(int l, const double* c);
     void set_species_pair_coeffs(int l, const double* c);
     void set_core_coeffs(int i, bool imaginary, const double* c);
     // Sizes the coefficients for n species, keeping each kept pair's A_l entries and each kept species'
@@ -128,7 +128,7 @@ class PairETN : public Pair {
     std::vector<std::vector<int>> bond_ranks;
 
     // Coefficients, in get_coeffs' order: these, the cores' and species_coeffs
-    std::vector<std::vector<double>> radial_coeffs;        // [l] B_l
+    std::vector<std::vector<double>> radial_basis_coeffs;        // [l] B_l
     std::vector<std::vector<double>> species_pair_coeffs;  // [l] A_l
 
     // First column of each coefficient block in get_coeffs' order

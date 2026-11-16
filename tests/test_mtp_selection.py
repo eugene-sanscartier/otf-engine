@@ -29,7 +29,7 @@ def active_rows(path, training):
     _, active_set, stored = read_mvs_state(str(path))
     index_of = {fingerprint(atoms): k for k, atoms in enumerate(training)}
     structure_of = [index_of[fingerprint(atoms)] for atoms in stored]
-    rows = sorted((structure_of[c], int(e)) for c, e in zip(active_set.active_struct_indices.tolist(), active_set.active_eqn_indices.tolist(), strict=True) if c >= 0)
+    rows = sorted((structure_of[c], int(e)) for c, e in zip(active_set.active_structure_indices.tolist(), active_set.active_eqn_indices.tolist(), strict=True) if c >= 0)
     log_det = numpy.linalg.slogdet(numpy.asarray(active_set.A))[1]
     return numpy.array(rows, dtype=float).reshape(-1, 2), log_det
 
@@ -145,6 +145,6 @@ def test_mvs_round_trip(sets, tmp_path):
     assert weights2 == weights
     numpy.testing.assert_array_equal(active_set2.A, active_set.A)
     numpy.testing.assert_array_equal(active_set2.invA, active_set.invA)
-    numpy.testing.assert_array_equal(active_set2.active_struct_indices, active_set.active_struct_indices)
+    numpy.testing.assert_array_equal(active_set2.active_structure_indices, active_set.active_structure_indices)
     numpy.testing.assert_array_equal(active_set2.active_eqn_indices, active_set.active_eqn_indices)
     assert [fingerprint(a) for a in stored2] == [fingerprint(a) for a in stored]

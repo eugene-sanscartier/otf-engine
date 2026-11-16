@@ -5,10 +5,10 @@ from numpy import float64
 from ase.calculators.calculator import Calculator, all_changes
 
 from .neighbors import neighbors
-from .fit_structure import stress_from_virial
+from .fit_structure import virial2stress
 
 
-class PotentialCalculator(Calculator):
+class PairCalculator(Calculator):
     """ASE Calculator for a Pair.
 
     Parameters
@@ -44,4 +44,4 @@ class PotentialCalculator(Calculator):
             self.results["energies"] = numpy.array(result["eatom"], dtype=float64)
 
         if "stress" in properties:
-            self.results["stress"] = stress_from_virial(result["virial"], atoms.get_volume())
+            self.results["stress"] = virial2stress(result["virial"], atoms.get_volume())

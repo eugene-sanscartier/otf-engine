@@ -77,17 +77,17 @@ comm : an mpi4py communicator to search over its ranks. Every rank passes the sa
        same A, invA and provenance.
 )doc")
         .def("restore_active",
-             [](MaxVol& self, IntArray cfg_indices, IntArray eqn_indices, int pool_id) {
-                 if (cfg_indices.size() != self.n || eqn_indices.size() != self.n)
+             [](MaxVol& self, IntArray structure_indices, IntArray eqn_indices, int pool_id) {
+                 if (structure_indices.size() != self.n || eqn_indices.size() != self.n)
                      throw std::runtime_error("MaxVol.restore_active: one index per active row");
-                 self.restore_active(cfg_indices.data(), eqn_indices.data(), pool_id);
+                 self.restore_active(structure_indices.data(), eqn_indices.data(), pool_id);
              },
-             py::arg("cfg_indices"), py::arg("eqn_indices"), py::arg("pool_id"), "Restore the provenance of each active row from saved indices.")
+             py::arg("structure_indices"), py::arg("eqn_indices"), py::arg("pool_id"), "Restore the provenance of each active row from saved indices.")
         .def_readwrite("threshold", &MaxVol::threshold)
         .def_readwrite("threshold_swap", &MaxVol::threshold_swap, "Once a search has swapped, it goes on while a grade exceeds this; None, threshold.")
         .def_property_readonly("A", [](const MaxVol& self) { return DoubleArray({self.n, self.n}, self.A.data()); })
         .def_property_readonly("invA", [](const MaxVol& self) { return DoubleArray({self.n, self.n}, self.invA.data()); })
         .def_property_readonly("active_pool_ids", [](const MaxVol& self) { return IntArray({self.n}, self.active_pool_ids.data()); })
-        .def_property_readonly("active_struct_indices", [](const MaxVol& self) { return IntArray({self.n}, self.active_struct_indices.data()); })
+        .def_property_readonly("active_structure_indices", [](const MaxVol& self) { return IntArray({self.n}, self.active_structure_indices.data()); })
         .def_property_readonly("active_eqn_indices", [](const MaxVol& self) { return IntArray({self.n}, self.active_eqn_indices.data()); });
 }

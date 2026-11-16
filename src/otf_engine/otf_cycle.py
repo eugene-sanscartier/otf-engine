@@ -349,7 +349,7 @@ class OTFCycle:
     @property
     def training(self):
         """The training this cycle needs, as otf_pool.train_potential's keyword arguments."""
-        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, save_path=f"tmp_{self.potential_path}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG, "species": ",".join(self.species or [])})
+        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, save_path=f"tmp_{self.potential_path}", species=self.species, options={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG, "species": ",".join(self.species or [])})
 
     def replace_potential(self):
         """Replace the potential with the one training wrote, and log its errors on the evaluated structures."""

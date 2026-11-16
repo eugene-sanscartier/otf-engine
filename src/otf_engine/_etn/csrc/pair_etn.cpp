@@ -282,7 +282,7 @@ void PairETN::contract_adjoint(const Core& core, const CovariantShape& left, con
 }
 
 void PairETN::get_coeffs(double* c) const {
-    for (const auto* blocks : {&radial_coeffs, &species_pair_coeffs})
+    for (const auto* blocks : {&radial_basis_coeffs, &species_pair_coeffs})
         for (const auto& block : *blocks) c = std::copy(block.begin(), block.end(), c);
     for (const auto* part : {&cores, &cores_im})
         for (const Core& core : *part) c = std::copy(core.coeffs.begin(), core.coeffs.end(), c);
@@ -290,7 +290,7 @@ void PairETN::get_coeffs(double* c) const {
 }
 
 void PairETN::set_coeffs(const double* c) {
-    for (auto* blocks : {&radial_coeffs, &species_pair_coeffs})
+    for (auto* blocks : {&radial_basis_coeffs, &species_pair_coeffs})
         for (auto& block : *blocks) {
             std::copy(c, c + block.size(), block.begin());
             c += block.size();
@@ -308,8 +308,8 @@ int PairETN::coeff_count() const {
     return species_columns + species_count;
 }
 
-void PairETN::set_radial_coeffs(int l, const double* c) {
-    std::copy(c, c + radial_coeffs[l].size(), radial_coeffs[l].begin());
+void PairETN::set_radial_basis_coeffs(int l, const double* c) {
+    std::copy(c, c + radial_basis_coeffs[l].size(), radial_basis_coeffs[l].begin());
     prepare_radial_mixing();
 }
 
@@ -404,7 +404,7 @@ void PairETN::read_file(std::istream& is) {
 
     const int l_count = (int) species_ranks.size();
     for (int l = 0; l < l_count; l++)
-        read_block(radial_coeffs[l], "radial_coeffs of l = " + std::to_string(l));
+        read_block(radial_basis_coeffs[l], "radial_coeffs of l = " + std::to_string(l));
     tfr.expect("species_pair_coeffs");
     for (int l = 0; l < l_count; l++)
         read_block(species_pair_coeffs[l], "species_pair_coeffs of l = " + std::to_string(l));
@@ -464,10 +464,10 @@ void PairETN::prepare_cores() {
         bonds_size += 2 * bond_shapes.back().size;
     }
 
-    radial_coeffs.resize(l_count);
+    radial_basis_coeffs.resize(l_count);
     species_pair_coeffs.resize(l_count);
     for (int l = 0; l < l_count; l++) {
-        radial_coeffs[l].resize(species_ranks[l] * radial_func_counts[l] * radial_ranks[l]);
+        radial_basis_coeffs[l].resize(species_ranks[l] * radial_func_counts[l] * radial_ranks[l]);
         species_pair_coeffs[l].resize(species_count * species_count * species_ranks[l]);
     }
 
@@ -506,7 +506,7 @@ void PairETN::prepare_columns() {
     int column = 0;
 
     radial_columns.resize(l_count);
-    for (int l = 0; l < l_count; l++) radial_columns[l] = column, column += (int) radial_coeffs[l].size();
+    for (int l = 0; l < l_count; l++) radial_columns[l] = column, column += (int) radial_basis_coeffs[l].size();
     species_pair_columns.resize(l_count);
     for (int l = 0; l < l_count; l++) species_pair_columns[l] = column, column += (int) species_pair_coeffs[l].size();
     core_columns.resize(core_count);
@@ -567,7 +567,7 @@ void PairETN::prepare_radial_mixing() {
     radial_mixing.resize(l_count);
     for (int l = 0; l < l_count; l++) {
         const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
-        const double* radial = radial_coeffs[l].data();
+        const double* radial = radial_basis_coeffs[l].data();
         std::vector<double>& mixing = radial_mixing[l];
         mixing.assign((size_t) species_count * species_count * n_rad * rank_r, 0.0);
 

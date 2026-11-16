@@ -4,7 +4,7 @@ import numpy
 import pytest
 
 from conftest import DATA, MTP_REFERENCE
-from otf_engine._core.calculator import PotentialCalculator
+from otf_engine._core.calculator import PairCalculator
 from otf_engine._core import FitStructure
 from otf_engine.train import MLP_ALGORITHM
 
@@ -39,7 +39,7 @@ def teacher_labelled(structures):
     for atoms in structures:
         copy = atoms.copy()
         copy.arrays["type_index"] = atoms.arrays["type_index"].copy()
-        copy.calc = PotentialCalculator(teacher)
+        copy.calc = PairCalculator(teacher)
         copy.calc.calculate(copy, ["energy", "forces", "stress"])
         relabelled += [copy]
     return relabelled

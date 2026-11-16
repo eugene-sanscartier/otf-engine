@@ -31,7 +31,7 @@ from tempfile import TemporaryDirectory
 
 import numpy
 
-from otf_engine._core import PotentialCalculator, read_potential
+from otf_engine._core import PairCalculator, read_potential
 from otf_engine._mtp import PairMTP
 from otf_engine.io_cfg import read_cfg
 from otf_engine.train import MLP_ALGORITHM
@@ -54,7 +54,7 @@ def extract_cfgs(cfg_path, n_structures, out_path):
 
 def rmse(potential_path, structures):
     """Energy RMSE per atom and force RMSE per component of the MTP or ETN in a file on structures."""
-    calc = PotentialCalculator(read_potential(str(potential_path)))
+    calc = PairCalculator(read_potential(str(potential_path)))
     e_err, f_err = [], []
     for atoms in structures:
         result = calc.potential.compute(calc.neighbors(atoms))

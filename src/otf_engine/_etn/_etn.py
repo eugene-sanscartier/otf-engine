@@ -5,7 +5,7 @@ from _core_ext's Pair.
 
     PairETN          energy, forces, virial, and each atom's input and bond vectors (a Pair)
     ETN              + derivatives of site energies and of a loss w.r.t. the coefficients
-    fit_etn        fits an ETN with ETNFit
+    fit_etn          fits an ETN with ETNFit
     real_harmonics   the real spherical harmonics the input vector is built on
     wigner_3j        3-j symbols of complex harmonics
     real_wigner_3j   3-j symbols of real harmonics, which the cores carry

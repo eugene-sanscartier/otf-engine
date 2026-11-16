@@ -72,9 +72,9 @@ def untrained(name, min_dist, species_count=3):
     return potential
 
 
-def split(cfg, n_train, n_test, seed):
-    """The training and test parts of the structures of *cfg*, drawn at random without overlap."""
-    with open(cfg) as f:
+def split(path, n_train, n_test, seed):
+    """The training and test parts of the structures of the .cfg file *path*, drawn at random without overlap."""
+    with open(path) as f:
         structures = read_cfg(f)
     order = numpy.random.default_rng(seed).permutation(len(structures))
     parts = [structures[i] for i in order[:n_train]], [structures[i] for i in order[n_train : n_train + n_test]]

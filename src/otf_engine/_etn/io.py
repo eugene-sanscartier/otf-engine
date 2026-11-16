@@ -37,7 +37,7 @@ def write_etn(potential, path):
 
         stream.write("radial_coeffs\n")
         for l in range(l_count):
-            stream.write("\t{" + format_floats(potential.get_radial_coeffs(l)) + "}\n")
+            stream.write("\t{" + format_floats(potential.get_radial_basis_coeffs(l)) + "}\n")
         stream.write("species_pair_coeffs\n")
         for l in range(l_count):
             stream.write("\t{" + format_floats(potential.get_species_pair_coeffs(l)) + "}\n")

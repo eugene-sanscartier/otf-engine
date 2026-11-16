@@ -16,7 +16,7 @@ from mpi4py import MPI
 from pykmc.manager import ManagerFactory
 
 from otf_engine import NestedLauncher, otf_pool
-from otf_engine._core import PotentialCalculator
+from otf_engine._core import PairCalculator
 from otf_engine._mtp import MTP
 from otf_engine.otf_cycle import OTFCycle
 
@@ -34,12 +34,12 @@ numpy.save("mpi_grades.npy", grades)
 candidates = [graded[i] for i in numpy.argsort(grades)[::-1][:candidate_count]]
 selected = manager.global_select_add(potential_path="mpi_updated.almtp", training_set_path="train.cfg", candidates=candidates, species=species)
 numpy.save("mpi_selected.npy", [next(i for i, c in enumerate(candidates) if numpy.array_equal(c.positions, s.positions)) for s in selected])
-manager.global_train_potential(potential_path="potential.almtp", training_set_path="train.cfg", save_path="mpi.almtp", species=species, settings={"iteration_limit": iterations, "log": "mpi_train.log"})
+manager.global_train_potential(potential_path="potential.almtp", training_set_path="train.cfg", save_path="mpi.almtp", species=species, options={"iteration_limit": iterations, "log": "mpi_train.log"})
 
 
 def evaluator(structure):
     atoms = structure.copy()
-    atoms.calc = PotentialCalculator(MTP("potential.almtp"))
+    atoms.calc = PairCalculator(MTP("potential.almtp"))
     results = dict(energy=atoms.get_potential_energy(), forces=atoms.get_forces(), stress=atoms.get_stress())
     atoms.calc = SinglePointCalculator(atoms, **results)
     return atoms

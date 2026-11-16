@@ -195,7 +195,7 @@ void ETN::scatter_mixing_adj(double* grad) const {
     const int l_count = (int) species_ranks.size();
     for (int l = 0; l < l_count; l++) {
         const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
-        const double* radial = radial_coeffs[l].data();
+        const double* radial = radial_basis_coeffs[l].data();
         for (int pair = 0; pair < species_count * species_count; pair++) {
             const double* a = species_pair_coeffs[l].data() + pair * rank_s;
             const double* s_adj = mixing_adj[l].data() + (size_t) pair * n_rad * rank_r;

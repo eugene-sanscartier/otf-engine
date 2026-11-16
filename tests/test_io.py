@@ -115,13 +115,13 @@ def test_neighbors_against_ase(case, structures):
 
 
 def test_calculator_stress(structures):
-    """PotentialCalculator's stress, ASE's convention, matches the numerical derivative of the energy under strain."""
+    """PairCalculator's stress, ASE's convention, matches the numerical derivative of the energy under strain."""
     from ase.calculators.fd import calculate_numerical_stress
 
-    from otf_engine._core.calculator import PotentialCalculator
+    from otf_engine._core.calculator import PairCalculator
     from otf_engine._mtp import PairMTP
 
     atoms = structures[1].copy()
     atoms.arrays["type_index"] = structures[1].arrays["type_index"]
-    atoms.calc = PotentialCalculator(PairMTP(str(MTP_REFERENCE / "potential-16.mtp")))
+    atoms.calc = PairCalculator(PairMTP(str(MTP_REFERENCE / "potential-16.mtp")))
     numpy.testing.assert_allclose(atoms.get_stress(), calculate_numerical_stress(atoms, eps=1e-6), rtol=1e-5, atol=1e-8)

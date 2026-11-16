@@ -74,7 +74,7 @@ Equations Equations::subset(const bool* keep) const {
 // ---------------------------------------------------------------------------
 
 MaxVol::MaxVol(int n, double init_scale, double threshold, std::optional<double> threshold_swap)
-    : n(n), threshold(threshold), threshold_swap(threshold_swap), A((size_t) n * n, 0.0), invA((size_t) n * n, 0.0), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {
+    : n(n), threshold(threshold), threshold_swap(threshold_swap), A((size_t) n * n, 0.0), invA((size_t) n * n, 0.0), active_pool_ids(n, -1), active_structure_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {
     for (int k = 0; k < n; k++) {
         A[(size_t) k * n + k] = init_scale;
         invA[(size_t) k * n + k] = 1.0 / init_scale;
@@ -82,7 +82,7 @@ MaxVol::MaxVol(int n, double init_scale, double threshold, std::optional<double>
 }
 
 MaxVol::MaxVol(int n, const double* A, const double* invA, double threshold, std::optional<double> threshold_swap)
-    : n(n), threshold(threshold), threshold_swap(threshold_swap), A(A, A + (size_t) n * n), invA(invA, invA + (size_t) n * n), active_pool_ids(n, -1), active_struct_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {}
+    : n(n), threshold(threshold), threshold_swap(threshold_swap), A(A, A + (size_t) n * n), invA(invA, invA + (size_t) n * n), active_pool_ids(n, -1), active_structure_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {}
 
 void MaxVol::grade(const double* rows, int count, double* grades) {
     using RowMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
@@ -111,7 +111,7 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_s
 
     // The pool rows each swap overwrote, to put back when the search ends
     struct Replaced {
-        int row, struct_index, eqn_index;
+        int row, structure_index, eqn_index;
         std::vector<double> grad;
     };
     std::vector<Replaced> replaced;
@@ -151,34 +151,34 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_s
         comm.bcast(v.data(), n, owner);
         comm.bcast(provenance, 3, owner);
 
-        int displaced_pool_id, displaced_struct_index, displaced_eqn_index;
-        if (!try_swap(v.data(), bound, provenance[0], provenance[1], provenance[2], displaced.data(), displaced_pool_id, displaced_struct_index, displaced_eqn_index)) break;
+        int displaced_pool_id, displaced_structure_index, displaced_eqn_index;
+        if (!try_swap(v.data(), bound, provenance[0], provenance[1], provenance[2], displaced.data(), displaced_pool_id, displaced_structure_index, displaced_eqn_index)) break;
         if (!mine) continue;
 
         double* row = &pool.grads[(size_t) best * n];
         replaced.push_back({best, pool.structure_indices[best], pool.equation_indices[best], std::vector<double>(row, row + n)});
         std::copy(displaced.begin(), displaced.end(), row);
         pool_ids[best] = displaced_pool_id;
-        pool.structure_indices[best] = displaced_struct_index;
+        pool.structure_indices[best] = displaced_structure_index;
         pool.equation_indices[best] = displaced_eqn_index;
     }
 
     for (auto it = replaced.rbegin(); it != replaced.rend(); ++it) {
         std::copy(it->grad.begin(), it->grad.end(), &pool.grads[(size_t) it->row * n]);
-        pool.structure_indices[it->row] = it->struct_index;
+        pool.structure_indices[it->row] = it->structure_index;
         pool.equation_indices[it->row] = it->eqn_index;
     }
 }
 
-void MaxVol::restore_active(const int* cfg_indices, const int* eqn_indices, int pool_id) {
+void MaxVol::restore_active(const int* structure_indices, const int* eqn_indices, int pool_id) {
     for (int k = 0; k < n; k++) {
-        active_pool_ids[k] = cfg_indices[k] >= 0 ? pool_id : -1;
-        active_struct_indices[k] = cfg_indices[k];
+        active_pool_ids[k] = structure_indices[k] >= 0 ? pool_id : -1;
+        active_structure_indices[k] = structure_indices[k];
         active_eqn_indices[k] = eqn_indices[k];
     }
 }
 
-bool MaxVol::try_swap(const double* v, double bound, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index) {
+bool MaxVol::try_swap(const double* v, double bound, int pool_id, int structure_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_structure_index, int& displaced_eqn_index) {
     // w = invA v, the grade elements; row k of A is the one v replaces
     for (int i = 0; i < n; i++) {
         double s = 0.0;
@@ -204,11 +204,11 @@ bool MaxVol::try_swap(const double* v, double bound, int pool_id, int struct_ind
 
     std::copy_n(&A[(size_t) k * n], n, displaced);
     displaced_pool_id = active_pool_ids[k];
-    displaced_struct_index = active_struct_indices[k];
+    displaced_structure_index = active_structure_indices[k];
     displaced_eqn_index = active_eqn_indices[k];
     std::copy_n(v, n, &A[(size_t) k * n]);
     active_pool_ids[k] = pool_id;
-    active_struct_indices[k] = struct_index;
+    active_structure_indices[k] = structure_index;
     active_eqn_indices[k] = eqn_index;
     return true;
 }

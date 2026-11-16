@@ -49,8 +49,8 @@ def selection_equations(potential: Pair, structures: list, weights: dict, comm=N
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
     cutoff = potential.get_max_cutoff()
     eqns = Equations(potential.get_coeff_count(), **weights)
-    for number in range(rank, len(structures), size):
-        eqns.add(potential, neighbors(structures[number], cutoff), number)
+    for index in range(rank, len(structures), size):
+        eqns.add(potential, neighbors(structures[index], cutoff), index)
     return eqns
 
 
@@ -97,21 +97,21 @@ def calculate_grade(potential_path: str, structures: list, weights: dict | None 
 
     for i, atoms in enumerate(structures):
         grades = active_set.grade(selection_equations(potential, [atoms], weights))
-        cfg_grade = float(grades.max())
+        structure_grade = float(grades.max())
 
         # Per-atom grades come from the site-energy equations, which come last.
         n_atoms = len(atoms)
         if site_en_w and len(grades) >= n_atoms:
             per_atom = grades[-n_atoms:]
-            cfg_grade = float(per_atom.max())
+            structure_grade = float(per_atom.max())
         else:
-            # No site-energy equations: assign cfg_grade uniformly
-            per_atom = numpy.full(n_atoms, cfg_grade)
+            # No site-energy equations: assign structure_grade uniformly
+            per_atom = numpy.full(n_atoms, structure_grade)
 
         atoms.arrays["nbh_grades"] = per_atom.astype(float64)
-        atoms.info.setdefault("features", {})["MV_grade"] = cfg_grade
+        atoms.info.setdefault("features", {})["MV_grade"] = structure_grade
 
-        logger.info(f"  structure[{i}]: extrapolation grade (gamma) = {cfg_grade:.4f}")
+        logger.info(f"  structure[{i}]: extrapolation grade (gamma) = {structure_grade:.4f}")
 
     return structures
 
@@ -176,7 +176,7 @@ def select_add(potential_path: str, training_set: list, candidates: list, thresh
     mv.maximize_volume(cand_eqns, pool_id=_POOL_CAND, comm=comm)
     if potential.retrain_pass: mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
 
-    active_indices = sorted({int(structure_index) for active_pool_id, structure_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(structure_index) >= 0})
+    active_indices = sorted({int(structure_index) for active_pool_id, structure_index in zip(mv.active_pool_ids, mv.active_structure_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(structure_index) >= 0})
     selected = [candidates[i] for i in active_indices]
 
     # Each selected structure's grade against the active set before the candidates entered it
@@ -221,8 +221,8 @@ def converge_active_set(potential: Pair, training_set: list, weights: dict, thre
     if saved is not None:
         def key(atoms): return species_indices(atoms).tobytes(), (numpy.round(atoms.cell[:], 6) + 0.0).tobytes(), (numpy.round(atoms.positions, 6) + 0.0).tobytes()
         index_of = {key(atoms): i for i, atoms in enumerate(training_set)}
-        match = [index_of.get(key(cfg)) for cfg in stored_structures]
-        saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_struct_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
+        match = [index_of.get(key(structure)) for structure in stored_structures]
+        saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_structure_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
     active_set = MaxVol(potential.get_coeff_count(), threshold=threshold, threshold_swap=potential.threshold_swap)

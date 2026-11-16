@@ -79,7 +79,7 @@ class MaxVol {
     void maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_swaps = 99999);
 
     // Provenance of each active equation, from indices saved beside A.
-    void restore_active(const int* cfg_indices, const int* eqn_indices, int pool_id);
+    void restore_active(const int* structure_indices, const int* eqn_indices, int pool_id);
 
     const int n;
     double threshold;
@@ -88,13 +88,13 @@ class MaxVol {
     std::optional<double> threshold_swap;
     std::vector<double> A, invA;                // [n * n] row k of A is active equation k
     std::vector<int> active_pool_ids;           // [n] -1 where row k is still init_scale * e_k
-    std::vector<int> active_struct_indices;     // [n]
+    std::vector<int> active_structure_indices;     // [n]
     std::vector<int> active_eqn_indices;        // [n]
 
   private:
     // UpdateInvA: swaps v into the row of A it grades highest against, when that grade exceeds bound,
     // by a rank-1 update of invA; the displaced row goes to displaced [n].
-    bool try_swap(const double* v, double bound, int pool_id, int struct_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_struct_index, int& displaced_eqn_index);
+    bool try_swap(const double* v, double bound, int pool_id, int structure_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_structure_index, int& displaced_eqn_index);
 
     std::vector<double> w, dv, buf3, row_k;     // [n] try_swap's
     std::vector<double> block;                  // [grade_block_rows * n] grade's product block

@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy
 from ase import Atoms
 
-from otf_engine._core.calculator import PotentialCalculator
+from otf_engine._core.calculator import PairCalculator
 from otf_engine._mtp import PairMTP, write_mtp
 from otf_engine.io_cfg import write_cfg
 from otf_engine._core import FitStructure
@@ -47,7 +47,7 @@ def random_cell(rng, n_atoms, species):
 def labelled(atoms, teacher, stress=True):
     """atoms with the teacher's forces, stress and energy, the energy less the teacher's species energies: a cohesive
     energy of a few eV per atom, which an untrained potential starts nearer to than the reference code's absolute one."""
-    atoms.calc = PotentialCalculator(teacher)
+    atoms.calc = PairCalculator(teacher)
     properties = ["energy", "forces"] + (["stress"] if stress else [])
     atoms.calc.calculate(atoms, properties)
     results = {key: atoms.calc.results[key] for key in properties}

@@ -50,12 +50,12 @@ def fit(potential_path: str, structures, options: dict, checkpoint=None, ranks: 
     return trained
 
 
-def train(potential_path: str, training_set: list, save_path: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None) -> None:
+def train(potential_path: str, training_set: list, save_path: str, options: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None) -> None:
     """Train the potential in *potential_path* on *training_set* with MTPFit or ETNFit, and write it with an active set to the file *save_path*.
 
     The potential may be untrained; it gains the species of *training_set* it lacks.
 
-    settings : the fit's options without the leading "--", e.g. {"iteration_limit": 300, "skip_preinit": True}:
+    options  : the fit's options without the leading "--", e.g. {"iteration_limit": 300, "skip_preinit": True}:
                `mlp train`'s; for an MTP, also the fit's own, MLP_ALGORITHM for mlp's algorithm; for an ETN, mlip-4's
                training settings mlp lacks; and "species", the species' names for the log's error tables, comma-separated
     ranks    : threads; defaults to the CPUs this process may run on. The fit depends on it only through rounding.
@@ -70,7 +70,7 @@ def train(potential_path: str, training_set: list, save_path: str, settings: dic
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
     structures = (FitStructure(training_set[i], cutoff, i + 1) for i in range(rank, len(training_set), size))
-    options = {key: str(value) for key, value in (settings or {}).items()}
+    options = {key: str(value) for key, value in (options or {}).items()}
     potential = fit(potential_path, structures, options, checkpoint=lambda potential: potential.write(save_path), ranks=ranks, comm=comm)
 
     # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with
@@ -101,7 +101,7 @@ def main(argv=None):
 
     with open(training_set_path) as f:
         training_set = read_cfg(f)
-    train(potential_path, training_set, save_path, settings=options, ranks=ranks, al_mode=al_mode)
+    train(potential_path, training_set, save_path, options=options, ranks=ranks, al_mode=al_mode)
     logger.info("training complete")
 
 

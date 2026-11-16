@@ -25,7 +25,7 @@ def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, i
         species = {v: k for k, v in species.items()}
 
     lines = collections.deque(fileobj.readlines())
-    images = []
+    structures = []
     while lines:
         line = lines.popleft()
         if line.strip() == "BEGIN_CFG":
@@ -95,15 +95,15 @@ def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, i
             if features:
                 atoms.info["features"] = features
 
-            images += [atoms]
+            structures += [atoms]
 
-    return images
+    return structures
 
 
-def write_cfg(fileobj: IO[str], images: list[ase.Atoms]):
+def write_cfg(fileobj: IO[str], structures: list[ase.Atoms]):
     output = []
 
-    for atoms in images:
+    for atoms in structures:
         output += ["BEGIN_CFG"]
         output += [" Size"]
         output += [f"{len(atoms):9d}"]

@@ -40,7 +40,7 @@ def coeff_blocks(potential):
 
 def get_block(potential, kind, arg):
     """A coefficient block of potential, flat in mlip-4's params order."""
-    block = {"radial": lambda: potential.get_radial_coeffs(arg), "species_pair": lambda: potential.get_species_pair_coeffs(arg),
+    block = {"radial": lambda: potential.get_radial_basis_coeffs(arg), "species_pair": lambda: potential.get_species_pair_coeffs(arg),
              "core": lambda: potential.get_core_coeffs(*arg), "species": potential.get_species_coeffs}[kind]()
     return numpy.ravel(block)
 
@@ -58,7 +58,7 @@ def set_params(potential, values):
         block = values[offset : offset + size]
         offset += size
         if kind == "radial":
-            potential.set_radial_coeffs(arg, block)
+            potential.set_radial_basis_coeffs(arg, block)
         elif kind == "species_pair":
             potential.set_species_pair_coeffs(arg, block)
         elif kind == "core":
