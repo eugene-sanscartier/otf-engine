@@ -87,6 +87,13 @@ class Trainer {
         if (log) *log << table;
     }
 
+    // Hands the potential at coeffs to checkpoint, on the rank given one.
+    void save_checkpoint() {
+        if (!checkpoint) return;
+        potential.set_coeffs(coeffs.data());
+        checkpoint();
+    }
+
     Potential& potential;
     std::vector<Sample> structures;
     Options options;

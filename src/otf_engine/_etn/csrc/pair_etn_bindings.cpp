@@ -7,15 +7,10 @@
 
 // --- the computation of the ETN --------------------------------------------
 
-// potential_results, plus "inputs" (inum, input size) and "bonds" and "bonds_im",
+// compute_results, plus "inputs" (inum, input size) and "bonds" and "bonds_im",
 // one (inum, bond size) array per bond.
 static py::dict compute(PairETN& self, const PyNeighbors& nb) {
-    {
-        py::gil_scoped_release unlocked;
-        self.compute(nb.view());
-    }
-
-    py::dict result = potential_results(self, nb.n_atoms());
+    py::dict result = compute_results(self, nb);
     const int inum = nb.inum();
     result["inputs"] = to_array(self.get_inputs(), {inum, self.get_input_shape().size});
 

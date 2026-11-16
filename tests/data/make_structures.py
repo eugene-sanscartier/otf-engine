@@ -90,7 +90,7 @@ def main():
         two_species += [renamed]
     template = DATA / "template-08-r4.almtp"
     template.write_text((DATA.parent / "mtp_reference" / "template-08.almtp").read_text().replace("radial_basis_size = 8", "radial_basis_size = 4"))
-    potential = fit(str(template), [Sample(atoms, 5.0, k) for k, atoms in enumerate(two_species)], {"iteration_limit": "10", "skip_preinit": "true", "random_seed": "1", "log": "none"}, ranks=1, balance_species=False)
+    potential = fit(str(template), [Sample(atoms, 5.0, k) for k, atoms in enumerate(two_species)], {"iteration_limit": "10", "skip_preinit": "true", "random_seed": "1", "log": "none", "balance_species": "false"}, ranks=1)
     template.unlink()
     write_mtp(potential, str(DATA / "two-species-08.mtp"))
 

@@ -196,10 +196,7 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
 
             if (log) *log << '\n';
 
-            if (checkpoint) {
-                potential.set_coeffs(coeffs.data());
-                checkpoint();
-            }
+            save_checkpoint();
         }
 
         // The step that met a stopping rule is dropped

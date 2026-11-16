@@ -72,7 +72,7 @@ class MTPTrainer : public Trainer<MTP, MTPTrainerOptions> {
     void fit_riemannian(int max_iter);
     void fit_linear(bool orthonormalize = true);
     void assemble_linear();
-    void solve_linear(int structure_count);
+    void solve_linear();
     void broadcast_linear();
     void rescale();
 

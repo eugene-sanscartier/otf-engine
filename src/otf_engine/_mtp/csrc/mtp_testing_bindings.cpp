@@ -14,14 +14,10 @@ void add_option_fields(MTPTrainerOptions& o, OptionFields& fields);    // mtp_tr
 // An MTPTrainer on one thread, whose stages the tests call in any order.
 class MTPTrainerStages {
   public:
-    MTPTrainerStages(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, bool balance_species) : potential(filename), process("MTPTrainerStages", 1, py::none()) {
+    MTPTrainerStages(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options) : potential(filename), process("MTPTrainerStages", 1, py::none()) {
         std::string log_target;
-        MTPTrainerOptions o = parse_options<MTPTrainerOptions>("MTPTrainerStages", options, log_target);
-        o.balance_species = balance_species;
-        std::vector<Sample> share;
-        for (py::handle item : structures)
-            share.push_back(item.cast<Sample>());
-        trainer = std::make_unique<MTPTrainer>(potential, std::move(share), o, process[0], &log);
+        const MTPTrainerOptions o = parse_options<MTPTrainerOptions>("MTPTrainerStages", options, log_target);
+        trainer = std::make_unique<MTPTrainer>(potential, std::move(split_structures(structures, 1)[0]), o, process[0], &log);
     }
 
     void add_species() { trainer->add_species(); }
@@ -94,15 +90,11 @@ static py::tuple bfgs_rosenbrock(int n, int steps) {
 }
 
 // The trainer's objective and its gradient at coeffs, with the structures dealt round-robin over `ranks` threads.
-static py::tuple objective_on_threads(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, const std::vector<double>& coeffs, int ranks, bool balance_species) {
+static py::tuple objective_on_threads(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, const std::vector<double>& coeffs, int ranks) {
     std::string log_target;
-    MTPTrainerOptions o = parse_options<MTPTrainerOptions>("objective_on_threads", options, log_target);
-    o.balance_species = balance_species;
+    const MTPTrainerOptions o = parse_options<MTPTrainerOptions>("objective_on_threads", options, log_target);
     ProcessRanks process("objective_on_threads", ranks, py::none());
-    std::vector<std::vector<Sample>> shares(ranks);
-    int count = 0;
-    for (py::handle item : structures)
-        shares[count++ % ranks].push_back(item.cast<Sample>());
+    std::vector<std::vector<Sample>> shares = split_structures(structures, ranks);
 
     double loss = 0.0;
     std::vector<double> grad;
@@ -124,7 +116,7 @@ PYBIND11_MODULE(_mtp_testing, m) {
     py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTP and Sample
 
     py::class_<MTPTrainerStages>(m, "MTPTrainerStages")
-        .def(py::init<const std::string&, py::iterable, const std::map<std::string, std::string>&, bool>(), py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("balance_species") = false)
+        .def(py::init<const std::string&, py::iterable, const std::map<std::string, std::string>&>(), py::arg("filename"), py::arg("structures"), py::arg("options"))
         .def("add_species", &MTPTrainerStages::add_species)
         .def("update_min_dist", &MTPTrainerStages::update_min_dist)
         .def("orthogonalize", &MTPTrainerStages::orthogonalize)
@@ -142,5 +134,5 @@ PYBIND11_MODULE(_mtp_testing, m) {
         .def_property_readonly("potential", [](MTPTrainerStages& s) -> MTP& { return s.potential; }, py::return_value_policy::reference_internal);
 
     m.def("bfgs_rosenbrock", &bfgs_rosenbrock, py::arg("n"), py::arg("steps"));
-    m.def("objective_on_threads", &objective_on_threads, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("ranks"), py::arg("balance_species") = false);
+    m.def("objective_on_threads", &objective_on_threads, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("ranks"));
 }

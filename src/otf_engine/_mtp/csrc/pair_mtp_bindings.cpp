@@ -8,11 +8,7 @@
 // --- ported from PairMTP --------------------------------------------------
 
 static py::dict compute(PairMTP& self, const PyNeighbors& nb) {
-    {
-        py::gil_scoped_release unlocked;
-        self.compute(nb.view());
-    }
-    return potential_results(self, nb.n_atoms());
+    return compute_results(self, nb);
 }
 
 void bind_pair_mtp(py::module_& m) {

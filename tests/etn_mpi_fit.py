@@ -18,5 +18,5 @@ from otf_engine.train import fit    # noqa: E402
 name, workdir = sys.argv[1], Path(sys.argv[2])
 comm = MPI.COMM_WORLD
 path, settings, labelled = case_inputs(name, read_structures("structures.cfg"), workdir)
-trained = fit(str(path), [s for _, s in labelled[comm.Get_rank() :: comm.Get_size()]], trainer_options(settings, str(workdir / f"{name}.log")), comm=comm, balance_species=False)
+trained = fit(str(path), [s for _, s in labelled[comm.Get_rank() :: comm.Get_size()]], trainer_options(settings, str(workdir / f"{name}.log")), comm=comm)
 if comm.Get_rank() == 0: numpy.save(workdir / f"{name}-coeffs.npy", trained.get_coeffs())

@@ -163,13 +163,13 @@ def test_inverse_hessian_resumes(structures):
     n = len(stages(TEACHER, structures).coeffs)
 
     hessian = numpy.zeros((n, n))
-    whole = train_mtp(str(TEACHER), data, {**options, "iteration_limit": "10"}, 1, inverse_hessian=hessian, balance_species=False)
+    whole = train_mtp(str(TEACHER), data, {**options, "iteration_limit": "10"}, 1, inverse_hessian=hessian)
 
     hessian = numpy.zeros((n, n))
-    first = train_mtp(str(TEACHER), data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian, balance_species=False)
+    first = train_mtp(str(TEACHER), data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian)
     with tempfile.TemporaryDirectory() as work:
         write_mtp(first, f"{work}/first.mtp")
-        second = train_mtp(f"{work}/first.mtp", data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian, balance_species=False)
+        second = train_mtp(f"{work}/first.mtp", data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian)
 
     numpy.testing.assert_allclose(second.get_coeffs(), whole.get_coeffs(), rtol=0, atol=1e-12 * numpy.max(numpy.abs(whole.get_coeffs())))
 

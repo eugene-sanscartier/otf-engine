@@ -80,7 +80,7 @@ def main():
             training.write_training_file(training_file, untrained, labelled, settings)
             options = training.trainer_options(settings, "none")
             start = time.perf_counter()
-            train_etn(str(template), [s for _, s in labelled], options, 1, balance_species=False)
+            train_etn(str(template), [s for _, s in labelled], options, 1)
             ours_train = time.perf_counter() - start
             times = []
             for jit in (False, True):

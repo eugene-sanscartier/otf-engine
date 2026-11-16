@@ -166,9 +166,7 @@ MTP and ETN only.
                   py::arg("dloss_denergy"), py::arg("dloss_dforces") = py::none(), py::arg("dloss_dvirial") = py::none());
 
     m.def("error_table", [](Pair& potential, py::iterable structures, const std::vector<std::string>& species, const std::string& title) {
-        std::vector<Sample> share;
-        for (py::handle item : structures)
-            share.push_back(item.cast<Sample>());
+        std::vector<Sample> share = std::move(split_structures(structures, 1)[0]);
         ProcessRanks process("error_table", 1, py::none());
         py::gil_scoped_release unlocked;
         return error_table(potential, share, species, process[0], title);

@@ -91,12 +91,17 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
     return a;
 }
 
-// The results Pair::compute leaves in the potential, copied out:
+// Runs self.compute on nb with the GIL released, and copies out the results it leaves in the potential:
 // "energy", "forces" (n_atoms, 3), "virials" (6) and "eatom" (n_atoms).
-inline py::dict potential_results(const Pair& self, int n_atoms) {
+inline py::dict compute_results(Pair& self, const PyNeighbors& nb) {
+    {
+        py::gil_scoped_release unlocked;
+        self.compute(nb.view());
+    }
+
     py::dict result;
     result["energy"] = self.get_energy();
-    result["forces"] = to_array(self.get_forces(), {n_atoms, 3});
+    result["forces"] = to_array(self.get_forces(), {nb.n_atoms(), 3});
     result["virials"] = DoubleArray({6}, self.get_virial().data());
     result["eatom"] = to_array(self.get_eatom());
     return result;
@@ -116,6 +121,15 @@ inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     if (file) return &file;
     log_warning("cannot open the trainer's log '" + target + "', training without it");
     return nullptr;
+}
+
+// structures, an iterable of Sample, split round-robin into rank_count shares, as mlp's MPI_LoadCfgs deals a file.
+inline std::vector<std::vector<Sample>> split_structures(py::iterable structures, int rank_count) {
+    std::vector<std::vector<Sample>> shares(rank_count);
+    int k = 0;
+    for (py::handle item : structures)
+        shares[k++ % rank_count].push_back(item.cast<Sample>());
+    return shares;
 }
 
 // The ranks this process runs: `ranks` threads of a group of their own, or, given an mpi4py communicator comm, its
@@ -226,11 +240,11 @@ struct OptionFields {
 };
 
 // A trainer's options from strings, as name (train_mtp, train_etn) takes them: log, the log target, into log;
-// species, the species' names, comma-separated; the weights; and the fields add_option_fields(o, fields) adds.
+// species, the species' names, comma-separated; the weights; balance_species; and the fields add_option_fields(o, fields) adds.
 template <class Options>
 Options parse_options(const char* name, const std::map<std::string, std::string>& options, std::string& log) {
     Options o;
-    OptionFields fields{{{"energy_weight", &o.energy_weight}, {"force_weight", &o.force_weight}, {"stress_weight", &o.stress_weight}}, {}, {}};
+    OptionFields fields{{{"energy_weight", &o.energy_weight}, {"force_weight", &o.force_weight}, {"stress_weight", &o.stress_weight}}, {}, {{"balance_species", &o.balance_species}}};
     add_option_fields(o, fields);
 
     for (const auto& [key, value] : options) {
@@ -258,22 +272,16 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
 }
 
 // Trains the potential in filename with TrainerT over the ranks of this process, and returns it. Under MPI every
-// process calls it with its share of the structures; on threads they are dealt round-robin, as mlp's MPI_LoadCfgs
-// deals a file. make_options gives the options and sets the log target, which rank 0 writes. Rank 0 trains the
-// potential it returns and hands it to checkpoint, whose first failure is a warning and ends checkpointing.
-// name (train_mtp, train_etn) prefixes the errors.
+// process calls it with its share of the structures; on threads they are dealt over the ranks. Rank 0 writes the
+// log to log_target, trains the potential it returns and hands it to checkpoint, whose first failure is a warning
+// and ends checkpointing. name (train_mtp, train_etn) prefixes the errors.
 template <class TrainerT>
-py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const std::function<typename TrainerT::Options(std::string&)>& make_options, int ranks, py::object comm, py::object checkpoint) {
+py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const typename TrainerT::Options& options, const std::string& log_target, int ranks, py::object comm, py::object checkpoint) {
     using Potential = typename TrainerT::Potential;
     ProcessRanks process(name, ranks, comm);
     const bool holds_rank0 = process[0].rank() == 0;
 
-    std::string log_target = "stdout";
-    const typename TrainerT::Options options = make_options(log_target);
-    std::vector<std::vector<Sample>> shares(process.count());
-    int count = 0;
-    for (py::handle item : structures)
-        shares[count++ % process.count()].push_back(item.cast<Sample>());
+    std::vector<std::vector<Sample>> shares = split_structures(structures, process.count());
     std::ofstream log_file;
     std::ostream* log = holds_rank0 ? open_log(log_target, log_file) : nullptr;
     py::object potential = py::cast(std::make_unique<Potential>(filename));

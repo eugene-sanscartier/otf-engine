@@ -258,10 +258,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
                 }
             }
 
-            if (rank == 0 && checkpoint) {
-                potential.set_coeffs(coeffs.data());
-                checkpoint();
-            }
+            save_checkpoint();
         }
 
         if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
@@ -416,10 +413,7 @@ void MTPTrainer::fit_riemannian(int max_iter) {
             std::snprintf(line + length, sizeof line - length, "  %.1e", std::sqrt(violation));
             *log << line << std::endl;
         }
-        if (rank == 0 && checkpoint) {
-            potential.set_coeffs(coeffs.data());
-            checkpoint();
-        }
+        save_checkpoint();
 
         if (num_step >= max_iter) {
             if (log) *log << "step limit reached" << std::endl;
@@ -519,7 +513,7 @@ void MTPTrainer::fit_linear(bool orthonormalize) {
     if (orthonormalize) orthogonalize();
     potential.set_coeffs(coeffs.data());
     assemble_linear();
-    if (rank == 0) solve_linear(structure_count);
+    if (rank == 0) solve_linear();
     broadcast_linear();
 }
 
@@ -611,7 +605,7 @@ void MTPTrainer::broadcast_linear() {
 
 // Regularizes the upper triangle held in lin_matrix and solves it into the
 // linear coefficients, by Gaussian elimination without row swaps.
-void MTPTrainer::solve_linear(int ts_size) {
+void MTPTrainer::solve_linear() {
     const int n = n_linear;
     double* A = lin_matrix.data();
     double* b = lin_vector.data();
@@ -628,7 +622,7 @@ void MTPTrainer::solve_linear(int ts_size) {
     if (options.reg_once && reg_built) reg_init = false;
     if (!reg_init && !options.reg_once)
         for (int i = 0; i < n; i++)
-            if (reg_vector[i] < 1e-2 * options.reg_param * std::max(1.0, A[i * n + i]) / ts_size || reg_vector[i] > 1e2 * options.reg_param * std::max(1.0, A[i * n + i]) / ts_size) {
+            if (reg_vector[i] < 1e-2 * options.reg_param * std::max(1.0, A[i * n + i]) / structure_count || reg_vector[i] > 1e2 * options.reg_param * std::max(1.0, A[i * n + i]) / structure_count) {
                 reg_init = true;
                 if (log) *log << "Regularization parameters updated. Hessian in BFGS is reset" << std::endl;
                 break;
@@ -636,12 +630,12 @@ void MTPTrainer::solve_linear(int ts_size) {
 
     if (reg_init) {
         for (int i = 0; i < n; i++)
-            reg_vector[i] = options.reg_param * std::max(1.0, A[i * n + i]) / ts_size;
+            reg_vector[i] = options.reg_param * std::max(1.0, A[i * n + i]) / structure_count;
         reg_built = true;
     }
 
     for (int i = 0; i < n; i++)
-        A[i * n + i] += reg_vector[i] * ts_size;
+        A[i * n + i] += reg_vector[i] * structure_count;
 
     for (int i = 0; i < n - 1; i++) {
         const double m_ii = A[i * n + i];
@@ -709,7 +703,7 @@ void MTPTrainer::rescale() {
                 for (int j = i; j < n; j++)
                     lin_matrix[i * n + j] = assembled_matrix[i * n + j] * factors[i] * factors[j];
             }
-            solve_linear(structure_count);
+            solve_linear();
         }
         broadcast_linear();
     };

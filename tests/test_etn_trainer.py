@@ -64,10 +64,10 @@ def parse_log(text):
 
 def trainer_options(settings, log):
     """mlip-4's *settings* and the weights as train_etn takes them: strings, under mlp's names where mlp has the
-    setting, pretrain inverted as skip_preinit, and the log target."""
+    setting, pretrain inverted as skip_preinit, and the log target, without balance_species, which mlip-4 lacks."""
     options = {MLP_NAMES.get(key, key): str(value) for key, value in dict(settings, **WEIGHTS).items() if key != "pretrain"}
     options["skip_preinit"] = str(not settings["pretrain"])
-    return options | {"log": log}
+    return options | {"log": log, "balance_species": "false"}
 
 
 def case_inputs(name, structures, workdir):
@@ -149,7 +149,7 @@ def test_fit(name, structures, stored, tmp_path):
         trained = ETN(str(path))
         trained.set_coeffs(numpy.load(tmp_path / f"{name}-coeffs.npy"))
     else:
-        trained = train_etn(str(path), [s for _, s in labelled], trainer_options(settings, str(log_file)), len(labelled) if ranks == "threads" else 1, balance_species=False)
+        trained = train_etn(str(path), [s for _, s in labelled], trainer_options(settings, str(log_file)), len(labelled) if ranks == "threads" else 1)
 
     counts = list(stored[f"{reference}/counts"][:steps])
     b = stored[f"{reference}/losses"][: sum(counts)]
