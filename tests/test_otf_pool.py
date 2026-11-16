@@ -30,7 +30,7 @@ pytest.importorskip("pykmc")
 
 SPECIES = ["Ni", "Si"]
 RANKS, SESSION_SIZE, ITERATIONS, CANDIDATES = 4, 2, 2, 4
-LOSS_LINE = re.compile(r"(?:BFGS|Riemann) iter +(\d+): +(?:f=)?(\S+)")    # the trainer's logged losses
+LOSS_LINE = re.compile(r"(?:BFGS|Riemann) iter +(\d+): +(?:f=)?(\S+)")    # the fit's logged losses
 
 
 def write_dump(path, frames):

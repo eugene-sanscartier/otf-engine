@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   mlip-4's Train on an ETN, for tests/test_etn_trainer.py.
+   mlip-4's Train on an ETN, for tests/test_etn_fit.py.
 
-   Reads a training file (written by test_etn_trainer.py) holding the
+   Reads a training file (written by test_etn_fit.py) holding the
    ETN's shape and params, the loss weights, mlip-4's training settings and
    the structures with their reference energy, virial (when given) and
    forces; builds

@@ -1,10 +1,10 @@
 /* -*- c++ -*- ----------------------------------------------------------
    Fits an MTP to reference energies, forces and stresses.
-   Algorithm of mlip-3's `mlp train`; see mtp_trainer.h.
+   Algorithm of mlip-3's `mlp train`; see mtp_fit.h.
    Copyright (c) 2023, Alexander Shapeev (Skoltech). BSD 2-Clause, see LICENSE.mlip-3.
 ------------------------------------------------------------------------- */
 
-#include "mtp_trainer.h"
+#include "mtp_fit.h"
 
 #include <Eigen/Dense>
 
@@ -23,8 +23,8 @@ static bool linear_fit_step(int step) {
     return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
 }
 
-MTPTrainer::MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
-    : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
+MTPFit::MTPFit(MTP& potential, std::vector<Sample> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+    : Fit(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
     n_radial = potential.get_radial_coeff_count();
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();
     reg_vector.assign(n_linear, options.reg_param);
@@ -46,7 +46,7 @@ MTPTrainer::MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTP
 }
 
 /* ---------------------------------------------------------------------- */
-void MTPTrainer::train() {
+void MTPFit::run() {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
     if (log) *log << structure_count << " configurations found in the training set" << std::endl;
@@ -56,12 +56,12 @@ void MTPTrainer::train() {
 
     // Every rank checks the same options and sizes, so every rank raises together.
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
-        throw std::runtime_error("train_mtp: radial_only and bfgs_only need a trained potential");
+        throw std::runtime_error("fit_mtp: radial_only and bfgs_only need a trained potential");
     const int trained = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
     if (options.inverse_hessian_size != 0 && options.inverse_hessian_size != trained)
-        throw std::runtime_error("train_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
+        throw std::runtime_error("fit_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
     if (options.riemannian && options.inverse_hessian_size != 0)
-        throw std::runtime_error("train_mtp: riemannian takes no inverse_hessian; pass riemannian=false");
+        throw std::runtime_error("fit_mtp: riemannian takes no inverse_hessian; pass riemannian=false");
     log_errors("Training set errors before training:");    // the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
 
@@ -137,7 +137,7 @@ void MTPTrainer::train() {
    them when it is untrained. Every species of the potential must occur in
    the training set, and a species is numbered by its index.
 ------------------------------------------------------------------------- */
-void MTPTrainer::add_species() {
+void MTPFit::add_species() {
     const int old_spec = potential.is_trained() ? potential.get_species_count() : 0;
     const int new_spec = training_species_count();
 
@@ -188,7 +188,7 @@ void MTPTrainer::add_species() {
     reg_vector.resize(n_linear);
 }
 
-void MTPTrainer::update_min_dist() {
+void MTPFit::update_min_dist() {
     double min_dist = 999;
     for (const Sample& s : structures)
         for (size_t p = 0; p < s.firstneigh.size(); p++) {
@@ -209,7 +209,7 @@ void MTPTrainer::update_min_dist() {
    BFGS over every coefficient. Rank 0 steps; the others evaluate their
    share at the coefficients it broadcasts.
 ------------------------------------------------------------------------- */
-void MTPTrainer::fit_nonlinear(int max_iter) {
+void MTPFit::fit_nonlinear(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
     if (log) {
@@ -343,7 +343,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
    Without varpro the linear block is a Euclidean factor, refitted at mlp's
    steps. Every rank takes the same steps from the broadcast loss and gradient.
 ------------------------------------------------------------------------- */
-void MTPTrainer::fit_riemannian(int max_iter) {
+void MTPFit::fit_riemannian(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
     if (log) {
@@ -507,7 +507,7 @@ void MTPTrainer::fit_riemannian(int max_iter) {
 /* ----------------------------------------------------------------------
    Least squares for the species and linear coefficients. Rank 0 solves the summed system.
 ------------------------------------------------------------------------- */
-void MTPTrainer::fit_linear() {
+void MTPFit::fit_linear() {
     potential.set_coeffs(coeffs.data());
     assemble_linear();
     if (rank == 0) solve_linear();
@@ -516,7 +516,7 @@ void MTPTrainer::fit_linear() {
 
 // Sums the upper triangle of the least-squares system over every rank's structures, into
 // lin_matrix and lin_vector on rank 0.
-void MTPTrainer::assemble_linear() {
+void MTPFit::assemble_linear() {
     const int n = n_linear;
     const int width = (int) coeffs.size();
     lin_matrix.assign((size_t) n * n, 0.0);
@@ -593,7 +593,7 @@ void MTPTrainer::assemble_linear() {
 }
 
 // Hands rank 0's linear coefficients and regularization to every rank.
-void MTPTrainer::broadcast_linear() {
+void MTPFit::broadcast_linear() {
     comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
     comm.bcast(reg_vector.data(), n_linear, 0);
     comm.bcast(&reg_init, 1, 0);
@@ -602,7 +602,7 @@ void MTPTrainer::broadcast_linear() {
 
 // Regularizes the upper triangle held in lin_matrix and solves it into the
 // linear coefficients, by Gaussian elimination without row swaps.
-void MTPTrainer::solve_linear() {
+void MTPFit::solve_linear() {
     const int n = n_linear;
     double* A = lin_matrix.data();
     double* b = lin_vector.data();
@@ -659,7 +659,7 @@ void MTPTrainer::solve_linear() {
    scaling^d, so each fit rescales the system last assembled, which is
    reassembled only when orthogonalizing moves the radial functions.
 ------------------------------------------------------------------------- */
-void MTPTrainer::rescale() {
+void MTPFit::rescale() {
     double min_scaling = potential.get_scaling();
     double max_scaling = potential.get_scaling();
     std::vector<double> abs_linear(n_linear);
@@ -745,7 +745,7 @@ void MTPTrainer::rescale() {
     } while (ind != 2);
 }
 
-double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>& grad) {
+double MTPFit::objective(const std::vector<double>& at, std::vector<double>& grad) {
     // fixes the regularization at the potential's own radial coefficients, where BFGS's first evaluation fixes it
     if (options.varpro) fit_linear();
     std::copy(at.begin(), at.end(), coeffs.begin());
@@ -761,7 +761,7 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
     return total;
 }
 
-double MTPTrainer::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]) {
+double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]) {
     if (options.varpro) fit_linear();    // the linear coefficients at their optimum for these radial ones
     local_grad.resize(coeffs.size());
     double loss = loss_grad(local_grad) / structure_count;
@@ -778,7 +778,7 @@ double MTPTrainer::evaluate(std::vector<double>& grad, int n, bool radial, doubl
 }
 
 /* ---------------------------------------------------------------------- */
-double MTPTrainer::loss_grad(std::vector<double>& grad) {
+double MTPFit::loss_grad(std::vector<double>& grad) {
     potential.set_coeffs(coeffs.data());
     std::fill(grad.begin(), grad.end(), 0.0);
     double loss = 0.0;
@@ -847,7 +847,7 @@ double MTPTrainer::loss_grad(std::vector<double>& grad) {
     return loss;
 }
 
-void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad, bool radial) {
+void MTPFit::add_penalty(double& loss, std::vector<double>& grad, bool radial) {
     const int K = potential.get_radial_func_count();
     const double coeff = options.penalty_weight;
 
@@ -877,7 +877,7 @@ void MTPTrainer::add_penalty(double& loss, std::vector<double>& grad, bool radia
 // Gram-Schmidt over the radial functions, each a vector over species pairs
 // and basis functions. The projection divides by the squared norm of the
 // function being reduced, not of the one projected out.
-void MTPTrainer::orthogonalize() {
+void MTPFit::orthogonalize() {
     if (!orthogonalizing) return;
 
     const int C = potential.get_species_count();
@@ -906,7 +906,7 @@ void MTPTrainer::orthogonalize() {
     }
 }
 
-double MTPTrainer::row_dot(const double* a, int k1, const double* b, int k2) const {
+double MTPFit::row_dot(const double* a, int k1, const double* b, int k2) const {
     const int P = potential.get_species_count() * potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
@@ -916,7 +916,7 @@ double MTPTrainer::row_dot(const double* a, int k1, const double* b, int k2) con
     return sum;
 }
 
-void MTPTrainer::row_axpy(double* y, int k1, double factor, const double* x, int k2) const {
+void MTPFit::row_axpy(double* y, int k1, double factor, const double* x, int k2) const {
     const int P = potential.get_species_count() * potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
@@ -924,7 +924,7 @@ void MTPTrainer::row_axpy(double* y, int k1, double factor, const double* x, int
         for (int l = 0; l < R; l++) y[(p * K + k1) * R + l] += factor * x[(p * K + k2) * R + l];
 }
 
-std::vector<double> MTPTrainer::radial_overlaps(const double* a, const double* b) const {
+std::vector<double> MTPFit::radial_overlaps(const double* a, const double* b) const {
     const int K = potential.get_radial_func_count();
     std::vector<double> overlaps(K * K);
     for (int k1 = 0; k1 < K; k1++)
@@ -932,14 +932,14 @@ std::vector<double> MTPTrainer::radial_overlaps(const double* a, const double* b
     return overlaps;
 }
 
-void MTPTrainer::project_tangent(const double* w, double* v) const {
+void MTPFit::project_tangent(const double* w, double* v) const {
     const int K = potential.get_radial_func_count();
     const std::vector<double> overlaps = radial_overlaps(v, w);
     for (int k1 = 0; k1 < K; k1++)
         for (int k2 = 0; k2 < K; k2++) row_axpy(v, k1, -0.5 * (overlaps[k1 * K + k2] + overlaps[k2 * K + k1]), w, k2);
 }
 
-void MTPTrainer::retract(std::vector<double>& c) const {
+void MTPFit::retract(std::vector<double>& c) const {
     const int P = potential.get_species_count() * potential.get_species_count();
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
@@ -955,11 +955,11 @@ void MTPTrainer::retract(std::vector<double>& c) const {
 }
 
 /* ---------------------------------------------------------------------- */
-double MTPTrainer::energy_weight(const Sample& s) const {
+double MTPFit::energy_weight(const Sample& s) const {
     return options.energy_weight / std::pow(s.ilist.size(), options.weight_scaling) * options.select_factor;
 }
 
-double MTPTrainer::force_weight(const Sample& s, int i, const double* forces) const {
+double MTPFit::force_weight(const Sample& s, int i, const double* forces) const {
     double wgt = options.force_weight / std::pow(s.ilist.size(), options.weight_scaling_forces);
     if (options.scale_by_force > 0.0) {
         const double* f = forces + i * 3;
@@ -970,6 +970,6 @@ double MTPTrainer::force_weight(const Sample& s, int i, const double* forces) co
     return wgt * options.select_factor;
 }
 
-double MTPTrainer::stress_weight(const Sample& s) const {
+double MTPFit::stress_weight(const Sample& s) const {
     return options.stress_weight / s.ilist.size() * options.select_factor;
 }

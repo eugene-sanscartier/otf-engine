@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   What MTPTrainer and ETNTrainer share.
+   What MTPFit and ETNFit share.
 
-   A trainer is SPMD: every rank of a Comm holds a copy of the potential
+   A fit is SPMD: every rank of a Comm holds a copy of the potential
    and a share of the structures, and the Comm's collectives combine them.
 ------------------------------------------------------------------------- */
 
@@ -18,8 +18,8 @@
 #include <string>
 #include <vector>
 
-// The options of both trainers, with their defaults.
-struct TrainerOptions {
+// The options of both fits, with their defaults.
+struct FitOptions {
     double energy_weight = 1.0;
     double force_weight = 0.01;
     double stress_weight = 0.001;
@@ -27,16 +27,16 @@ struct TrainerOptions {
     std::vector<std::string> species;    // the species' names in the error tables
 };
 
-// Potential is MTP or ETN, Options its trainer's options.
+// Potential is MTP or ETN, Options its fit's options.
 template <class PotentialT, class OptionsT>
-class Trainer {
+class Fit {
   public:
     using Potential = PotentialT;
     using Options = OptionsT;
 
     // log receives the fit log on the rank given one; checkpoint saves the potential, which then
     // holds the coefficients. Throws on every rank together when no rank has a structure.
-    Trainer(Potential& potential, std::vector<Sample> structures, const Options& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+    Fit(Potential& potential, std::vector<Sample> structures, const Options& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
         : potential(potential), structures(std::move(structures)), options(options), comm(comm), rank(comm.rank()), size(comm.size()), log(log), checkpoint(std::move(checkpoint)) {
         if (options.balance_species)
             for (Sample& s : this->structures) s.balance_species();

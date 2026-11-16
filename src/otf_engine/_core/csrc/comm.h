@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
    Comm: a group of ranks and the collectives they meet in, which the
-   trainers, error_table and a MaxVol search run over, SPMD. ThreadComm's
+   fits, error_table and a MaxVol search run over, SPMD. ThreadComm's
    ranks are threads of one process, MPIComm's the processes of an MPI
    communicator.
 ------------------------------------------------------------------------- */

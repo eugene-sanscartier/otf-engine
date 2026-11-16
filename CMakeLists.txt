@@ -39,14 +39,14 @@ pybind11_add_module(_core_ext
 target_link_libraries(_core_ext PRIVATE core Eigen3::Eigen)
 install(TARGETS _core_ext DESTINATION otf_engine/_core)
 
-# The MTP potential classes and their trainer, linked into _mtp_ext and _mtp_testing
+# The MTP potential classes and their fit, linked into _mtp_ext and _mtp_testing
 add_library(mtp STATIC
     ${MTP_CSRC}/mtp_basis.cpp
     ${MTP_CSRC}/pair_mtp.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation.cpp
     ${MTP_CSRC}/mtp.cpp
     ${MTP_CSRC}/bfgs.cpp
-    ${MTP_CSRC}/mtp_trainer.cpp
+    ${MTP_CSRC}/mtp_fit.cpp
 )
 target_include_directories(mtp PUBLIC ${MTP_CSRC})
 target_link_libraries(mtp PUBLIC core PRIVATE Eigen3::Eigen)
@@ -57,26 +57,26 @@ pybind11_add_module(_mtp_ext
     ${MTP_CSRC}/pair_mtp_bindings.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation_bindings.cpp
     ${MTP_CSRC}/mtp_bindings.cpp
-    ${MTP_CSRC}/mtp_trainer_bindings.cpp
+    ${MTP_CSRC}/mtp_fit_bindings.cpp
 )
 target_link_libraries(_mtp_ext PRIVATE mtp Eigen3::Eigen)
 install(TARGETS _mtp_ext DESTINATION otf_engine/_mtp)
 
-# MTPTrainer's stages one at a time, for the tests
+# MTPFit's stages one at a time, for the tests
 pybind11_add_module(_mtp_testing
-    ${MTP_CSRC}/mtp_trainer_bindings.cpp
+    ${MTP_CSRC}/mtp_fit_bindings.cpp
     ${MTP_CSRC}/mtp_testing_bindings.cpp
 )
 target_link_libraries(_mtp_testing PRIVATE mtp Eigen3::Eigen)
 install(TARGETS _mtp_testing DESTINATION otf_engine/_mtp)
 
-# The ETN potential classes and their trainer, linked into _etn_ext
+# The ETN potential classes and their fit, linked into _etn_ext
 add_library(etn STATIC
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/pair_etn.cpp
     ${ETN_CSRC}/etn.cpp
     ${ETN_CSRC}/wolfe_bfgs.cpp
-    ${ETN_CSRC}/etn_trainer.cpp
+    ${ETN_CSRC}/etn_fit.cpp
 )
 target_include_directories(etn PUBLIC ${ETN_CSRC})
 target_link_libraries(etn PUBLIC core PRIVATE Eigen3::Eigen)
@@ -87,7 +87,7 @@ pybind11_add_module(_etn_ext
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/pair_etn_bindings.cpp
     ${ETN_CSRC}/etn_bindings.cpp
-    ${ETN_CSRC}/etn_trainer_bindings.cpp
+    ${ETN_CSRC}/etn_fit_bindings.cpp
 )
 target_link_libraries(_etn_ext PRIVATE etn Eigen3::Eigen)
 install(TARGETS _etn_ext DESTINATION otf_engine/_etn)

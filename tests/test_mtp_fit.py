@@ -1,7 +1,7 @@
-"""MTPTrainer's stages against mlip-3's, one at a time, and BFGS against mlip-3's on the Rosenbrock function.
+"""MTPFit's stages against mlip-3's, one at a time, and BFGS against mlip-3's on the Rosenbrock function.
 
-Each script runs in mlip3_probe.cpp under --recapture, which stores its outputs in mtp_reference/trainer.npz,
-and in _mtp_testing.MTPTrainerStages, whose outputs must match them.
+Each script runs in mlip3_probe.cpp under --recapture, which stores its outputs in mtp_reference/fit.npz,
+and in _mtp_testing.MTPFitStages, whose outputs must match them.
 """
 
 import re
@@ -32,7 +32,7 @@ def coeffs_line(coeffs):
     return f"coeffs {len(coeffs)} " + " ".join(repr(float(c)) for c in coeffs)
 
 
-# name: (potential_path, settings, script); the settings are mlp's, which the trainer shares
+# name: (potential_path, settings, script); the settings are mlp's, which the fit shares
 SCRIPTS = {
     "untrained": (MTP_REFERENCE / "template-08.almtp", {}, ["add_species", "print", "lin_optimize", "print", "objective", "rescale", "print", "objective"]),
     "trained": (TEACHER, {}, ["add_species", coeffs_line(perturbed_coeffs(TEACHER, 0.01, 1)), "objective", "lin_optimize", "print", "objective", "rescale", "print", "objective"]),
@@ -46,10 +46,10 @@ SCRIPTS = {
 
 
 def run_ours(potential_path, settings, script, structures):
-    """The script's outputs from MTPTrainerStages, as mlip3_probe prints them: (name, values, whether a linear solve came before, radial coefficient count)."""
-    from otf_engine._mtp._mtp_testing import MTPTrainerStages
+    """The script's outputs from MTPFitStages, as mlip3_probe prints them: (name, values, whether a linear solve came before, radial coefficient count)."""
+    from otf_engine._mtp._mtp_testing import MTPFitStages
 
-    stages = MTPTrainerStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
+    stages = MTPFitStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
     outputs = []
     solved = False
     for line in script:
@@ -79,7 +79,7 @@ def run_ours(potential_path, settings, script, structures):
 
 @pytest.fixture(scope="module")
 def stored(recapture):
-    outputs = StoredOutputs(MTP_REFERENCE / "trainer.npz", recapture)
+    outputs = StoredOutputs(MTP_REFERENCE / "fit.npz", recapture)
     yield outputs
     outputs.save()
 
@@ -142,10 +142,10 @@ def test_bfgs_rosenbrock(n, stored, mlip3_probe):
 
 
 NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
-BFGS_LINE = re.compile(r"BFGS iter +\d+: +(?:f=)?(\S+)")    # mlp's, and the trainer's without f=
-# the trainer's lines that mlp does not write: its own, and its error tables
-TRAINER_LINE = re.compile(r"^\d+ coefficients \(|^ +loss +energy |^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: |^min_dist = |^Minimal interatomic distance ")
-LOSS_TERMS = re.compile(r"( +\S+ \( *\d+%\)){4}$")    # the trainer's terms of the loss, after mlp's loss
+BFGS_LINE = re.compile(r"BFGS iter +\d+: +(?:f=)?(\S+)")    # mlp's, and the fit's without f=
+# the fit's lines that mlp does not write: its own, and its error tables
+FIT_LINE = re.compile(r"^\d+ coefficients \(|^ +loss +energy |^\d+ iterations in |^Trained in |^Training set errors|^ +n +MAE | \d\.\d\de[-+]\d+ +\d\.\d\de[-+]\d+ |^max (energy/atom|force) error: |^min_dist = |^Minimal interatomic distance ")
+LOSS_TERMS = re.compile(r"( +\S+ \( *\d+%\)){4}$")    # the fit's terms of the loss, after mlp's loss
 
 # name: (potential_path, options, the log's last line compared); the options are mlp's. After the 200 steps to the tolerance
 # stop, rounding has moved the coefficients enough to flip the rescaling's choice between close condition numbers.
@@ -157,7 +157,7 @@ FITS = {
 
 def fit_log(text, last):
     """The lines of a log that mlp writes too, from the training-set count to the last one starting with last, with single spaces."""
-    lines = [" ".join(LOSS_TERMS.sub("", line).replace(": f=", ": ").split()) for line in text.splitlines() if not TRAINER_LINE.search(line)]
+    lines = [" ".join(LOSS_TERMS.sub("", line).replace(": f=", ": ").split()) for line in text.splitlines() if not FIT_LINE.search(line)]
     start = next(i for i, line in enumerate(lines) if "configurations found" in line)
     end = max(i for i, line in enumerate(lines) if line.startswith(last))
     return lines[start:end + 1]
@@ -169,7 +169,7 @@ def test_fit_log(name, structures, stored, recapture, mlip3, tmp_path):
 
     mlp logs a loss after a line search, along a gradient that the linear solve's conditioning moves by 1e-5 relatively.
     """
-    from otf_engine._mtp._mtp_testing import MTPTrainerStages
+    from otf_engine._mtp._mtp_testing import MTPFitStages
 
     potential_path, options, last = FITS[name]
     if recapture:
@@ -177,8 +177,8 @@ def test_fit_log(name, structures, stored, recapture, mlip3, tmp_path):
         printed = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=tmp_path).stdout
         stored[f"fit_{name}/log"] = numpy.array(fit_log(printed, last))
 
-    stages = MTPTrainerStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
-    stages.train()
+    stages = MTPFitStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
+    stages.run()
     ours, theirs = fit_log(stages.log, last), list(stored[f"fit_{name}/log"])
 
     assert [NUMBER.sub("#", line) for line in ours] == [NUMBER.sub("#", line) for line in theirs]

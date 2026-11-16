@@ -5,22 +5,22 @@
    Orthogonalize in mtpr.cpp), on MTP's kernels.
    Copyright (c) 2023, Alexander Shapeev (Skoltech). BSD 2-Clause, see LICENSE.mlip-3.
 
-   SPMD over the ranks of a communicator, as every Trainer is (see trainer.h).
+   SPMD over the ranks of a communicator, as every Fit is (see fit.h).
 ------------------------------------------------------------------------- */
 
 #pragma once
 
 #include "bfgs.h"
 #include "mtp.h"
-#include "trainer.h"
+#include "fit.h"
 
 #include <string>
 #include <vector>
 
-// `mlp train`'s options, under its names and with its defaults, and the trainer's own, whose defaults
+// `mlp train`'s options, under its names and with its defaults, and the fit's own, whose defaults
 // are the recipe; varpro, reg_once, no_orthogonalize, riemannian and reg_at_main false and init_noise 5
 // give mlp's algorithm.
-struct MTPTrainerOptions : TrainerOptions {
+struct MTPFitOptions : FitOptions {
     double penalty_weight = 1e-6;
     double reg_param = 1e-10;       // the linear coefficients' regularization, times max(1, A_ii) / N once the first linear fit builds it
     double scale_by_force = 0.0;    // > 0 weighs each force by scale_by_force / (|F|^2 + scale_by_force)
@@ -48,23 +48,23 @@ struct MTPTrainerOptions : TrainerOptions {
     int inverse_hessian_size = 0;
 };
 
-class MTPTrainer : public Trainer<MTP, MTPTrainerOptions> {
+class MTPFit : public Fit<MTP, MTPFitOptions> {
   public:
     // log receives mlp's fit log on the rank given one; checkpoint is called
     // on rank 0 wherever mlp saves the potential during the fit.
-    MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    MTPFit(MTP& potential, std::vector<Sample> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, with the
     // species of the training set it lacked added, and logs the errors on the
     // training set before and after.
-    void train();
+    void run();
 
     // The loss BFGS minimizes, penalty included, and its gradient over every coefficient,
     // at coeffs, summed over the ranks, on every rank. For tests of the gradient.
     double objective(const std::vector<double>& at, std::vector<double>& grad);
 
   private:
-    friend class MTPTrainerStages;    // _mtp_testing runs the stages one at a time
+    friend class MTPFitStages;    // _mtp_testing runs the stages one at a time
 
     void add_species();
     void update_min_dist();

@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
    The base of PairMTP and PairETN, as LAMMPS's Pair is of its pair styles:
-   the members they share, and what the trainers and the selection call.
+   the members they share, and what the fits and the selection call.
 ------------------------------------------------------------------------- */
 
 #pragma once

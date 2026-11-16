@@ -4,13 +4,13 @@
    and ETN::Rescale (src/pots/etn/etn.cpp), on ETN's kernels.
    BSD 2-Clause, see mlip-4's LICENSE.
 
-   SPMD over the ranks of a communicator, as every Trainer is (see trainer.h).
+   SPMD over the ranks of a communicator, as every Fit is (see fit.h).
 ------------------------------------------------------------------------- */
 
 #pragma once
 
 #include "etn.h"
-#include "trainer.h"
+#include "fit.h"
 #include "wolfe_bfgs.h"
 
 #include <vector>
@@ -18,7 +18,7 @@
 // mlip-4's TrainingParams with their defaults, under mlp's names where mlp has the option (iteration_limit,
 // tolerance, skip_preinit). The loss doubles stress_weight on the virial's off-diagonal components, as mlip-4's
 // LossCfg does.
-struct ETNTrainerOptions : TrainerOptions {
+struct ETNFitOptions : FitOptions {
     int iteration_limit = 1000;
     int max_func_eval = 10000;
     double tolerance = 5e-4;          // stop when 100 steps decrease the loss by less than this, relatively
@@ -29,15 +29,15 @@ struct ETNTrainerOptions : TrainerOptions {
     int bfgs_max_iters_no_improve = 10;
 };
 
-class ETNTrainer : public Trainer<ETN, ETNTrainerOptions> {
+class ETNFit : public Fit<ETN, ETNFitOptions> {
   public:
     // log receives mlip-4's fit log on the rank given one; checkpoint is called
     // with the potential holding the coefficients at every step outside a line search.
-    ETNTrainer(ETN& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    ETNFit(ETN& potential, std::vector<Sample> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, and logs
     // the errors on the training set before and after.
-    void train();
+    void run();
 
   private:
     // mlip-3's AddSpecies for an ETN: the potential gains the training set's species it lacks. An untrained one
@@ -47,7 +47,7 @@ class ETNTrainer : public Trainer<ETN, ETNTrainerOptions> {
     void add_species();
     // mlip-4's Train without its pre-training: BFGS steps on the loss divided by the
     // structure count, from a rescale, until a stopping rule of o holds.
-    void fit(const ETNTrainerOptions& o);
+    void fit_nonlinear(const ETNFitOptions& o);
     // ETN::Rescale: a line search over alpha in coeffs = sign * alpha * coeffs, on the
     // loss summed over the structures.
     void rescale();

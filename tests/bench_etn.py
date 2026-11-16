@@ -7,7 +7,7 @@ On the first N structures of a cfg, for the 3-core and the 5-core potentials of 
              and with the list's build; mlip-4's CalcCfg::Run, which builds its own neighbors
   loss grad  the loss and its gradient over the N structures: ETN's compute and
              eval_loss_grad per structure; mlip-4's LossFunction::AccumulateGrads
-  train      train_etn from the untrained potential, without pre-training, for -i iterations;
+  train      fit_etn from the untrained potential, without pre-training, for -i iterations;
              mlip-4's Train through etn_reference/mlip4_train.cpp, its input's reading included
 
 mlip-4 runs in its VM and in its JIT-compiled code. The JIT's compilation is left out of eval and
@@ -26,9 +26,9 @@ from pathlib import Path
 
 import etn_potentials as kernels
 from bench_models import timings
-import test_etn_trainer as training
+import test_etn_fit as training
 from conftest import ETN_REFERENCE
-from otf_engine._etn import ETN, train_etn
+from otf_engine._etn import ETN, fit_etn
 from otf_engine.io_cfg import read_cfg
 from otf_engine._core import Sample
 
@@ -58,7 +58,7 @@ def main():
 
     with tempfile.TemporaryDirectory() as workdir:
         bench = kernels.compile_probe(args.mlip4_build, workdir, BENCH_SOURCE)
-        trainer = kernels.compile_probe(args.mlip4_build, workdir, ETN_REFERENCE / "mlip4_train.cpp")
+        train_probe = kernels.compile_probe(args.mlip4_build, workdir, ETN_REFERENCE / "mlip4_train.cpp")
         for name in args.potentials:
             potential = ETN(str(ETN_REFERENCE / f"{name}.etn"))
             labelled = [(atoms, Sample(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
@@ -78,14 +78,14 @@ def main():
             kernels.untrained_etn(name).write(template)
             untrained = ETN(str(template))
             training.write_training_file(training_file, untrained, labelled, settings)
-            options = training.trainer_options(settings, "none")
+            options = training.fit_options(settings, "none")
             start = time.perf_counter()
-            train_etn(str(template), [s for _, s in labelled], options, 1)
+            fit_etn(str(template), [s for _, s in labelled], options, 1)
             ours_train = time.perf_counter() - start
             times = []
             for jit in (False, True):
                 start = time.perf_counter()
-                subprocess.run([str(trainer), str(training_file), str(int(jit))], check=True, capture_output=True)
+                subprocess.run([str(train_probe), str(training_file), str(int(jit))], check=True, capture_output=True)
                 times += [time.perf_counter() - start]
             print(f"  train {args.iterations:3d}   ours {ours_train * 1e3:9.0f}                       mlip-4 VM {times[0] * 1e3:9.0f}   JIT {times[1] * 1e3:9.0f}")
     return 0

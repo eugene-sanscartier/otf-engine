@@ -1,4 +1,4 @@
-"""MTPTrainer's properties that hold without a reference: its gradient, a teacher's fit, its invariance under the ranks, and its options."""
+"""MTPFit's properties that hold without a reference: its gradient, a teacher's fit, its invariance under the ranks, and its options."""
 
 import numpy
 import pytest
@@ -17,9 +17,9 @@ def labelled(structures):
 
 
 def stages(potential_path, structures, **options):
-    from otf_engine._mtp._mtp_testing import MTPTrainerStages
+    from otf_engine._mtp._mtp_testing import MTPFitStages
 
-    return MTPTrainerStages(str(potential_path), labelled(structures), {"log": "none", **options})
+    return MTPFitStages(str(potential_path), labelled(structures), {"log": "none", **options})
 
 
 def radial_rows(stage):
@@ -145,7 +145,7 @@ def test_random_seed(structures):
     """init_random with a seed draws the same radial coefficients each time, and another seed others."""
     def drawn(seed):
         stage = stages(TEMPLATE, structures, init_random="true", random_seed=str(seed), iteration_limit="0")
-        stage.train()
+        stage.run()
         return stage.coeffs
 
     numpy.testing.assert_array_equal(drawn(7), drawn(7))
@@ -154,7 +154,7 @@ def test_random_seed(structures):
 
 def test_inverse_hessian_resumes(structures):
     """Two fits of 5 steps under bfgs_only, the second from the first's coefficients and inverse Hessian, end where one of 10 does."""
-    from otf_engine._mtp import train_mtp, write_mtp
+    from otf_engine._mtp import fit_mtp, write_mtp
 
     import tempfile
 
@@ -163,13 +163,13 @@ def test_inverse_hessian_resumes(structures):
     n = len(stages(TEACHER, structures).coeffs)
 
     hessian = numpy.zeros((n, n))
-    whole = train_mtp(str(TEACHER), data, {**options, "iteration_limit": "10"}, 1, inverse_hessian=hessian)
+    whole = fit_mtp(str(TEACHER), data, {**options, "iteration_limit": "10"}, 1, inverse_hessian=hessian)
 
     hessian = numpy.zeros((n, n))
-    first = train_mtp(str(TEACHER), data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian)
+    first = fit_mtp(str(TEACHER), data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian)
     with tempfile.TemporaryDirectory() as work:
         write_mtp(first, f"{work}/first.mtp")
-        second = train_mtp(f"{work}/first.mtp", data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian)
+        second = fit_mtp(f"{work}/first.mtp", data, {**options, "iteration_limit": "5"}, 1, inverse_hessian=hessian)
 
     numpy.testing.assert_allclose(second.get_coeffs(), whole.get_coeffs(), rtol=0, atol=1e-12 * numpy.max(numpy.abs(whole.get_coeffs())))
 
@@ -179,7 +179,7 @@ def test_radial_only(structures):
     stage = stages(TEACHER, structures, **MLP_ALGORITHM, radial_only="true", iteration_limit="5")
     n_radial = stage.potential.get_radial_coeff_count()
     before = stage.coeffs.copy()
-    stage.train()
+    stage.run()
     after = stage.coeffs
 
     assert not numpy.array_equal(after[:n_radial], before[:n_radial])
@@ -190,7 +190,7 @@ def test_riemannian_orthonormal(structures):
     """The recipe's fit keeps W W^T = I at every step it takes and lowers the loss."""
     stage = stages(TEACHER, structures, iteration_limit="20")
     start = stage.coeffs.copy()
-    stage.train()
+    stage.run()
     W = radial_rows(stage)
     numpy.testing.assert_allclose(W @ W.T, numpy.eye(len(W)), atol=1e-12)
     assert stage.objective(stage.coeffs)[0] < stage.objective(start)[0]
@@ -198,12 +198,12 @@ def test_riemannian_orthonormal(structures):
 
 def test_checkpoint(structures, caplog):
     """The checkpoint receives the potential during the fit; its first failure is a warning, ends checkpointing, and the fit goes on."""
-    from otf_engine._mtp import train_mtp
+    from otf_engine._mtp import fit_mtp
 
     data = labelled(structures)
     options = {**MLP_ALGORITHM, "iteration_limit": "30", "skip_preinit": "true", "log": "none"}
     saved = []
-    train_mtp(str(TEMPLATE), data, options, 1, checkpoint=lambda p: saved.append(numpy.array(p.get_coeffs())))
+    fit_mtp(str(TEMPLATE), data, options, 1, checkpoint=lambda p: saved.append(numpy.array(p.get_coeffs())))
     assert len(saved) >= 2 and not numpy.array_equal(saved[0], saved[-1])
 
     calls = []
@@ -212,25 +212,25 @@ def test_checkpoint(structures, caplog):
         calls.append(1)
         raise OSError("disk full")
 
-    trained = train_mtp(str(TEMPLATE), data, options, 2, checkpoint=failing)
+    trained = fit_mtp(str(TEMPLATE), data, options, 2, checkpoint=failing)
     assert len(calls) == 1 and trained.is_trained()
     assert "checkpoint failed, training goes on without checkpoints: OSError: disk full" in caplog.text
 
 
 def test_log_cannot_open(structures, tmp_path, caplog):
     """A log that cannot be opened is a warning, and the fit goes on without it."""
-    from otf_engine._mtp import train_mtp
+    from otf_engine._mtp import fit_mtp
 
     log = tmp_path / "missing" / "train.log"
-    trained = train_mtp(str(TEMPLATE), labelled(structures), {**MLP_ALGORITHM, "iteration_limit": "5", "skip_preinit": "true", "log": str(log)}, 2)
+    trained = fit_mtp(str(TEMPLATE), labelled(structures), {**MLP_ALGORITHM, "iteration_limit": "5", "skip_preinit": "true", "log": str(log)}, 2)
     assert trained.is_trained()
-    assert f"cannot open the trainer's log '{log}', training without it" in caplog.text
+    assert f"cannot open the fit's log '{log}', training without it" in caplog.text
 
 
 def test_no_iterations_leaves_untrained(structures):
     """iteration_limit 0 adds the species and leaves an untrained potential untrained."""
     stage = stages(TEMPLATE, structures, iteration_limit="0")
-    stage.train()
+    stage.run()
     assert not stage.potential.is_trained()
     assert stage.potential.get_species_count() == 3
 
@@ -251,10 +251,10 @@ def renamed(structures, mapping):
 ])
 def test_species_errors(case, potential_path, mapping, message, structures):
     """Species must run from 0 without a gap, and cover a trained potential's."""
-    from otf_engine._mtp import train_mtp
+    from otf_engine._mtp import fit_mtp
 
     with pytest.raises(RuntimeError, match=message):
-        train_mtp(str(potential_path), labelled(renamed(structures, mapping)), {"iteration_limit": "1", "log": "none"}, 2)
+        fit_mtp(str(potential_path), labelled(renamed(structures, mapping)), {"iteration_limit": "1", "log": "none"}, 2)
 
 
 @pytest.mark.parametrize("options, message", [
@@ -262,14 +262,14 @@ def test_species_errors(case, potential_path, mapping, message, structures):
     ({"varpro": "maybe"}, "is not true or false"),
 ])
 def test_option_errors(options, message, structures):
-    from otf_engine._mtp import train_mtp
+    from otf_engine._mtp import fit_mtp
 
     with pytest.raises(RuntimeError, match=message):
-        train_mtp(str(TEMPLATE), labelled(structures), {"log": "none", **options}, 1)
+        fit_mtp(str(TEMPLATE), labelled(structures), {"log": "none", **options}, 1)
 
 
 def test_no_structures():
-    from otf_engine._mtp import train_mtp
+    from otf_engine._mtp import fit_mtp
 
     with pytest.raises(RuntimeError, match="no training structures"):
-        train_mtp(str(TEMPLATE), [], {"log": "none"}, 1)
+        fit_mtp(str(TEMPLATE), [], {"log": "none"}, 1)

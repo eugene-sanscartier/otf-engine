@@ -1,8 +1,8 @@
-"""Training benchmark: otf_engine's trainer against mlip-3's `mlp train`.
+"""Training benchmark: otf_engine's fit against mlip-3's `mlp train`.
 
 Trains the same starting potential on the first N structures of a cfg file with each arm and
 reports, per run: wall time per BFGS iteration, time to the end of the nonlinear fit, total time
-(the trainer's includes building neighbor lists and the active set), and the energy and force
+(the fit's includes building neighbor lists and the active set), and the energy and force
 RMSE of the trained potential under one shared evaluator.
 
 Arms:
@@ -16,7 +16,7 @@ less: rounding differences grow through the BFGS, and past about 45 steps they s
 mlp on 1 rank from mlp on 4 ranks, which fit the same loss.
 
 An untrained potential (an mlip-3 template) logs 75 pre-training steps first, over which
-rounding separates even mlp's runs; tests/test_mtp_trainer.py tests the untrained paths.
+rounding separates even mlp's runs; tests/test_mtp_fit.py tests the untrained paths.
 
     python tests/bench_mtp.py --potential_path tmp/potential-16.almtp --cfg tmp/set.cfg -n 20 -i 30 --ranks 1 8
 """
@@ -37,7 +37,7 @@ from otf_engine.io_cfg import read_cfg
 from otf_engine.train import MLP_ALGORITHM
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
-BFGS_LINE = re.compile(r"BFGS iter +(\d+): +(?:f=)?(\S+)")    # mlp's, and the trainer's without f=
+BFGS_LINE = re.compile(r"BFGS iter +(\d+): +(?:f=)?(\S+)")    # mlp's, and the fit's without f=
 
 
 def extract_cfgs(cfg_path, n_structures, out_path):
@@ -65,7 +65,7 @@ def rmse(potential_path, structures):
 
 
 def run_logged(cmd, workdir):
-    """Run a trainer, timestamping each BFGS iteration line as it is flushed."""
+    """Run a fit, timestamping each BFGS iteration line as it is flushed."""
     iters, train_end = [], None
     start = time.perf_counter()
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=workdir) as proc:

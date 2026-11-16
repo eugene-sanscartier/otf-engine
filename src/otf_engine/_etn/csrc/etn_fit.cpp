@@ -1,10 +1,10 @@
 /* -*- c++ -*- ----------------------------------------------------------
    Fits an ETN to reference energies, forces and stresses.
-   Algorithm of mlip-4's Train and ETN::Rescale; see etn_trainer.h.
+   Algorithm of mlip-4's Train and ETN::Rescale; see etn_fit.h.
    BSD 2-Clause, see mlip-4's LICENSE.
 ------------------------------------------------------------------------- */
 
-#include "etn_trainer.h"
+#include "etn_fit.h"
 
 #include <algorithm>
 #include <chrono>
@@ -12,11 +12,11 @@
 #include <cstdio>
 #include <stdexcept>
 
-ETNTrainer::ETNTrainer(ETN& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
-    : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
+ETNFit::ETNFit(ETN& potential, std::vector<Sample> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+    : Fit(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
 
 /* ---------------------------------------------------------------------- */
-void ETNTrainer::add_species() {
+void ETNFit::add_species() {
     const int old_spec = potential.get_species_count();
     const int new_spec = training_species_count();
     if (old_spec == new_spec) return;
@@ -41,7 +41,7 @@ void ETNTrainer::add_species() {
 }
 
 /* ---------------------------------------------------------------------- */
-void ETNTrainer::train() {
+void ETNFit::run() {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
 
@@ -51,15 +51,15 @@ void ETNTrainer::train() {
     // mlip-4's pre-training keeps tolerance and rescale, and takes the other settings' defaults
     if (!options.skip_preinit) {
         if (log) *log << "Starting pretraining...\n";
-        ETNTrainerOptions pretraining;
+        ETNFitOptions pretraining;
         pretraining.iteration_limit = 75;
         pretraining.max_func_eval = 75 * 20;
         pretraining.tolerance = options.tolerance;
         pretraining.rescale = options.rescale;
-        fit(pretraining);
+        fit_nonlinear(pretraining);
         if (log) *log << "Pretraining completed\n";
     }
-    fit(options);
+    fit_nonlinear(options);
 
     potential.set_coeffs(coeffs.data());
     potential.set_trained(true);
@@ -73,7 +73,7 @@ void ETNTrainer::train() {
    it, and broadcasts the coefficients with the step count and the stop and
    rescale flags at the top of every loop.
 ------------------------------------------------------------------------- */
-void ETNTrainer::fit(const ETNTrainerOptions& o) {
+void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
     const int n = (int) coeffs.size();
     std::vector<double> loss_data(1 + n);    // [loss | gradient], reduced onto rank 0
     std::vector<double> grad(n), bfgs_g(n);
@@ -202,7 +202,7 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
    x0 as they are, its sign chosen to descend, on the loss summed over the
    structures, for at most 20 trials or until alpha moves by under 1e-5.
 ------------------------------------------------------------------------- */
-void ETNTrainer::rescale() {
+void ETNFit::rescale() {
     const int n = (int) coeffs.size();
     const std::vector<double> x0 = coeffs;
     std::vector<double> grad(n);
@@ -252,7 +252,7 @@ void ETNTrainer::rescale() {
    residuals of the energy, the virial (xx, yy, zz, yz, xz, xy, the last
    three doubled) and the forces, in that order, and their gradient.
 ------------------------------------------------------------------------- */
-double ETNTrainer::loss_grad(std::vector<double>& grad) {
+double ETNFit::loss_grad(std::vector<double>& grad) {
     static constexpr int STRESS_ORDER[6] = {0, 1, 2, 5, 4, 3};    // mlip-4's stress order, as virial indices
     potential.set_coeffs(coeffs.data());
     std::fill(grad.begin(), grad.end(), 0.0);

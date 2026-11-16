@@ -23,7 +23,7 @@ class LineSearch {
     // Returns false when the function increases along the ray.
     bool iterate(double curr_f, double curr_g);
 
-    std::ostream* log = nullptr;    // where mlip-3's warnings go, the trainer's log
+    std::ostream* log = nullptr;    // where mlip-3's warnings go, the fit's log
 
   private:
     double curr_x;

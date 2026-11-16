@@ -3,7 +3,7 @@
 `run NAME` trains one potential of the families from its untrained shape on the training part of a
 random split of a cfg, on --ranks threads, then writes into OUT/NAME:
 
-  trained.mtp|etn, fit.log   the fitted potential and the trainer's log
+  trained.mtp|etn, fit.log   the fitted potential and the fit's log
   fit.json                   the fit's wall time, its step count (pre-training included) and their ratio
   errors.json                energy RMSE per atom and force RMSE per component, on the test and training parts
   timing-JOB.json            per structure, on one thread, over the first --timed test structures, in ms:
@@ -13,7 +13,7 @@ random split of a cfg, on --ranks threads, then writes into OUT/NAME:
 A rerun skips the fit and the errors already written and adds a timing file, so reruns on other nodes
 give the timings a spread. Every potential has the same radial cutoffs: min_dist 0.99 of the
 shortest distance in the training part, max_dist 5 and 8 radial basis functions. The MTP keeps
-its min_dist (no_mindist_update), as the ETN does. Each trainer runs with its defaults.
+its min_dist (no_mindist_update), as the ETN does. Each fit runs with its defaults.
 
 `report` gathers OUT into a table, pairs each MTP with the ETN closest in coefficient count, and plots
 the times against the test force RMSE and against the coefficient count into OUT/bench_models.svg.
@@ -47,9 +47,9 @@ MAX_DIST, RADIAL_BASIS_SIZE = 5.0, 8
 LEVELS = range(8, 30, 2)
 # (lmax, cores, rank): chosen to span 200 to 3000 coefficients, with one shape of each lmax near each MTP level's count
 ETN_SHAPES = [(1, 3, 3), (1, 3, 4), (1, 4, 4), (1, 4, 5), (1, 5, 6), (2, 3, 3), (2, 4, 3), (2, 3, 4), (2, 4, 4), (2, 5, 4), (2, 5, 5), (3, 3, 3), (3, 4, 3), (3, 3, 4), (3, 4, 4), (3, 3, 5), (3, 4, 5)]
-# The trainers' default loss weights, for the timed loss gradient
+# The fits' default loss weights, for the timed loss gradient
 LOSS_WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
-# A logged step: mlp's and the MTP trainer's "BFGS iter N:" or "Riemann iter N:", or mlip-4's step number and its losses
+# A logged step: mlp's and the MTP fit's "BFGS iter N:" or "Riemann iter N:", or mlip-4's step number and its losses
 STEP_LINE = re.compile(r"^(?:(?:BFGS|Riemann) iter +\d+:|\d+\t)")
 BAR = dict(ascii=True, ncols=60, bar_format="{desc:<14}|{bar}| {n_fmt:>2}/{total_fmt:>2}")
 

@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   mlip-3's training stages, one at a time, for tests/test_mtp_trainer.py.
+   mlip-3's training stages, one at a time, for tests/test_mtp_fit.py.
 
        mlip3_probe POTENTIAL CFG SCRIPT
        mlip3_probe --rosenbrock N STEPS

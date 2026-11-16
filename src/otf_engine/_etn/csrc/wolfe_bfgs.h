@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
    mlip-4's BFGS with its line search.
    Algorithm of mlip-4/src/training/bfgs.{h,cpp} at 79a39bf (Bfgs, Linesearch).
-   BSD 2-Clause, see mlip-4's LICENSE. mlip-3's, which MTPTrainer steps, is
+   BSD 2-Clause, see mlip-4's LICENSE. mlip-3's, which MTPFit steps, is
    BFGS in bfgs.h.
 ------------------------------------------------------------------------- */
 

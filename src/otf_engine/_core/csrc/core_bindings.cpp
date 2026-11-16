@@ -53,7 +53,7 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
         .def_property_readonly("types", &PyNeighbors::types)
         .def_property_readonly("displacements", &PyNeighbors::displacements);
 
-    py::class_<Sample>(m, "Sample", "A structure to fit: its neighbor list at the potential's cutoff and its reference values, which the trainers and error_table take.")
+    py::class_<Sample>(m, "Sample", "A structure to fit: its neighbor list at the potential's cutoff and its reference values, which the fits and error_table take.")
         .def(py::init([](const PyNeighbors& nb, py::object energy, py::object forces, py::object virial, int number) {
                  const NeighList& list = nb.view();
                  const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
@@ -171,7 +171,7 @@ MTP and ETN only.
         py::gil_scoped_release unlocked;
         return error_table(potential, share, species, process[0], title);
     }, py::arg("potential"), py::arg("structures"), py::arg("species"), py::arg("title"), R"doc(
-The errors of potential on the structures, as the table train_mtp and train_etn log, under title.
+The errors of potential on the structures, as the table fit_mtp and fit_etn log, under title.
 
 structures : iterable of Sample
 species    : the species' names

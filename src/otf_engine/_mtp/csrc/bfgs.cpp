@@ -18,7 +18,7 @@ static double dot(const std::vector<double>& a, const std::vector<double>& b) {
     return res;
 }
 
-// mlip-3 writes its warnings to the terminal; here they go to the trainer's log, when it has one.
+// mlip-3 writes its warnings to the terminal; here they go to the fit's log, when it has one.
 static void warning(std::ostream* log, const char* message) {
     if (log) *log << "WARNING: " << message << std::endl;
 }

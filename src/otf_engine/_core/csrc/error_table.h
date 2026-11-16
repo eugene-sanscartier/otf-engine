@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   The errors of a potential on training structures, as MTPTrainer and
-   ETNTrainer log them.
+   The errors of a potential on training structures, as MTPFit and
+   ETNFit log them.
 ------------------------------------------------------------------------- */
 
 #pragma once

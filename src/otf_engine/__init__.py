@@ -18,7 +18,7 @@ __all__ = [
 
 try:
     from .selection import calculate_grade, select_add
-    from .train import train as train_mtp
-    __all__ += ["calculate_grade", "select_add", "train_mtp"]
+    from .train import train as fit_mtp
+    __all__ += ["calculate_grade", "select_add", "fit_mtp"]
 except ImportError:
     pass

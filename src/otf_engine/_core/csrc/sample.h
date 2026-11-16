@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   A structure to fit, which MTPTrainer and ETNTrainer take.
+   A structure to fit, which MTPFit and ETNFit take.
 ------------------------------------------------------------------------- */
 
 #pragma once

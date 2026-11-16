@@ -9,12 +9,12 @@
      pair_mtp_bindings.cpp                <- pair_mtp.{h,cpp}
      pair_mtp_extrapolation_bindings.cpp  <- pair_mtp_extrapolation.{h,cpp}
      mtp_bindings.cpp                     <- mtp.{h,cpp}
-     mtp_trainer_bindings.cpp             <- mtp_trainer.{h,cpp}
+     mtp_fit_bindings.cpp             <- mtp_fit.{h,cpp}
    and in the _etn_ext module under ../../_etn/csrc/:
      etn_harmonics_bindings.cpp           <- etn_harmonics.{h,cpp}
      pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
      etn_bindings.cpp                     <- etn.{h,cpp}
-     etn_trainer_bindings.cpp             <- etn_trainer.{h,cpp}
+     etn_fit_bindings.cpp             <- etn_fit.{h,cpp}
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -111,14 +111,14 @@ inline void log_warning(const std::string& message) {
     py::module_::import("logging").attr("getLogger")("otf_engine._core").attr("warning")(message);
 }
 
-// The stream a trainer's log option names: stdout (or empty), none, or a file, opened into file. A file that cannot
+// The stream a fit's log option names: stdout (or empty), none, or a file, opened into file. A file that cannot
 // be opened is a warning, and gives no log.
 inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     if (target == "stdout" || target.empty()) return &std::cout;
     if (target == "none") return nullptr;
     file.open(target);
     if (file) return &file;
-    log_warning("cannot open the trainer's log '" + target + "', training without it");
+    log_warning("cannot open the fit's log '" + target + "', training without it");
     return nullptr;
 }
 
@@ -132,7 +132,7 @@ inline std::vector<std::vector<Sample>> split_structures(py::iterable structures
 }
 
 // The ranks this process runs: `ranks` threads of a group of their own, or, given an mpi4py communicator comm, its
-// rank of comm. name (train_mtp, maximize_volume, ...) prefixes the errors.
+// rank of comm. name (fit_mtp, maximize_volume, ...) prefixes the errors.
 class ProcessRanks {
   public:
     ProcessRanks(const char* name, int ranks, py::object comm) {
@@ -154,7 +154,7 @@ class ProcessRanks {
 
     // Runs fn(comm, r) on each rank r of this process with the GIL released, each on a thread of its own and rank 0
     // on the calling thread, and raises the exception of the lowest rank that raised. A runtime_error is one a
-    // trainer raises on every rank together; any other exception stops the other ranks with Comm::abort.
+    // fit raises on every rank together; any other exception stops the other ranks with Comm::abort.
     void run(const std::function<void(Comm&, int)>& fn) {
         std::vector<std::exception_ptr> raised(count());
         auto run_rank = [&](int r) {
@@ -231,14 +231,14 @@ inline py::object grad_arrays(const PyNeighbors& nb, int width, bool forces, boo
     return py::make_tuple(eg, fg, virial ? py::object(vg) : py::none());
 }
 
-// Pointers into a trainer's options, by the names they take as numbers or flags.
+// Pointers into a fit's options, by the names they take as numbers or flags.
 struct OptionFields {
     std::map<std::string, double*> doubles;
     std::map<std::string, int*> ints;
     std::map<std::string, bool*> bools;
 };
 
-// A trainer's options from strings, as name (train_mtp, train_etn) takes them: log, the log target, into log;
+// A fit's options from strings, as name (fit_mtp, fit_etn) takes them: log, the log target, into log;
 // species, the species' names, comma-separated; the weights; balance_species; and the fields add_option_fields(o, fields) adds.
 template <class Options>
 Options parse_options(const char* name, const std::map<std::string, std::string>& options, std::string& log) {
@@ -270,13 +270,13 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
     return o;
 }
 
-// Trains the potential in filename with TrainerT over the ranks of this process, and returns it. Under MPI every
+// Trains the potential in filename with FitT over the ranks of this process, and returns it. Under MPI every
 // process calls it with its share of the structures; on threads they are dealt over the ranks. Rank 0 writes the
 // log to log_target, trains the potential it returns and hands it to checkpoint, whose first failure is a warning
-// and ends checkpointing. name (train_mtp, train_etn) prefixes the errors.
-template <class TrainerT>
-py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const typename TrainerT::Options& options, const std::string& log_target, int ranks, py::object comm, py::object checkpoint) {
-    using Potential = typename TrainerT::Potential;
+// and ends checkpointing. name (fit_mtp, fit_etn) prefixes the errors.
+template <class FitT>
+py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const typename FitT::Options& options, const std::string& log_target, int ranks, py::object comm, py::object checkpoint) {
+    using Potential = typename FitT::Potential;
     ProcessRanks process(name, ranks, comm);
     const bool holds_rank0 = process[0].rank() == 0;
 
@@ -304,8 +304,8 @@ py::object train_potential(const char* name, const std::string& filename, py::it
         std::unique_ptr<Potential> own;
         if (r != 0) own = std::make_unique<Potential>(filename);
         Potential& pot = r == 0 ? potential_ref : *own;
-        TrainerT trainer(pot, std::move(shares[r]), options, comm, r == 0 ? log : nullptr, r == 0 ? save : nullptr);
-        trainer.train();
+        FitT fit(pot, std::move(shares[r]), options, comm, r == 0 ? log : nullptr, r == 0 ? save : nullptr);
+        fit.run();
     });
     return potential;
 }
@@ -315,8 +315,8 @@ void bind_maxvol(py::module_& m);
 void bind_pair_mtp(py::module_& m);
 void bind_pair_mtp_extrapolation(py::module_& m);
 void bind_mtp(py::module_& m);
-void bind_mtp_trainer(py::module_& m);
+void bind_mtp_fit(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
 void bind_pair_etn(py::module_& m);
 void bind_etn(py::module_& m);
-void bind_etn_trainer(py::module_& m);
+void bind_etn_fit(py::module_& m);
