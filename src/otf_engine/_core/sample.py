@@ -8,6 +8,21 @@ from numpy import float64
 from . import _core
 from .neighbors import neighbors
 
+# Between the virial's order, mlip-3's PlusStress xx yy zz xy xz yz, and ASE's Voigt order xx yy zz yz xz xy; its own inverse
+_VOIGT_ORDER = [0, 1, 2, 5, 4, 3]
+
+
+def stress_from_virial(virial, volume: float):
+    """ASE's stress, -virial / volume in Voigt order, from the virial a Pair computes."""
+    stress = -numpy.asarray(virial, dtype=float64)[_VOIGT_ORDER] / volume
+    return stress
+
+
+def virial_from_stress(stress, volume: float):
+    """The virial the trainers take, from ASE's stress."""
+    virial = -numpy.asarray(stress, dtype=float64)[_VOIGT_ORDER] * volume
+    return virial
+
 
 class Sample(_core._ext.Sample):
     """A structure to fit, which the trainers and error_table take: its neighbor list, its reference energy, forces and virial, and its number."""
@@ -17,9 +32,5 @@ class Sample(_core._ext.Sample):
         results = atoms.calc.results
         energy = float(results["energy"]) if "energy" in results else None
         forces = numpy.asarray(results["forces"], dtype=float64) if "forces" in results else None
-        virial = None
-        if "stress" in results:
-            # ASE's stress is -virial / volume, in Voigt order xx yy zz yz xz xy; the trainers take mlip-3's PlusStress, xx yy zz xy xz yz
-            v = -numpy.asarray(results["stress"], dtype=float64) * atoms.get_volume()
-            virial = v[[0, 1, 2, 5, 4, 3]]
+        virial = virial_from_stress(results["stress"], atoms.get_volume()) if "stress" in results else None
         super().__init__(neighbors(atoms, cutoff), energy, forces, virial, number)

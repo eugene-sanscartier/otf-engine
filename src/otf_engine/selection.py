@@ -53,6 +53,14 @@ def selection_equations(calc: PotentialCalculator, structures: list, weights: di
     return eqns
 
 
+def stored_selection(potential: str, al_mode: str) -> tuple[dict, MaxVol | None]:
+    """The selection weights and the active set stored in the file *potential*, or *al_mode*'s default weights and None without a #MVS_v1.1 section."""
+    try:
+        return read_mvs_header(potential)
+    except RuntimeError:
+        return dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None
+
+
 def _open_calculator(potential) -> tuple[PotentialCalculator, str | None]:
     """Accept either a potential path or a preloaded calculator."""
     if isinstance(potential, str):
@@ -93,7 +101,7 @@ def calculate_grade(potential, structures: list, weights: dict | None = None, ac
         stored_weights, active_set = read_mvs_header(potential_path)
         weights = weights or stored_weights
     weights = weights or dict(DEFAULT_SELECTION_WEIGHTS["nbh"])
-    site_en_w = float(weights.get("site_en_weight", 1.0))
+    site_en_w = float(weights["site_en_weight"])
 
     for i, atoms in enumerate(structures):
         grades = active_set.grade(selection_equations(calc, [atoms], weights))
@@ -156,11 +164,8 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     threshold_swap = pot.threshold_swap
 
     if active_set is None and potential_path is not None:
-        try:
-            stored_weights, active_set = read_mvs_header(potential_path)
-            weights = weights or stored_weights
-        except RuntimeError:
-            pass
+        stored_weights, active_set = stored_selection(potential_path, al_mode)
+        weights = weights or stored_weights
     weights = weights or dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
     if active_set is None:
         mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=threshold_swap)

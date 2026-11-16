@@ -20,9 +20,8 @@ import os
 import sys
 
 from ._core import PotentialCalculator, Sample, error_table, read_potential
-from .almtp_io import read_mvs_header
 from .io_cfg import read_cfg
-from .selection import DEFAULT_SELECTION_WEIGHTS, converge_active_set, write_active_set
+from .selection import converge_active_set, stored_selection, write_active_set
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +64,7 @@ def train(potential: str, training_structs: list, save_path: str, settings: dict
     comm     : an mpi4py communicator to train over its ranks in place of threads. Every rank passes the
                same *training_structs*, and rank 0 writes *save_path*.
     """
-    try:
-        weights = read_mvs_header(potential)[0]
-    except RuntimeError:
-        weights = dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
+    weights = stored_selection(potential, al_mode)[0]
 
     cutoff = read_potential(potential).get_max_cutoff()
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.

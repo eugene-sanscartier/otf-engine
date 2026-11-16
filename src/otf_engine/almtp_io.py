@@ -15,7 +15,7 @@ maxvol.cpp (WriteData/ReadData).  Format (mixed text + binary):
     \\n#\\n                   <- end delimiter
 
 n = CoeffCount() (radial + linear + species coefficients), or an ETN's coefficient count.
-n is NOT stored explicitly; it is inferred from the binary block size.
+The section does not store n; the reader takes it from the potential in the same file.
 """
 
 from __future__ import annotations
@@ -31,10 +31,14 @@ _MARKER = b"#MVS_v1.1"
 _END_MARKER = b"\n#\n"
 
 
-def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndarray, int]:
+def _read_section(path: str) -> tuple[bytes, dict, ndarray, ndarray, int]:
+    """The bytes of the file *path*, and the weights, A, invA and the end of the binary block of its #MVS_v1.1 section."""
+    with open(path, "rb") as f:
+        data = f.read()
+
     marker_pos = data.find(_MARKER)
     if marker_pos == -1:
-        raise RuntimeError("No #MVS_v1.1 active-set section found.")
+        raise RuntimeError(f"No #MVS_v1.1 active-set section in {path}.")
 
     pos = marker_pos + len(_MARKER)
     weights = {}
@@ -61,18 +65,12 @@ def _read_header_and_binary(data: bytes, path: str) -> tuple[dict, ndarray, ndar
 
     A = numpy.frombuffer(data[binary_start:binary_start + n * n * 8], dtype="<f8").reshape(n, n).copy()
     invA = numpy.frombuffer(data[binary_start + n * n * 8:end_pos], dtype="<f8").reshape(n, n).copy()
-    return weights, A, invA, end_pos
+    return data, weights, A, invA, end_pos
 
 
 def read_mvs_header(almtp_path: str) -> tuple[dict, MaxVol]:
     """The selection weights and the active set stored in *almtp_path*, without the stored structures or the rows' provenance."""
-    with open(almtp_path, "rb") as f:
-        data = f.read()
-
-    try:
-        weights, A, invA, _ = _read_header_and_binary(data, almtp_path)
-    except RuntimeError as exc:
-        raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
+    _, weights, A, invA, _ = _read_section(almtp_path)
     return weights, MaxVol(A, invA)
 
 
@@ -83,13 +81,7 @@ def read_mvs_state(almtp_path: str, pool_id: int = 0) -> tuple[dict, MaxVol, lis
     """
     from .io_cfg import read_cfg
 
-    with open(almtp_path, "rb") as f:
-        data = f.read()
-
-    try:
-        weights, A, invA, end_pos = _read_header_and_binary(data, almtp_path)
-    except RuntimeError as exc:
-        raise RuntimeError(f"{exc.args[0]} in {almtp_path}.") from exc
+    data, weights, A, invA, end_pos = _read_section(almtp_path)
 
     # The link table, a structure index and an equation index per row of A, then the stored structures
     n = A.shape[0]
@@ -138,11 +130,11 @@ def write_mvs_state(almtp_path: str, weights: dict, active_set: MaxVol, structur
 
     section = b"".join((
         b"#MVS_v1.1\n",
-        f"energy_weight {weights.get('energy_weight', 1.0):.16e}\n".encode(),
-        f"force_weight {weights.get('force_weight', 0.0):.16e}\n".encode(),
-        f"stress_weight {weights.get('stress_weight', 0.0):.16e}\n".encode(),
-        f"site_en_weight {weights.get('site_en_weight', 1.0):.16e}\n".encode(),
-        f"weight_scaling {int(weights.get('weight_scaling', 0))}\n".encode(),
+        f"energy_weight {weights['energy_weight']:.16e}\n".encode(),
+        f"force_weight {weights['force_weight']:.16e}\n".encode(),
+        f"stress_weight {weights['stress_weight']:.16e}\n".encode(),
+        f"site_en_weight {weights['site_en_weight']:.16e}\n".encode(),
+        f"weight_scaling {int(weights['weight_scaling'])}\n".encode(),
         b"#",
         numpy.asarray(active_set.A).astype("<f8").tobytes(),
         numpy.asarray(active_set.invA).astype("<f8").tobytes(),

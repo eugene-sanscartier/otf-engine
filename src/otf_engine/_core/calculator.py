@@ -5,6 +5,7 @@ from numpy import float64
 from ase.calculators.calculator import Calculator, all_changes
 
 from .neighbors import neighbors
+from .sample import stress_from_virial
 
 
 class PotentialCalculator(Calculator):
@@ -43,8 +44,4 @@ class PotentialCalculator(Calculator):
             self.results["energies"] = numpy.array(result["eatom"], dtype=float64)
 
         if "stress" in properties:
-            vol = atoms.get_volume()
-            # ASE stress convention: Voigt order (xx,yy,zz,yz,xz,xy), positive = tensile
-            # Our virials are (xx,yy,zz,xy,xz,yz), sign: virial = -stress * vol
-            v = result["virials"]
-            self.results["stress"] = numpy.array([-v[0], -v[1], -v[2], -v[5], -v[4], -v[3]], dtype=float64) / vol
+            self.results["stress"] = stress_from_virial(result["virials"], atoms.get_volume())
