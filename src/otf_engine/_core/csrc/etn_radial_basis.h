@@ -15,8 +15,8 @@
 // three-term recursion in x^2 above, whose coefficients depend on min_cutoff / max_cutoff.
 class RBCinf : public RadialMTPBasis {
   public:
-    // Reads the basis properties; min_dist / max_dist must not exceed 0.8.
-    explicit RBCinf(TextFileReader& tfr);
+    // min_cutoff / max_cutoff must not exceed 0.8.
+    RBCinf(double min_cutoff, double max_cutoff, int size);
     void calc_radial_basis_ders(double dist) override;
 
   private:

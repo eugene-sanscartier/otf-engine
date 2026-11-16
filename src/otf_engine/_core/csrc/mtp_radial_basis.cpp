@@ -6,37 +6,11 @@
 
 #include "mtp_radial_basis.h"
 
-#include "text_file_reader.h"
-
 #include <stdexcept>
 
-RadialMTPBasis::RadialMTPBasis(TextFileReader& tfr) {
-    read_basis_properties(tfr);
-}
-
-void RadialMTPBasis::read_basis_properties(TextFileReader& tfr) {
-    tfr.advance();
-
-    // Optional scaling line
-    if (tfr.keyword() == "scaling") {
-        tfr.rest() >> scaling;
-        tfr.advance();
-    }
-
-    // Lower cutoff — accepts both 'min_dist' and 'min_val'
-    if (tfr.keyword() != "min_val" && tfr.keyword() != "min_dist")
-        throw std::runtime_error("MTP radial basis: expected min_dist, got '" + tfr.keyword() + "'");
-    tfr.rest() >> min_cutoff;
-
-    // Upper cutoff — accepts both 'max_dist' and 'max_val'
-    tfr.advance();
-    if (tfr.keyword() != "max_val" && tfr.keyword() != "max_dist")
-        throw std::runtime_error("MTP radial basis: expected max_dist, got '" + tfr.keyword() + "'");
-    tfr.rest() >> max_cutoff;
+RadialMTPBasis::RadialMTPBasis(double min_cutoff, double max_cutoff, int size) : size(size), min_cutoff(min_cutoff), max_cutoff(max_cutoff) {
     if (!(max_cutoff > min_cutoff))
         throw std::runtime_error("MTP radial basis: maximum cutoff must exceed the minimum cutoff");
-
-    size = tfr.next_int("radial_basis_size");
     if (size < 2)
         throw std::runtime_error("MTP radial basis: size must be at least 2");
 

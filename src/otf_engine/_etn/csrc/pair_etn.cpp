@@ -29,6 +29,17 @@ PairETN::PairETN(const std::string& filename) {
     PairETN::read_file(f);
 }
 
+PairETN::PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) : species_ranks(std::move(species_ranks)), radial_func_counts(std::move(radial_func_counts)), radial_ranks(std::move(radial_ranks)), bond_ranks(std::move(bond_ranks)) {
+    if (species_count < 0)
+        throw std::runtime_error("PairETN: species count must not be negative");
+    this->species_count = species_count;
+    set_radial_basis(radial_basis_type, min_dist, max_dist, radial_basis_size);
+
+    prepare_cores();
+    trained = false;
+    fill_initial_coeffs();
+}
+
 /* ----------------------------------------------------------------------
    Main Computation Function
    ---------------------------------------------------------------------- */
@@ -458,6 +469,8 @@ void PairETN::prepare_cores() {
     for (int n : radial_func_counts)
         if (n > radial_basis_size)
             throw std::runtime_error("PairETN: radial_funcs_counts exceeds radial_basis_size");
+    if (bond_ranks.size() < 2)
+        throw std::runtime_error("PairETN: an ETN needs at least one core, two bond ranks");
     if (bond_ranks.front() != std::vector<int>{1} || bond_ranks.back() != std::vector<int>{1})
         throw std::runtime_error("PairETN: the first and last bond ranks must be {1}");
     for (const auto& ranks : bond_ranks)

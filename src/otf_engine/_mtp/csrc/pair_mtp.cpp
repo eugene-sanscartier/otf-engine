@@ -6,12 +6,14 @@
 
 #include "pair_mtp.h"
 
+#include "mtp_basis.h"
 #include "text_file_reader.h"
 
 #include <cmath>
 #include <fstream>
 #include <map>
 #include <stdexcept>
+#include <utility>
 
 PairMTP::PairMTP(const std::string& filename) {
     std::ifstream f(filename);
@@ -255,31 +257,16 @@ void PairMTP::read_file(std::istream& is) {
     radial_func_count = tfr.next_int("radial_funcs_count");
     if (radial_func_count < 1)
         throw std::runtime_error("PairMTP: MTP radial function count must be positive");
-    cache_stride = 1 + 2 * radial_func_count;
 
     tfr.advance();
     if (tfr.keyword() == "magnetic_basis_type")
         throw std::runtime_error("PairMTP: magnetic basis is currently not supported");
 
-    // Allocate memory for radial basis
+    // Read the radial basis coeffs, which an untrained potential may omit
     const int pairs_count = species_count * species_count;
-    radial_coeff_count_per_pair = radial_basis_size * radial_func_count;
-    radial_coeff_count = pairs_count * radial_coeff_count_per_pair;
-    radial_basis_coeffs.resize(radial_coeff_count);
-
+    const int coeffs_per_pair = radial_basis_size * radial_func_count;
     const bool has_radial_coeffs = tfr.keyword() == "radial_coeffs";
-    if (!has_radial_coeffs) {
-        trained = false;
-        for (int p = 0; p < pairs_count; p++)
-            for (int i = 0; i < radial_func_count; i++) {
-                double* c = radial_basis_coeffs.data() + p * radial_coeff_count_per_pair + i * radial_basis_size;
-                for (int j = 0; j < radial_basis_size; j++)
-                    c[j] = 1e-6 + i * 1e-7 + j * 1e-7;
-                c[std::min(i, radial_basis_size)] = 1e-3 * (p + 1) + i * 1e-4;
-            }
-    }
-
-    // Read the radial basis coeffs
+    std::vector<double> radial_coeffs_read(has_radial_coeffs ? pairs_count * coeffs_per_pair : 0);
     for (int i = 0; has_radial_coeffs && i < pairs_count; i++) {
         // pair-type label "0-1"; '-' is a separator only on this line, since
         // the coefficient lines below carry negative numbers
@@ -292,13 +279,13 @@ void PairMTP::read_file(std::istream& is) {
         if (type1 < 0 || type1 >= species_count || type2 < 0 || type2 >= species_count)
             throw std::runtime_error("PairMTP: invalid species pair " + std::to_string(type1) + "-" + std::to_string(type2) + " in MTP radial coefficients");
 
-        const int pair_offset = (type1 * species_count + type2) * radial_coeff_count_per_pair;
+        const int pair_offset = (type1 * species_count + type2) * coeffs_per_pair;
         for (int j = 0; j < radial_func_count; j++) {
             tfr.advance();
             // The whole line is coefficients — there is no leading keyword.
             std::istringstream ss(tfr.line());
             for (int k = 0; k < radial_basis_size; k++)
-                if (!(ss >> radial_basis_coeffs[pair_offset + j * radial_basis_size + k]))
+                if (!(ss >> radial_coeffs_read[pair_offset + j * radial_basis_size + k]))
                     throw std::runtime_error("PairMTP: not enough radial coefficients");
         }
     }
@@ -309,8 +296,6 @@ void PairMTP::read_file(std::istream& is) {
         throw std::runtime_error("PairMTP: cannot read radial coeffs");
     if (alpha_moment_count < 1)
         throw std::runtime_error("PairMTP: MTP alpha moment count must be positive");
-    moment_tensor_vals.resize(alpha_moment_count);
-    nbh_energy_ders_wrt_moments.resize(alpha_moment_count);
 
     alpha_index_basic_count = tfr.next_int("alpha_index_basic_count");
     if (alpha_index_basic_count < 1 || alpha_index_basic_count > alpha_moment_count)
@@ -335,12 +320,6 @@ void PairMTP::read_file(std::istream& is) {
         if (radial_func_max != radial_func_count - 1)    //Index validity check
             throw std::runtime_error("PairMTP: wrong number of radial functions specified");
     }
-
-    //Find the maximum alpha basic index
-    max_alpha_index_basic = 0;
-    for (int i = 0; i < alpha_index_basic_count; i++)
-        max_alpha_index_basic = std::max(max_alpha_index_basic, alpha_index_basic[i][1] + alpha_index_basic[i][2] + alpha_index_basic[i][3]);
-    max_alpha_index_basic++;    // Add 1 to account for zeroth order indicies
 
     alpha_index_times_count = tfr.next_int("alpha_index_times_count");
     if (alpha_index_times_count < 0)
@@ -376,24 +355,83 @@ void PairMTP::read_file(std::istream& is) {
         }
     }
 
-    if (!tfr.next_line() || tfr.keyword() != "species_coeffs") {
-        trained = false;
-        species_coeffs.assign(species_count, 1e-3);
-        linear_coeffs.assign(alpha_scalar_count, 1e-3);
-    } else {
-        species_coeffs.resize(species_count);
+    // An untrained potential may omit the species and moment coeffs too
+    const bool has_species_coeffs = tfr.next_line() && tfr.keyword() == "species_coeffs";
+    std::vector<double> species_coeffs_read(has_species_coeffs ? species_count : 0);
+    std::vector<double> linear_coeffs_read(has_species_coeffs ? alpha_scalar_count : 0);
+    if (has_species_coeffs) {
         std::istringstream species_ss = tfr.rest();
         for (int i = 0; i < species_count; i++)
-            if (!(species_ss >> species_coeffs[i]))
+            if (!(species_ss >> species_coeffs_read[i]))
                 throw std::runtime_error("PairMTP: not enough species coefficients");
 
         tfr.expect("moment_coeffs");
-        linear_coeffs.resize(alpha_scalar_count);
         std::istringstream ss = tfr.rest();
         for (int i = 0; i < alpha_scalar_count; i++)
-            if (!(ss >> linear_coeffs[i]))
+            if (!(ss >> linear_coeffs_read[i]))
                 throw std::runtime_error("PairMTP: not enough moment coefficients");
     }
+
+    prepare_basis();
+
+    // mlip-3's MLMTPR::Load fills in what the file omits
+    trained = has_radial_coeffs && has_species_coeffs;
+    if (!trained) fill_initial_coeffs();
+    if (has_radial_coeffs) radial_basis_coeffs = radial_coeffs_read;
+    if (has_species_coeffs) {
+        species_coeffs = species_coeffs_read;
+        linear_coeffs = linear_coeffs_read;
+    }
+}
+
+PairMTP::PairMTP(const std::vector<std::vector<int>>& basis_functions, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) {
+    if (species_count < 0)
+        throw std::runtime_error("PairMTP: species count must not be negative");
+    this->species_count = species_count;
+    set_radial_basis(radial_basis_type, min_dist, max_dist, radial_basis_size);
+
+    MTP_Basis basis(basis_functions);
+    radial_func_count = basis.radial_function_count();
+    alpha_moment_count = basis.alpha_moment_count;
+    alpha_index_basic = std::move(basis.alpha_index_basic);
+    alpha_index_times = std::move(basis.alpha_index_times);
+    alpha_moment_mapping = std::move(basis.alpha_moment_mapping);
+    alpha_index_basic_count = (int) alpha_index_basic.size();
+    alpha_index_times_count = (int) alpha_index_times.size();
+    alpha_scalar_count = (int) alpha_moment_mapping.size();
+
+    prepare_basis();
+    trained = false;
+    fill_initial_coeffs();
+}
+
+void PairMTP::fill_initial_coeffs() {
+    for (int p = 0; p < species_count * species_count; p++)
+        for (int i = 0; i < radial_func_count; i++) {
+            double* c = radial_basis_coeffs.data() + p * radial_coeff_count_per_pair + i * radial_basis_size;
+            for (int j = 0; j < radial_basis_size; j++)
+                c[j] = 1e-6 + i * 1e-7 + j * 1e-7;
+            c[std::min(i, radial_basis_size)] = 1e-3 * (p + 1) + i * 1e-4;
+        }
+    species_coeffs.assign(species_count, 1e-3);
+    linear_coeffs.assign(alpha_scalar_count, 1e-3);
+}
+
+void PairMTP::prepare_basis() {
+    cache_stride = 1 + 2 * radial_func_count;
+    radial_coeff_count_per_pair = radial_basis_size * radial_func_count;
+    radial_coeff_count = species_count * species_count * radial_coeff_count_per_pair;
+    radial_basis_coeffs.resize(radial_coeff_count);
+    species_coeffs.resize(species_count);
+    linear_coeffs.resize(alpha_scalar_count);
+    moment_tensor_vals.resize(alpha_moment_count);
+    nbh_energy_ders_wrt_moments.resize(alpha_moment_count);
+
+    //Find the maximum alpha basic index
+    max_alpha_index_basic = 0;
+    for (int i = 0; i < alpha_index_basic_count; i++)
+        max_alpha_index_basic = std::max(max_alpha_index_basic, alpha_index_basic[i][1] + alpha_index_basic[i][2] + alpha_index_basic[i][3]);
+    max_alpha_index_basic++;    // Add 1 to account for zeroth order indicies
 
     // Set working buffers
     prepare_angular();

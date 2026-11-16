@@ -7,7 +7,7 @@
 
 #include <stdexcept>
 
-ETN::ETN(const std::string& filename) : PairETN(filename) {
+void ETN::prepare_buffers() {
     site_input_vals.resize(input_shape.size);
     input_tangent.resize(input_shape.size);
     input_tangent_adj.resize(input_shape.size);

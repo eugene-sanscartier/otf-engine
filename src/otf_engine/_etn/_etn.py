@@ -10,6 +10,7 @@ from _core_ext's Pair.
     wigner_3j        3-j symbols of complex harmonics
     real_wigner_3j   3-j symbols of real harmonics, which the cores carry
 
+PairETN and ETN load an .etn file or build the untrained ETN of a shape given by the file's fields.
 PairETN carries what the selection and the training call for every ETN: write, its trainers,
 and mlip-4's CfgCalc rules threshold_swap and retrain_pass.
 """

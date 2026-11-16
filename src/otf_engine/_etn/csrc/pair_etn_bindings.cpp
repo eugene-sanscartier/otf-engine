@@ -2,7 +2,7 @@
    Python bindings for PairETN (see pair_etn.h).
 ------------------------------------------------------------------------- */
 
-#include "bindings_common.h"
+#include "pair_etn_bindings.h"
 #include "pair_etn.h"
 
 // --- the computation of the ETN --------------------------------------------
@@ -43,8 +43,8 @@ static void check_length(const DoubleArray& arr, const std::vector<double>& bloc
 }
 
 void bind_pair_etn(py::module_& m) {
-    auto cls = py::class_<PairETN, Pair>(m, "PairETN", "Energy, forces and virial for an ETN potential file.")
-                   .def(py::init<const std::string&>(), py::arg("filename"), "Load an ETN potential from an .etn file (version 1.0.0).");
+    auto cls = py::class_<PairETN, Pair>(m, "PairETN", "Energy, forces and virial for an ETN potential.");
+    def_pair_etn_init(cls);
 
     // ---- the computation of the ETN ----
     def_neighbors(cls, "compute", &compute,

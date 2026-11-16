@@ -20,15 +20,13 @@ POTENTIALS = {
 }
 
 
-def template(name):
-    """The untrained .etn file of a test potential."""
-    species_count, species_ranks, radial_funcs_counts, radial_ranks, bond_ranks = POTENTIALS[name]
-    braces = lambda values: "{" + ", ".join(map(str, values)) + "}"
-    lines = ["ETN", "version = 1.0.0", f"potential_name = {name}", f"species_count = {species_count}", "radial_basis_type = RBCinf",
-             f"\tmin_dist = {MIN_DIST}", f"\tmax_dist = {MAX_DIST}", f"\tradial_basis_size = {RADIAL_BASIS_SIZE}",
-             f"species_ranks = {braces(species_ranks)}", f"radial_funcs_counts = {braces(radial_funcs_counts)}",
-             f"radial_ranks = {braces(radial_ranks)}", f"core_count = {len(bond_ranks) - 1}", "bond_ranks"]
-    return "\n".join(lines + ["\t" + braces(ranks) for ranks in bond_ranks]) + "\n"
+def untrained_etn(name, species_count=None):
+    """The untrained ETN of a test potential, built from its shape, with its species count unless one is given."""
+    from otf_engine._etn import ETN
+
+    table_species_count, species_ranks, radial_funcs_counts, radial_ranks, bond_ranks = POTENTIALS[name]
+    count = table_species_count if species_count is None else species_count
+    return ETN(species_ranks=species_ranks, radial_funcs_counts=radial_funcs_counts, radial_ranks=radial_ranks, bond_ranks=bond_ranks, species_count=count, min_dist=MIN_DIST, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
 
 
 def coeff_blocks(pot):

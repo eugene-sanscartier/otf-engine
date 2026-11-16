@@ -10,7 +10,7 @@
 
 class PairMTPExtrapolation : public PairMTP {
   public:
-    explicit PairMTPExtrapolation(const std::string& filename) : PairMTP(filename) {}
+    using PairMTP::PairMTP;
 
     // PairMTP::compute's results, plus the extrapolation grade of each
     // neighborhood (neighborhood mode) and the largest grade, left in the

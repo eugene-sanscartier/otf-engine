@@ -50,6 +50,7 @@ install(TARGETS _core_mpi DESTINATION otf_engine/_core)
 
 # The MTP potential classes, linked into both MTP modules
 add_library(mtp STATIC
+    ${MTP_CSRC}/mtp_basis.cpp
     ${MTP_CSRC}/pair_mtp.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation.cpp
     ${MTP_CSRC}/mtp.cpp

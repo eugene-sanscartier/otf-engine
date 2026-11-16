@@ -65,9 +65,11 @@ class Pair {
     void set_trained(bool t) { trained = t; }
 
   protected:
-    // Reads radial_basis_type at the current line of tfr and the basis it names, RBChebyshev or RBCinf,
-    // and sets the radial basis members from it; scaling must be read first.
+    // Reads radial_basis_type at the current line of tfr and the cutoffs and size below it, and sets the basis.
     void read_radial_basis(TextFileReader& tfr);
+    // Builds the radial basis type names, RBChebyshev or RBCinf, and sets the radial basis members
+    // from it; scaling must be set first.
+    void set_radial_basis(const std::string& type, double min_dist, double max_dist, int size);
 
     std::string potential_name = "Untitled";
     std::string radial_basis_type;

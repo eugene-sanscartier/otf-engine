@@ -19,7 +19,7 @@ import pytest
 from ase.calculators.singlepoint import SinglePointCalculator
 
 from conftest import ETN_REFERENCE, StoredOutputs
-from etn_potentials import compile_probe, params, reference_potential, template
+from etn_potentials import compile_probe, params, reference_potential, untrained_etn
 from otf_engine._core import PotentialCalculator, neighbors
 from otf_engine.almtp_io import read_mvs_state
 from otf_engine.selection import calculate_grade, select_add, update_active_set
@@ -142,7 +142,7 @@ def test_train_writes_active_set(structures, tmp_path):
     from otf_engine._etn import PairETN
 
     untrained = tmp_path / f"{POTENTIAL}-template.etn"
-    untrained.write_text(template(POTENTIAL))
+    untrained_etn(POTENTIAL).write(untrained)
     trained = str(tmp_path / f"{POTENTIAL}-trained.etn")
     # references to fit: the stored potential's energies and forces
     reference = PotentialCalculator(PairETN(str(reference_potential(POTENTIAL))))

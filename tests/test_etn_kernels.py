@@ -15,7 +15,7 @@ import pytest
 from ase import Atoms
 
 from conftest import ETN_REFERENCE, StoredOutputs
-from etn_potentials import MAX_DIST, MIN_DIST, POTENTIALS, RADIAL_BASIS_SIZE, coeff_blocks, compile_probe, get_block, params, parse_tensors, reference_potential, set_params, species_of, template
+from etn_potentials import MAX_DIST, MIN_DIST, POTENTIALS, RADIAL_BASIS_SIZE, coeff_blocks, compile_probe, get_block, params, parse_tensors, reference_potential, set_params, species_of, untrained_etn
 from otf_engine._core import neighbors
 from otf_engine._core.derivative_checks import check_forces, check_invariance, check_virial
 
@@ -115,9 +115,9 @@ def run_probe(probe, pot, cells, workdir):
 
 @pytest.fixture(scope="module")
 def potentials(recapture, mlip4_build, cells, tmp_path_factory):
-    """The test potentials, ETN's of etn_reference/; under --recapture written first from their templates with
+    """The test potentials, ETN's of etn_reference/; under --recapture built first from their shapes with
     seeded coefficients, and mlip-4's tensors stored."""
-    from otf_engine._etn import ETN, PairETN, write_etn
+    from otf_engine._etn import ETN, write_etn
 
     if recapture:
         stored = StoredOutputs(ETN_REFERENCE / "kernels.npz", True)
@@ -125,9 +125,7 @@ def potentials(recapture, mlip4_build, cells, tmp_path_factory):
         workdir = tmp_path_factory.mktemp("etn_kernels")
         probe = compile_probe(mlip4_build, workdir, ETN_REFERENCE / "mlip4_probe.cpp")
         for k, name in enumerate(POTENTIALS):
-            path = workdir / f"{name}.etn"
-            path.write_text(template(name))
-            pot = PairETN(str(path))
+            pot = untrained_etn(name)
             set_params(pot, numpy.random.default_rng(k).standard_normal(pot.get_coeff_count()) * 0.3)
             pot.set_trained(True)
             write_etn(pot, reference_potential(name))
@@ -222,21 +220,23 @@ def test_round_trip(name, potentials, tmp_path):
     assert back.is_trained()
 
 
-@pytest.mark.parametrize("species_count", [True, False], ids=["species_count", "no_species_count"])
+@pytest.mark.parametrize("species_count", [3, 0], ids=["species_count", "no_species_count"])
 def test_untrained(species_count, tmp_path):
-    """An untrained file starts from mlip-4's sin(10 + k^2), with or without species_count, and stays untrained through write_etn."""
+    """An ETN built from its shape starts untrained from mlip-4's sin(10 + k^2), and write_etn writes a file, with or
+    without species_count, that PairETN reads back to the same shape and coefficients, still untrained."""
     from otf_engine._etn import PairETN, write_etn
 
-    text = template("etn-5")
-    if not species_count:
-        text = "\n".join(line for line in text.splitlines() if not line.startswith("species_count")) + "\n"
-    (tmp_path / "untrained.etn").write_text(text)
-    untrained = PairETN(str(tmp_path / "untrained.etn"))
-    initial = numpy.sin(10 + numpy.arange(untrained.get_coeff_count()) ** 2)
-    numpy.testing.assert_array_equal(params(untrained), initial)
-    assert not untrained.is_trained()
+    built = untrained_etn("etn-5", species_count)
+    initial = numpy.sin(10 + numpy.arange(built.get_coeff_count()) ** 2)
+    numpy.testing.assert_array_equal(params(built), initial)
+    assert not built.is_trained()
 
-    write_etn(untrained, tmp_path / "back.etn")
-    back = PairETN(str(tmp_path / "back.etn"))
+    write_etn(built, tmp_path / "untrained.etn")
+    assert ("species_count" in (tmp_path / "untrained.etn").read_text()) == (species_count > 0)
+    back = PairETN(str(tmp_path / "untrained.etn"))
     numpy.testing.assert_array_equal(params(back), initial)
     assert not back.is_trained()
+    assert back.get_species_count() == species_count
+    for get in ("get_species_ranks", "get_radial_func_counts", "get_radial_ranks"):
+        numpy.testing.assert_array_equal(getattr(back, get)(), getattr(built, get)(), err_msg=get)
+    assert [list(r) for r in back.get_bond_ranks()] == [list(r) for r in built.get_bond_ranks()]

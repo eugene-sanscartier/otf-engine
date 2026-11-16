@@ -53,6 +53,9 @@ class PairETN : public Pair {
   public:
     // Reads an ETN potential file (version 1.0.0).
     explicit PairETN(const std::string& filename);
+    // The untrained ETN of this shape, as a file that stops after bond_ranks gives it;
+    // species_count 0 leaves the count to training.
+    PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size);
 
     // Energy, per-atom energies, forces and virial of the central atoms in list,
     // and each central atom's input and bond vectors, left in the members below.

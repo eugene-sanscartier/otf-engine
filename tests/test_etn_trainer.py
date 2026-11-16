@@ -24,7 +24,7 @@ import numpy
 import pytest
 
 from conftest import ETN_REFERENCE, StoredOutputs, TESTS
-from etn_potentials import compile_probe, template
+from etn_potentials import compile_probe, untrained_etn
 from otf_engine._core import neighbors
 from otf_engine._core import Sample
 
@@ -80,7 +80,7 @@ def case_inputs(name, structures, workdir):
 
     potential, overrides, chosen, _, _, _ = CASES[name]
     path = Path(workdir) / f"{potential}.etn"
-    if not path.exists(): path.write_text(template(potential))
+    if not path.exists(): untrained_etn(potential).write(path)
     settings = dict(SETTINGS, **overrides)
     labelled = [(structures[k], Sample(structures[k], ETN(str(path)).get_max_cutoff(), k + 1)) for k in chosen]
     return path, settings, labelled

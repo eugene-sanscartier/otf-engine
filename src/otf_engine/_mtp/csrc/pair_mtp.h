@@ -19,6 +19,9 @@ class PairMTP : public Pair {
   public:
     // Reads an MTP potential file (version 1.1.0).
     explicit PairMTP(const std::string& filename);
+    // The untrained MTP of these basis functions (see MTP_Basis) on a radial basis, as an untrained
+    // file gives it; species_count 0 leaves the count to training.
+    PairMTP(const std::vector<std::vector<int>>& basis_functions, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size);
 
     // Energy, per-atom energies, forces and virial of the central atoms in list,
     // left in the members below.
@@ -60,6 +63,10 @@ class PairMTP : public Pair {
 
   protected:
     void read_file(std::istream& is);
+    // Sizes the coefficients and working buffers for the basis members, and checks the contractions.
+    void prepare_basis();
+    // mlip-3's MLMTPR::Load defaults, an untrained potential's coefficients.
+    void fill_initial_coeffs();
     void prepare_angular();
 
     std::string potential_tag;

@@ -9,12 +9,10 @@
 #include <string>
 #include <vector>
 
-class TextFileReader;
-
 class RadialMTPBasis {
   public:
-    // Reads scaling/min_dist/max_dist/radial_basis_size from the current position.
-    explicit RadialMTPBasis(TextFileReader& tfr);
+    // size functions on [min_cutoff, max_cutoff].
+    RadialMTPBasis(double min_cutoff, double max_cutoff, int size);
     virtual ~RadialMTPBasis() = default;
 
     virtual void calc_radial_basis_ders(double dist) = 0;
@@ -27,15 +25,11 @@ class RadialMTPBasis {
     // Values and derivatives for radial basis functions
     std::vector<double> radial_basis_vals;
     std::vector<double> radial_basis_ders;
-
-  private:
-    // Reads the basis properties (cutoffs and size), not the radial parameters
-    void read_basis_properties(TextFileReader& tfr);
 };
 
 // phi_0 = (r - r_cut)^2, phi_1 = ksi (r - r_cut)^2, Chebyshev recursion above.
 class RBChebyshev : public RadialMTPBasis {
   public:
-    explicit RBChebyshev(TextFileReader& tfr) : RadialMTPBasis(tfr) {}
+    RBChebyshev(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(min_cutoff, max_cutoff, size) {}
     void calc_radial_basis_ders(double dist) override;
 };

@@ -105,7 +105,7 @@ def main():
             print(f"  loss grad   ours {loss_grad_ms:9.2f}                       mlip-4 VM {vm_loss:9.2f}   JIT {jit_loss:9.2f}")
 
             template = Path(workdir) / f"{name}-template.etn"
-            template.write_text(kernels.template(name))
+            kernels.untrained_etn(name).write(template)
             untrained = ETN(str(template))
             training.write_training_file(training_file, untrained, labelled, settings)
             options = training.trainer_options(settings, "none")

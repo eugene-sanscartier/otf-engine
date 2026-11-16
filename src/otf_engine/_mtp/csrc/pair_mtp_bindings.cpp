@@ -2,7 +2,7 @@
    Python bindings for PairMTP (see pair_mtp.h).
 ------------------------------------------------------------------------- */
 
-#include "bindings_common.h"
+#include "pair_mtp_bindings.h"
 #include "pair_mtp.h"
 
 // --- ported from PairMTP --------------------------------------------------
@@ -16,8 +16,10 @@ static py::dict compute(PairMTP& self, const PyNeighbors& nb) {
 }
 
 void bind_pair_mtp(py::module_& m) {
-    auto cls = py::class_<PairMTP, Pair>(m, "PairMTP", "Energy, forces and virial for an MTP potential file.")
-                   .def(py::init<const std::string&>(), py::arg("filename"), "Load an MTP potential from a .mtp file (version 1.1.0).");
+    m.def("level_basis_functions", &level_basis_functions, py::arg("level"), "The basis functions of an MTP level, 6 to 28, from mlip-4's mtp_levels.h: lists of n radial indices then an n x n contraction matrix.");
+
+    auto cls = py::class_<PairMTP, Pair>(m, "PairMTP", "Energy, forces and virial for an MTP potential.");
+    def_pair_mtp_init(cls);
 
     // ---- ported from PairMTP ----
     def_neighbors(cls, "compute", &compute,

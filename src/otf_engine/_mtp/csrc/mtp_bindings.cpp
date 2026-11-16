@@ -5,8 +5,8 @@
    differentiates nothing w.r.t. the coefficients.
 ------------------------------------------------------------------------- */
 
-#include "bindings_common.h"
 #include "mtp.h"
+#include "pair_mtp_bindings.h"
 
 static DoubleArray eval_basis(MTP& self, const PyNeighbors& nb) {
     auto out = zeros({nb.inum(), self.get_alpha_scalar_count()});
@@ -23,8 +23,8 @@ static py::object eval_grad(MTP& self, const PyNeighbors& nb, bool forces, bool 
 }
 
 void bind_mtp(py::module_& m) {
-    auto cls = py::class_<MTP, PairMTP>(m, "MTP", "An MTP potential that also gives its basis values, and differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.")
-                   .def(py::init<const std::string&>(), py::arg("filename"));
+    auto cls = py::class_<MTP, PairMTP>(m, "MTP", "An MTP potential that also gives its basis values, and differentiates site energies, forces and virial, and losses on them, w.r.t. its coefficients.");
+    def_pair_mtp_init(cls);
 
     def_neighbors(cls, "eval_basis", &eval_basis,
                   "Basis values per central atom: ndarray float64 (inum, alpha_scalar_count).");

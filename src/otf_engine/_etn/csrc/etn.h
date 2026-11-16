@@ -7,9 +7,13 @@
 
 #include "pair_etn.h"
 
+#include <utility>
+
 class ETN : public PairETN {
   public:
-    explicit ETN(const std::string& filename);
+    // PairETN's constructors: from a file or from a shape.
+    template <class... Args>
+    explicit ETN(Args&&... args) : PairETN(std::forward<Args>(args)...) { prepare_buffers(); }
 
     // dE_i/dc per central atom: [inum * coeff_count]; row ii for atom ilist[ii]. Throws when
     // given force_grad, since the ETN has no force gradients here.
@@ -24,6 +28,8 @@ class ETN : public PairETN {
     void set_species_count(int n);
 
   private:
+    // The working buffers of the derivatives, for the shape.
+    void prepare_buffers();
     // The first column of each coefficient block, and mixing_adj's size, for the current species count.
     void prepare_columns();
     // Adds to grad the derivative of energy_weight * E_i, plus that of E_i's derivative along the

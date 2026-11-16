@@ -13,7 +13,7 @@
 
 // The recursion coefficients for the ratio min_cutoff / max_cutoff, from their Chebyshev
 // expansions, summed as RadialBasisCinf::PostConstruct sums them.
-RBCinf::RBCinf(TextFileReader& tfr) : RadialMTPBasis(tfr) {
+RBCinf::RBCinf(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(min_cutoff, max_cutoff, size) {
     if (size > RADIAL_BASIS_MAX_SIZE)
         throw std::runtime_error("ETN radial basis: radial_basis_size must not exceed " + std::to_string(RADIAL_BASIS_MAX_SIZE));
 
