@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-ETNTrainer::ETNTrainer(PairETNGrad& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+ETNTrainer::ETNTrainer(ETN& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
     : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
 
 /* ---------------------------------------------------------------------- */

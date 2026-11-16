@@ -115,9 +115,9 @@ def run_probe(probe, pot, cells, workdir):
 
 @pytest.fixture(scope="module")
 def potentials(recapture, mlip4_build, cells, tmp_path_factory):
-    """The test potentials, PairETNGrad's of etn_reference/; under --recapture written first from their templates with
+    """The test potentials, ETN's of etn_reference/; under --recapture written first from their templates with
     seeded coefficients, and mlip-4's tensors stored."""
-    from otf_engine._etn import PairETNGrad, PairETN, write_etn
+    from otf_engine._etn import ETN, PairETN, write_etn
 
     if recapture:
         stored = StoredOutputs(ETN_REFERENCE / "kernels.npz", True)
@@ -134,7 +134,7 @@ def potentials(recapture, mlip4_build, cells, tmp_path_factory):
             for key, value in run_probe(probe, pot, cells, workdir).items():
                 stored[f"{name}/{key}" if key.startswith("s") else key] = value
         stored.save()
-    return {name: PairETNGrad(str(reference_potential(name))) for name in POTENTIALS}
+    return {name: ETN(str(reference_potential(name))) for name in POTENTIALS}
 
 
 def relative_differences(got, want):

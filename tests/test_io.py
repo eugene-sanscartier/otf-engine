@@ -81,11 +81,11 @@ def test_sample_virial():
 def test_mtp_round_trip(name, tmp_path):
     """write_mtp then PairMTP gives back a trained potential's species and coefficients exactly, and an untrained one stays
     untrained, written without its species as mlip-3 writes it."""
-    from otf_engine._mtp import PairMTPGrad, write_mtp
+    from otf_engine._mtp import MTP, write_mtp
 
-    pot = PairMTPGrad(str(MTP_REFERENCE / name))
+    pot = MTP(str(MTP_REFERENCE / name))
     write_mtp(pot, str(tmp_path / "back.mtp"))
-    back = PairMTPGrad(str(tmp_path / "back.mtp"))
+    back = MTP(str(tmp_path / "back.mtp"))
     assert back.is_trained() == pot.is_trained()
     assert (back.get_min_cutoff(), back.get_max_cutoff(), back.get_scaling(), back.get_radial_basis_size(), back.get_alpha_scalar_count()) == (pot.get_min_cutoff(), pot.get_max_cutoff(), pot.get_scaling(), pot.get_radial_basis_size(), pot.get_alpha_scalar_count())
     if pot.is_trained():

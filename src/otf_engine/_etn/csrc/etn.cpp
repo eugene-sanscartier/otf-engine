@@ -3,11 +3,11 @@
    forces and virial, with respect to its coefficients.
 ------------------------------------------------------------------------- */
 
-#include "pair_etn_grad.h"
+#include "etn.h"
 
 #include <stdexcept>
 
-PairETNGrad::PairETNGrad(const std::string& filename) : PairETN(filename) {
+ETN::ETN(const std::string& filename) : PairETN(filename) {
     site_input_vals.resize(input_shape.size);
     input_tangent.resize(input_shape.size);
     input_tangent_adj.resize(input_shape.size);
@@ -17,12 +17,12 @@ PairETNGrad::PairETNGrad(const std::string& filename) : PairETN(filename) {
     prepare_columns();
 }
 
-void PairETNGrad::set_species_count(int n) {
+void ETN::set_species_count(int n) {
     PairETN::set_species_count(n);
     prepare_columns();
 }
 
-void PairETNGrad::prepare_columns() {
+void ETN::prepare_columns() {
     const int l_count = (int) species_ranks.size();
     const int core_count = get_core_count();
     int column = 0;
@@ -41,7 +41,7 @@ void PairETNGrad::prepare_columns() {
     for (int l = 0; l < l_count; l++) mixing_adj[l].resize(radial_mixing[l].size());
 }
 
-void PairETNGrad::eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double*) {
+void ETN::eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double*) {
     if (force_grad)
         throw std::runtime_error("eval_grad: an ETN has no force gradients");
     const int width = coeff_count();
@@ -56,7 +56,7 @@ void PairETNGrad::eval_grad(const NeighList& list, double* site_energy_grad, dou
     }
 }
 
-void PairETNGrad::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
+void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     for (auto& adj : mixing_adj) std::fill(adj.begin(), adj.end(), 0.0);
     int nbr_offset = 0;
     for (int ii = 0; ii < list.inum; ii++) {
@@ -74,7 +74,7 @@ void PairETNGrad::eval_loss_grad(const NeighList& list, double dloss_denergy, co
    forward as the tangent of v and of the bond vectors, and its gradient taken
    with the energy's in one backwards pass.
 ------------------------------------------------------------------------- */
-void PairETNGrad::accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, double energy_weight, const double* dloss_dforces, const double* dloss_dvirial, double* grad) {
+void ETN::accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, double energy_weight, const double* dloss_dforces, const double* dloss_dvirial, double* grad) {
     const int l_count = (int) species_ranks.size();
     const int harmonic_count = l_count * l_count;
     const int mixed_size = mixed_offsets[l_count];
@@ -217,7 +217,7 @@ void PairETNGrad::accumulate_site_grad(const NeighList& list, int ii, int nbr_of
 }
 
 // S_l[pair](n', n) = sum_k A_l[pair, k] B_l[k, n', n], so dS feeds dA through B and dB through A.
-void PairETNGrad::scatter_mixing_adj(double* grad) const {
+void ETN::scatter_mixing_adj(double* grad) const {
     const int l_count = (int) species_ranks.size();
     for (int l = 0; l < l_count; l++) {
         const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];

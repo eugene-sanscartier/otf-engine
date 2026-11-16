@@ -23,7 +23,7 @@ static bool linear_fit_step(int step) {
     return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
 }
 
-MTPTrainer::MTPTrainer(PairMTPGrad& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+MTPTrainer::MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
     : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
     n_radial = potential.get_radial_coeff_count();
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();

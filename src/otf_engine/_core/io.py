@@ -6,15 +6,15 @@ import numpy
 
 
 def read_potential(path: str):
-    """The potential in the file *path*, as a PairETNGrad if the file's first line is ETN, else as a PairMTPGrad."""
+    """The potential in the file *path*, as an ETN if the file's first line is ETN, else as an MTP."""
     with open(path, "rb") as f:    # the #MVS_v1.1 section is binary
         etn = f.readline().strip() == b"ETN"
     if etn:
-        from .._etn import PairETNGrad    # _mtp and _etn import _core, so _core imports them only when called
-        potential = PairETNGrad(path)
+        from .._etn import ETN    # _mtp and _etn import _core, so _core imports them only when called
+        potential = ETN(path)
     else:
-        from .._mtp import PairMTPGrad
-        potential = PairMTPGrad(path)
+        from .._mtp import MTP
+        potential = MTP(path)
     return potential
 
 

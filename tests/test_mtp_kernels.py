@@ -1,6 +1,6 @@
 """The MTP's kernels: against mlip-3's evaluation, against each other, and their derivatives against finite differences.
 
-The forward pass is written out five times, in PairMTP::compute, PairMTPExtrapolation::compute and PairMTPGrad's
+The forward pass is written out five times, in PairMTP::compute, PairMTPExtrapolation::compute and MTP's
 eval_basis, eval_grad and add_loss_grad (through eval_loss_grad); each must give what the others give.
 """
 
@@ -71,11 +71,11 @@ def test_forward_passes_agree(name, structures):
     """The five forward passes give one energy, forces and virial: compute's, the extrapolation's, and the linear block
     of eval_grad and eval_basis contracted with the coefficients; eval_loss_grad is eval_grad contracted with the loss's
     derivatives."""
-    from otf_engine._mtp import PairMTPGrad, PairMTPExtrapolation
+    from otf_engine._mtp import MTP, PairMTPExtrapolation
 
     potential, renamed = POTENTIALS[name]
     cells = two_species(structures) if renamed else structures
-    pot = PairMTPGrad(str(potential))
+    pot = MTP(str(potential))
     grader = PairMTPExtrapolation(str(potential))
     n = pot.get_coeff_count()
     grader.set_active_set(numpy.random.default_rng(1).standard_normal((n, n)), False, 2)
@@ -115,11 +115,11 @@ def test_forward_passes_agree(name, structures):
 @pytest.mark.parametrize("name", POTENTIALS)
 def test_derivatives(name, structures):
     """Forces, virial and every coefficient gradient match central differences; the energy is invariant under rotation and reflection."""
-    from otf_engine._mtp import PairMTPGrad
+    from otf_engine._mtp import MTP
 
     potential, renamed = POTENTIALS[name]
     atoms = (two_species(structures) if renamed else structures)[1]
-    pot = PairMTPGrad(str(potential))
+    pot = MTP(str(potential))
     derivative_checks.check_gradients(pot, atoms)
     assert derivative_checks.check_virial(pot, atoms) < 1e-6
     assert derivative_checks.check_invariance(pot, atoms) < 1e-12

@@ -5,7 +5,7 @@ On the first N structures of a cfg, for the 3-core and the 5-core potentials of 
 
   eval       energy, forces and virial of one structure: PairETN.compute on a built neighbor list,
              and with the list's build; mlip-4's CalcCfg::Run, which builds its own neighbors
-  loss grad  the loss and its gradient over the N structures: PairETNGrad's compute and
+  loss grad  the loss and its gradient over the N structures: ETN's compute and
              eval_loss_grad per structure; mlip-4's LossFunction::AccumulateGrads
   train      train_etn from the untrained potential, without pre-training, for -i iterations;
              mlip-4's Train through etn_reference/mlip4_train.cpp, its input's reading included
@@ -28,7 +28,7 @@ import numpy
 import etn_potentials as kernels
 import test_etn_trainer as training
 from conftest import ETN_REFERENCE
-from otf_engine._etn import PairETNGrad, train_etn
+from otf_engine._etn import ETN, train_etn
 from otf_engine._core import neighbors
 from otf_engine.io_cfg import read_cfg
 from otf_engine._core import Sample
@@ -91,7 +91,7 @@ def main():
         bench = kernels.compile_probe(args.mlip4_build, workdir, BENCH_SOURCE)
         trainer = kernels.compile_probe(args.mlip4_build, workdir, ETN_REFERENCE / "mlip4_train.cpp")
         for name in args.potentials:
-            pot = PairETNGrad(str(ETN_REFERENCE / f"{name}.etn"))
+            pot = ETN(str(ETN_REFERENCE / f"{name}.etn"))
             labelled = [(atoms, Sample(atoms, pot.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
             settings = dict(training.SETTINGS, pretrain=False, max_iter_count=args.iterations)
             training_file = Path(workdir) / f"{name}.txt"
@@ -106,7 +106,7 @@ def main():
 
             template = Path(workdir) / f"{name}-template.etn"
             template.write_text(kernels.template(name))
-            untrained = PairETNGrad(str(template))
+            untrained = ETN(str(template))
             training.write_training_file(training_file, untrained, labelled, settings)
             options = training.trainer_options(settings, "none")
             start = time.perf_counter()

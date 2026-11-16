@@ -43,7 +43,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
 
 PYBIND11_MODULE(_mtp_mpi, m) {
     m.doc() = "MTPTrainer over MPI.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers PairMTPGrad
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTP
 
     m.def("train_mtp", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("inverse_hessian") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename with MTPTrainer over the ranks of comm, and return it.
@@ -80,7 +80,7 @@ static py::tuple objective(const std::string& filename, py::iterable structures,
     for (py::handle item : structures)
         share.push_back(item.cast<Sample>());
 
-    PairMTPGrad potential(filename);
+    MTP potential(filename);
     std::vector<double> at(coeffs.data(), coeffs.data() + coeffs.size()), grad;
     ThreadGroup group(1);
     ThreadComm comm{&group, 0};

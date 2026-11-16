@@ -161,7 +161,7 @@ number    : the number the error tables name it by
 
     def_neighbors(cls, "eval_grad", &eval_grad,
                   R"doc(
-d(E_i, F, virial)/dc, c as get_coeffs orders it; PairMTPGrad and PairETNGrad only.
+d(E_i, F, virial)/dc, c as get_coeffs orders it; MTP and ETN only.
 
 Without forces, returns site_energy_grad (inum, cc); row ii is dE_i/dc for
 atom ilist[ii], the information vector extrapolation grades are taken from.
@@ -173,7 +173,7 @@ With forces, returns (site_energy_grad (inum, cc), force_grad (n_atoms, 3, cc), 
                   R"doc(
 dL/dc (cc,) for a loss L with the given derivatives w.r.t. the energy,
 the forces (n_atoms, 3) and the virial (6, xx,yy,zz,xy,xz,yz); None is zero;
-PairMTPGrad and PairETNGrad only.
+MTP and ETN only.
 )doc",
                   py::arg("dloss_denergy"), py::arg("dloss_dforces") = py::none(), py::arg("dloss_dvirial") = py::none());
 

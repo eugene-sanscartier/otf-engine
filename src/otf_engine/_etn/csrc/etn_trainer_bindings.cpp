@@ -27,7 +27,7 @@ static py::object train(const std::string& filename, py::iterable structures, co
 
 PYBIND11_MODULE(_etn_mpi, m) {
     m.doc() = "ETNTrainer over MPI.";
-    py::module_::import("otf_engine._etn._etn_ext");    // registers PairETNGrad
+    py::module_::import("otf_engine._etn._etn_ext");    // registers ETN
 
     m.def("train_etn", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("comm"), py::arg("checkpoint") = py::none(), py::arg("balance_species") = true, R"doc(
 Train the potential in filename with ETNTrainer over the ranks of comm, and return it.

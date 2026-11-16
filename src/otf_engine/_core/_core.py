@@ -7,7 +7,7 @@ and _etn_ext import for Pair and NeighList.
     Pair          the base of PairMTP and PairETN: coefficients, gradients, accessors
     Sample        a structure to fit, which sample.py builds from an ASE structure
     error_table   a potential's errors on structures, as train_mtp and train_etn log them
-    Equations     the MaxVol equations of structures, from a PairMTPGrad's or PairETNGrad's gradients
+    Equations     the MaxVol equations of structures, from an MTP's or ETN's gradients
     MaxVol        an active set, graded against and searched
 """
 

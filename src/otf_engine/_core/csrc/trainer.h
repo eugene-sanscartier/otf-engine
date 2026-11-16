@@ -34,7 +34,7 @@ struct TrainerOptions {
     std::vector<std::string> species;    // the species' names in the error tables
 };
 
-// Potential is PairMTPGrad or PairETNGrad, Options its trainer's options.
+// Potential is MTP or ETN, Options its trainer's options.
 template <class PotentialT, class OptionsT>
 class Trainer {
   public:

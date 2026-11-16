@@ -59,7 +59,7 @@ def same_active_set(mpi_set, serial_set):
 
 @pytest.mark.mpi
 def test_otf_pool(structures, candidates, tmp_path):
-    from otf_engine._mtp import PairMTPGrad, write_mtp
+    from otf_engine._mtp import MTP, write_mtp
     from otf_engine.almtp_io import read_mvs_header, read_mvs_state
     from otf_engine.io_cfg import read_cfg, write_cfg
     from otf_engine.otf_cycle import grade_dump
@@ -98,7 +98,7 @@ def test_otf_pool(structures, candidates, tmp_path):
     numpy.testing.assert_allclose(losses["mpi"], losses["threads"], rtol=1e-5)
 
     # The fits differ in their linear coefficients, so the reference searches the MPI fit on one rank.
-    write_mtp(PairMTPGrad(str(work / "mpi.almtp")), str(work / "serial.almtp"))
+    write_mtp(MTP(str(work / "mpi.almtp")), str(work / "serial.almtp"))
     update_active_set(str(work / "serial.almtp"), structs, weights=read_mvs_header(str(work / "potential.almtp"))[0])
     same_active_set(read_mvs_state(str(work / "mpi.almtp")), read_mvs_state(str(work / "serial.almtp")))
 

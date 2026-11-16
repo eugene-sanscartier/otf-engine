@@ -48,7 +48,7 @@ class MTPTrainerStages {
     py::array_t<double> get_reg_vector() const { return py::array_t<double>(trainer->reg_vector.size(), trainer->reg_vector.data()); }
     void set_reg_vector(const std::vector<double>& r) { trainer->reg_vector = r; }
 
-    PairMTPGrad potential;
+    MTP potential;
     std::ostringstream log;
 
   private:
@@ -111,7 +111,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
     double loss = 0.0;
     std::vector<double> grad;
     auto run_rank = [&](int r) {
-        PairMTPGrad potential(filename);
+        MTP potential(filename);
         MTPTrainer trainer(potential, std::move(shares[r]), o, &comms[r]);
         std::vector<double> rank_grad;
         const double rank_loss = trainer.objective(coeffs, rank_grad);
@@ -132,7 +132,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
 
 PYBIND11_MODULE(_mtp_testing, m) {
     m.doc() = "MTPTrainer's stages and BFGS, for the tests.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers PairMTPGrad and Sample
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTP and Sample
 
     py::class_<MTPTrainerStages>(m, "MTPTrainerStages")
         .def(py::init<const std::string&, py::iterable, const std::map<std::string, std::string>&, bool>(), py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("balance_species") = false)
@@ -150,7 +150,7 @@ PYBIND11_MODULE(_mtp_testing, m) {
         .def_property("scaling", [](MTPTrainerStages& s) { return s.potential.get_scaling(); }, [](MTPTrainerStages& s, double v) { s.potential.set_scaling(v); })
         .def_property_readonly("min_dist", [](MTPTrainerStages& s) { return s.potential.get_min_cutoff(); })
         .def_property_readonly("log", [](MTPTrainerStages& s) { return s.log.str(); })
-        .def_property_readonly("potential", [](MTPTrainerStages& s) -> PairMTPGrad& { return s.potential; }, py::return_value_policy::reference_internal);
+        .def_property_readonly("potential", [](MTPTrainerStages& s) -> MTP& { return s.potential; }, py::return_value_policy::reference_internal);
 
     m.def("bfgs_rosenbrock", &bfgs_rosenbrock, py::arg("n"), py::arg("steps"));
     m.def("objective_on_threads", &objective_on_threads, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("coeffs"), py::arg("ranks"), py::arg("balance_species") = false);

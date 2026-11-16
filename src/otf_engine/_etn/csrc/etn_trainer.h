@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
    Fits an ETN to reference energies, forces and stresses.
    Algorithm of mlip-4's Train (mlip-4/src/training/train.cpp at 79a39bf)
-   and ETN::Rescale (src/pots/etn/etn.cpp), on PairETNGrad's kernels.
+   and ETN::Rescale (src/pots/etn/etn.cpp), on ETN's kernels.
    BSD 2-Clause, see mlip-4's LICENSE.
 
    SPMD over the ranks of a communicator, as every Trainer is (see trainer.h).
@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "pair_etn_grad.h"
+#include "etn.h"
 #include "trainer.h"
 #include "wolfe_bfgs.h"
 
@@ -29,11 +29,11 @@ struct ETNTrainerOptions : TrainerOptions {
     int bfgs_max_iters_no_improve = 10;
 };
 
-class ETNTrainer : public Trainer<PairETNGrad, ETNTrainerOptions> {
+class ETNTrainer : public Trainer<ETN, ETNTrainerOptions> {
   public:
     // log receives mlip-4's fit log on the rank given one; checkpoint is called
     // with the potential holding the coefficients at every step outside a line search.
-    ETNTrainer(PairETNGrad& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    ETNTrainer(ETN& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, and logs
     // the errors on the training set before and after.

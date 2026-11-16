@@ -10,11 +10,11 @@
 #include <stdexcept>
 
 void Pair::eval_grad(const NeighList&, double*, double*, double*) {
-    throw std::runtime_error("eval_grad needs a PairMTPGrad or PairETNGrad");
+    throw std::runtime_error("eval_grad needs an MTP or ETN");
 }
 
 void Pair::eval_loss_grad(const NeighList&, double, const double*, const double*, double*) {
-    throw std::runtime_error("eval_loss_grad needs a PairMTPGrad or PairETNGrad");
+    throw std::runtime_error("eval_loss_grad needs an MTP or ETN");
 }
 
 void Pair::read_radial_basis(TextFileReader& tfr) {

@@ -8,12 +8,12 @@
    in the _mtp_ext module under ../../_mtp/csrc/:
      pair_mtp_bindings.cpp                <- pair_mtp.{h,cpp}
      pair_mtp_extrapolation_bindings.cpp  <- pair_mtp_extrapolation.{h,cpp}
-     pair_mtp_grad_bindings.cpp            <- pair_mtp_grad.{h,cpp}
+     mtp_bindings.cpp                     <- mtp.{h,cpp}
      mtp_trainer_bindings.cpp             <- mtp_trainer.{h,cpp}
    and in the _etn_ext module under ../../_etn/csrc/:
      etn_harmonics_bindings.cpp           <- etn_harmonics.{h,cpp}
      pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
-     pair_etn_grad_bindings.cpp            <- pair_etn_grad.{h,cpp}
+     etn_bindings.cpp                     <- etn.{h,cpp}
      etn_trainer_bindings.cpp             <- etn_trainer.{h,cpp}
    Built with MTP_MPI, core_bindings.cpp and maxvol_bindings.cpp are the
    _core_mpi module, mtp_trainer_bindings.cpp the _mtp_mpi module, and
@@ -354,9 +354,9 @@ void bind_core(py::module_& m);
 void bind_maxvol(py::module_& m);
 void bind_pair_mtp(py::module_& m);
 void bind_pair_mtp_extrapolation(py::module_& m);
-void bind_pair_mtp_grad(py::module_& m);
+void bind_mtp(py::module_& m);
 void bind_mtp_trainer(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
 void bind_pair_etn(py::module_& m);
-void bind_pair_etn_grad(py::module_& m);
+void bind_etn(py::module_& m);
 void bind_etn_trainer(py::module_& m);

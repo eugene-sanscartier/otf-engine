@@ -19,9 +19,9 @@ TEACHER = MTP_REFERENCE / "potential-16.mtp"
 
 def perturbed_coeffs(path, scale, seed):
     """The coefficients of the potential in path, the radial ones multiplied by 1 + scale * N(0, 1)."""
-    from otf_engine._mtp import PairMTPGrad
+    from otf_engine._mtp import MTP
 
-    potential = PairMTPGrad(str(path))
+    potential = MTP(str(path))
     coeffs = numpy.array(potential.get_coeffs())
     n_radial = potential.get_radial_coeff_count()
     coeffs[:n_radial] *= 1 + scale * numpy.random.default_rng(seed).standard_normal(n_radial)
