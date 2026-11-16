@@ -108,7 +108,7 @@ def tensors(pot, coeffs, atoms):
     """Energy, forces, virial, input and bond vectors of pot at coeffs on atoms."""
     pot.set_coeffs(coeffs)
     result = pot.compute(neighbors(atoms, pot.get_max_cutoff()))
-    out = {key: numpy.asarray(result[key]) for key in ("energy", "forces", "virials", "inputs")}
+    out = {key: numpy.asarray(result[key]) for key in ("energy", "forces", "virial", "inputs")}
     for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
         out[f"bonds/{b}"], out[f"bonds_im/{b}"] = numpy.asarray(re_part), numpy.asarray(im_part)
     return out

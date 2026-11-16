@@ -91,11 +91,6 @@ def load_structures(set_name, species=None):
     return cfgs
 
 
-def save_structures(set_name, cfgs, append=False):
-    with open(set_name, mode="a" if append else "w") as set_file:
-        write_cfg(set_file, cfgs)
-
-
 @dataclass
 class OTFCycle:
     """One OTF-MTP update cycle, from extrapolative dumps to a retrained model, stepped through by its caller.
@@ -150,7 +145,7 @@ class OTFCycle:
             self.state.setdefault("memory", {})
             self.launcher.configure_timing(self.state, _save_state)
             self.launcher.configure_memory(self.state, _save_state)
-            self.train_structures = load_structures(self.training_set, self.species)
+            self.training_structs = load_structures(self.training_set, self.species)
         except BaseException as e:
             self.__exit__(type(e), e, e.__traceback__)
             raise
@@ -192,7 +187,7 @@ class OTFCycle:
             "n_failed": record["n_failed"],
             "n_selected_total": state["n_selected_total"],
             "n_evaluated_total": state["n_evaluated_total"],
-            "training_set_size": len(self.train_structures) + record["n_evaluated"],
+            "training_set_size": len(self.training_structs) + record["n_evaluated"],
             "active_set_size": record["active_set_size"],
             "gammas_candidates": record["gammas_candidates"],
             "gammas_selected": record["gammas_selected"],
@@ -310,7 +305,8 @@ class OTFCycle:
                     deferred += [structures[i]]
                 elif status == "ok":
                     evaluated += [result]
-                    save_structures(self.training_set, [result], append=True)
+                    with open(self.training_set, mode="a") as set_file:
+                        write_cfg(set_file, [result])
                     gammas_evaluated += [structures[i].info["features"]["MV_grade"]]
         n_failed = n - len(evaluated) - len(deferred)
         logger.info(f"Evaluated {len(evaluated)}/{n} successfully ({len(deferred)} deferred, {n_failed} failed).")
@@ -318,7 +314,7 @@ class OTFCycle:
 
         ase.io.extxyz.write_extxyz(deferred_file, deferred)
         self.evaluated = evaluated
-        if evaluated: logger.info(errors(self.potential, evaluated, "Errors on the evaluated structures before training:", first=len(self.train_structures) + 1, species=self.species))
+        if evaluated: logger.info(errors(self.potential, evaluated, "Errors on the evaluated structures before training:", first=len(self.training_structs) + 1, species=self.species))
         else: logger.info("No configurations selected or evaluated — retraining.")
         return len(evaluated)
 
@@ -357,7 +353,7 @@ class OTFCycle:
     def replace_potential(self):
         """Replace the potential with the one training wrote, and log its errors on the evaluated structures."""
         os.replace(self.training["save_path"], self.potential)
-        if self.evaluated: logger.info(errors(self.potential, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.train_structures) + 1, species=self.species))
+        if self.evaluated: logger.info(errors(self.potential, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.training_structs) + 1, species=self.species))
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {self.potential}.")
 
 
@@ -367,9 +363,9 @@ def run_cycle(extrapolative_dumps, launcher: Launcher, *, mlp_command, **options
     options : OTFCycle's
     """
     with OTFCycle(extrapolative_dumps, launcher, **options) as cycle:
-        train_eqns = update_active_set(cycle.potential, cycle.train_structures)
+        train_eqns = update_active_set(cycle.potential, cycle.training_structs)
         candidates = cycle.preselect(grade_extrapolative_dumps(cycle.potential, extrapolative_dumps, cycle.species))
-        selected, _ = select_add(cycle.potential, cycle.train_structures, candidates, train_eqns=train_eqns)
+        selected, _ = select_add(cycle.potential, cycle.training_structs, candidates, train_eqns=train_eqns)
         n_ok = cycle.evaluate(selected)
-        launcher.run(f"{mlp_command} train {cycle.potential} {cycle.training_set} --save_to={cycle.training['save_path']} --iteration_limit={cycle.iteration_limit}", log_file=TRAIN_LOG, training_set_size=len(cycle.train_structures) + n_ok)
+        launcher.run(f"{mlp_command} train {cycle.potential} {cycle.training_set} --save_to={cycle.training['save_path']} --iteration_limit={cycle.iteration_limit}", log_file=TRAIN_LOG, training_set_size=len(cycle.training_structs) + n_ok)
         cycle.replace_potential()

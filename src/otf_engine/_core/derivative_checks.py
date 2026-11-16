@@ -56,7 +56,7 @@ def check_virial(pot, atoms, step=1e-6):
     strain that moves y by x; the off-diagonal pairs agree for an invariant potential.
     """
     cutoff = pot.get_max_cutoff()
-    analytic_virial = numpy.asarray(pot.compute(neighbors(atoms, cutoff))["virials"], dtype=float64)
+    analytic_virial = numpy.asarray(pot.compute(neighbors(atoms, cutoff))["virial"], dtype=float64)
 
     numeric = numpy.zeros((3, 3))
     for a in range(3):
@@ -103,6 +103,22 @@ def _coeff_block(pot, block):
     raise ValueError(f"unknown coefficient block '{block}'")
 
 
+def _central_difference(f, coeffs, setter, k, step):
+    """(f(c + step e_k) - f(c - step e_k)) / (2 step), moving coefficient k of a block through its setter and restoring it."""
+    original = coeffs[k]
+    coeffs[k] = original + step
+    setter(coeffs)
+    plus = f()
+    coeffs[k] = original - step
+    setter(coeffs)
+    minus = f()
+    coeffs[k] = original
+    setter(coeffs)
+
+    derivative = (plus - minus) / (2 * step)
+    return derivative
+
+
 def check_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
     """Compare a site-energy gradient block against central differences.
 
@@ -119,18 +135,7 @@ def check_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
     rng = numpy.random.default_rng(seed)
     probe_indices = rng.choice(len(coeffs), size=min(n_coeffs, len(coeffs)), replace=False)
 
-    numeric_grad = numpy.zeros(len(probe_indices))
-    for slot, k in enumerate(probe_indices):
-        original = coeffs[k]
-        coeffs[k] = original + step
-        setter(coeffs)
-        e_plus = _energy(pot, atoms, cutoff)
-        coeffs[k] = original - step
-        setter(coeffs)
-        e_minus = _energy(pot, atoms, cutoff)
-        coeffs[k] = original
-        setter(coeffs)
-        numeric_grad[slot] = (e_plus - e_minus) / (2 * step)
+    numeric_grad = numpy.array([_central_difference(lambda: _energy(pot, atoms, cutoff), coeffs, setter, k, step) for k in probe_indices])
 
     return _rel_error(analytic_grad[probe_indices], numeric_grad)
 
@@ -147,20 +152,9 @@ def check_force_coeff_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=4, se
     rng = numpy.random.default_rng(seed)
     probe_indices = rng.choice(len(coeffs), size=min(n_coeffs, len(coeffs)), replace=False)
 
-    analytic_grad, numeric_grad = [], []
-    for k in probe_indices:
-        original = coeffs[k]
-        coeffs[k] = original + step
-        setter(coeffs)
-        f_plus = numpy.asarray(pot.compute(nl)["forces"], dtype=float64)
-        coeffs[k] = original - step
-        setter(coeffs)
-        f_minus = numpy.asarray(pot.compute(nl)["forces"], dtype=float64)
-        coeffs[k] = original
-        setter(coeffs)
-
-        analytic_grad += [force_grad[:, :, k].ravel()]
-        numeric_grad += [((f_plus - f_minus) / (2 * step)).ravel()]
+    forces = lambda: numpy.asarray(pot.compute(nl)["forces"], dtype=float64)
+    analytic_grad = [force_grad[:, :, k].ravel() for k in probe_indices]
+    numeric_grad = [_central_difference(forces, coeffs, setter, k, step).ravel() for k in probe_indices]
 
     return _rel_error(numpy.concatenate(analytic_grad), numpy.concatenate(numeric_grad))
 
@@ -181,24 +175,13 @@ def check_loss_grad(pot, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
 
     def loss():
         result = pot.compute(nl)
-        return dloss_denergy * float(result["energy"]) + float((dloss_dforces * numpy.asarray(result["forces"])).sum()) + float(dloss_dvirial @ numpy.asarray(result["virials"]))
+        return dloss_denergy * float(result["energy"]) + float((dloss_dforces * numpy.asarray(result["forces"])).sum()) + float(dloss_dvirial @ numpy.asarray(result["virial"]))
 
     coeffs, setter, offset = _coeff_block(pot, block)
     analytic_grad = numpy.asarray(pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial), dtype=float64)[offset:offset + len(coeffs)]
     probe_indices = rng.choice(len(coeffs), size=min(n_coeffs, len(coeffs)), replace=False)
 
-    numeric_grad = numpy.zeros(len(probe_indices))
-    for slot, k in enumerate(probe_indices):
-        original = coeffs[k]
-        coeffs[k] = original + step
-        setter(coeffs)
-        l_plus = loss()
-        coeffs[k] = original - step
-        setter(coeffs)
-        l_minus = loss()
-        coeffs[k] = original
-        setter(coeffs)
-        numeric_grad[slot] = (l_plus - l_minus) / (2 * step)
+    numeric_grad = numpy.array([_central_difference(loss, coeffs, setter, k, step) for k in probe_indices])
 
     return _rel_error(analytic_grad[probe_indices], numeric_grad)
 

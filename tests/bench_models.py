@@ -103,7 +103,7 @@ def timings(pot, labelled, repeats, weights):
             dforces = 2 * weights["force_weight"] * (result["forces"] - s.forces)
             dvirial = None
             if s.virial is not None:
-                dvirial = 2 * weights["stress_weight"] * (result["virials"] - s.virial) * numpy.array([1, 1, 1, 2, 2, 2])
+                dvirial = 2 * weights["stress_weight"] * (result["virial"] - s.virial) * numpy.array([1, 1, 1, 2, 2, 2])
             pot.eval_loss_grad(s.neighbors, 2 * weights["energy_weight"] * (result["energy"] - s.energy), dforces, dvirial)
     loss_grad_ms = (time.perf_counter() - start) * 1e3 / (repeats * len(lists))
     return eval_ms, eval_build_ms, loss_grad_ms

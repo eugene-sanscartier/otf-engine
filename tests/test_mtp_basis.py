@@ -19,7 +19,7 @@ LEVELS = list(range(6, 30, 2))
 SPECIES_COUNT = 3
 MIN_DIST, MAX_DIST, RADIAL_BASIS_SIZE = 1.0, 5.0, 6
 TOL = 1e-11
-KEYS = ("energy", "eatom", "forces", "virials")
+KEYS = ("energy", "eatom", "forces", "virial")
 
 
 def build(level, species_count=SPECIES_COUNT):

@@ -126,56 +126,29 @@ def write_cfg(fileobj: IO[str], images: list[ase.Atoms]):
         forces = atoms.calc.results["forces"] if has_forces else None
         nbh = atoms.arrays["nbh_grades"] if has_nbh else None
 
-        fields_data = {"id": [], "type": [], "cartes_x": [], "cartes_y": [], "cartes_z": []}
-        if has_forces:
-            fields_data["fx"], fields_data["fy"], fields_data["fz"] = [], [], []
-        if has_nbh:
-            fields_data["nbh_grades"] = []
-
-        for i in range(len(atoms)):
-            fields_data["id"] += [i + 1]
-            fields_data["type"] += [type_ranks[i]]
-            fields_data["cartes_x"] += [positions[i][0]]
-            fields_data["cartes_y"] += [positions[i][1]]
-            fields_data["cartes_z"] += [positions[i][2]]
-            if has_forces:
-                fields_data["fx"] += [forces[i][0]]
-                fields_data["fy"] += [forces[i][1]]
-                fields_data["fz"] += [forces[i][2]]
-            if has_nbh:
-                fields_data["nbh_grades"] += [nbh[i]]
-
-        if "nbh_grades" in atoms.arrays:
-            if "features" in atoms.info:
-                atoms.info["features"]["MV_grade"] = numpy.max(atoms.arrays["nbh_grades"])
-            else:
-                atoms.info["features"] = {"MV_grade": numpy.max(atoms.arrays["nbh_grades"])}
-
-        has_energy = atoms.calc is not None and "energy" in atoms.calc.results
-        has_stress = atoms.calc is not None and "stress" in atoms.calc.results
-
         output += [" AtomData:  " + "    ".join(fields)]
         for i in range(len(atoms)):
-            line = f" {fields_data['id'][i]:9d} {fields_data['type'][i]:3d} {fields_data['cartes_x'][i]:12.6f} {fields_data['cartes_y'][i]:12.6f} {fields_data['cartes_z'][i]:12.6f} "
+            line = f" {i + 1:9d} {type_ranks[i]:3d} {positions[i][0]:12.6f} {positions[i][1]:12.6f} {positions[i][2]:12.6f} "
             if has_forces:
-                line += f" {fields_data['fx'][i]:12.6f} {fields_data['fy'][i]:12.6f} {fields_data['fz'][i]:12.6f} "
+                line += f" {forces[i][0]:12.6f} {forces[i][1]:12.6f} {forces[i][2]:12.6f} "
             if has_nbh:
-                line += f" {fields_data['nbh_grades'][i]:12.6f}"
+                line += f" {nbh[i]:12.6f}"
             output += [line]
 
-        if has_energy:
+        if atoms.calc is not None and "energy" in atoms.calc.results:
             output += [" Energy", f"    {atoms.calc.results['energy']:12.6f}"]
 
-        if has_stress:
-            stress_fields, stress_fields_data = ["xx", "yy", "zz", "yz", "xz", "xy"], {}
-            for i, stress_field in enumerate(stress_fields):
-                stress_fields_data[stress_field] = atoms.calc.results["stress"][i] * atoms.get_volume() * -1
-            output += [" PlusStress:  " + "   ".join(stress_fields)]
-            output += [f"    {stress_fields_data['xx']:12.6f} {stress_fields_data['yy']:12.6f} {stress_fields_data['zz']:12.6f} {stress_fields_data['yz']:12.6f} {stress_fields_data['xz']:12.6f} {stress_fields_data['xy']:12.6f}"]
+        if atoms.calc is not None and "stress" in atoms.calc.results:
+            # PlusStress is -stress * volume, in ASE's Voigt order xx yy zz yz xz xy
+            plus_stress = -numpy.asarray(atoms.calc.results["stress"]) * atoms.get_volume()
+            output += [" PlusStress:  " + "   ".join(["xx", "yy", "zz", "yz", "xz", "xy"])]
+            output += ["    " + " ".join(f"{x:12.6f}" for x in plus_stress)]
 
-        if "features" in atoms.info:
-            for feature_name, feature_value in atoms.info["features"].items():
-                output += [f" Feature    {feature_name} {feature_value}"]
+        # MV_grade is the largest neighborhood grade, as read_cfg sets it
+        features = dict(atoms.info.get("features", {}))
+        if has_nbh: features["MV_grade"] = numpy.max(nbh)
+        for feature_name, feature_value in features.items():
+            output += [f" Feature    {feature_name} {feature_value}"]
 
         output += ["END_CFG"]
         output += [""]

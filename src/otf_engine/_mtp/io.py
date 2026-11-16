@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .._core.io import format_floats, format_ints
+from .._core.io import format_floats, format_ints, write_header, write_radial_basis
 
 
 def write_mtp(potential, filename):
@@ -25,21 +25,12 @@ def write_mtp(potential, filename):
 
     species_count = potential.get_species_count()
     radial_func_count = potential.get_radial_func_count()
-    radial_basis_size = potential.get_radial_basis_size()
     trained = potential.is_trained()
 
     with path.open("w", encoding="utf-8") as stream:
-        stream.write("MTP\n")
-        stream.write("version = 1.1.0\n")
-        stream.write(f"potential_name = {potential.get_potential_name()}\n")
-        stream.write(f"scaling = {potential.get_scaling():.17g}\n")
-        if trained:
-            stream.write(f"species_count = {species_count}\n")
+        write_header(stream, potential, "MTP", "1.1.0", with_species_count=trained)
         stream.write("potential_tag = \n")
-        stream.write(f"radial_basis_type = {potential.get_radial_basis_type()}\n")
-        stream.write(f"\tmin_dist = {potential.get_min_cutoff():.17g}\n")
-        stream.write(f"\tmax_dist = {potential.get_max_cutoff():.17g}\n")
-        stream.write(f"\tradial_basis_size = {radial_basis_size}\n")
+        write_radial_basis(stream, potential)
         stream.write(f"\tradial_funcs_count = {radial_func_count}\n")
         stream.write("\tradial_coeffs\n")
 

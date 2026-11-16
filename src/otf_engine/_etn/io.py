@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .._core.io import format_floats, format_ints
+from .._core.io import format_floats, format_ints, write_header, write_radial_basis
 
 
 def write_etn(potential, filename):
@@ -21,16 +21,9 @@ def write_etn(potential, filename):
     core_count = potential.get_core_count()
 
     with path.open("w", encoding="utf-8") as stream:
-        stream.write("ETN\n")
-        stream.write("version = 1.0.0\n")
-        stream.write(f"potential_name = {potential.get_potential_name()}\n")
-        stream.write(f"scaling = {potential.get_scaling():.17g}\n")
-        if potential.get_species_count() > 0:    # an untrained potential may have none until training
-            stream.write(f"species_count = {potential.get_species_count()}\n")
-        stream.write(f"radial_basis_type = {potential.get_radial_basis_type()}\n")
-        stream.write(f"\tmin_dist = {potential.get_min_cutoff():.17g}\n")
-        stream.write(f"\tmax_dist = {potential.get_max_cutoff():.17g}\n")
-        stream.write(f"\tradial_basis_size = {potential.get_radial_basis_size()}\n")
+        # an untrained potential may have no species count until training
+        write_header(stream, potential, "ETN", "1.0.0", with_species_count=potential.get_species_count() > 0)
+        write_radial_basis(stream, potential)
         stream.write("species_ranks = {" + format_ints(potential.get_species_ranks()) + "}\n")
         stream.write("radial_funcs_counts = {" + format_ints(potential.get_radial_func_counts()) + "}\n")
         stream.write("radial_ranks = {" + format_ints(potential.get_radial_ranks()) + "}\n")

@@ -78,7 +78,7 @@ def outputs(potentials, cells):
             nl = neighbors(atoms, MAX_DIST, types=species_of(pot, types))
             result = pot.compute(nl)
             prefix = f"{name}/s{s}/"
-            for key in ("energy", "eatom", "forces", "virials"):
+            for key in ("energy", "eatom", "forces", "virial"):
                 out[prefix + key] = numpy.asarray(result[key], dtype=numpy.float64)
             out[prefix + "inputs"] = numpy.asarray(result["inputs"])
             for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
@@ -190,7 +190,7 @@ def test_loss_grad(potentials, cells, step=1e-5):
     def loss(c):
         pot.set_coeffs(c)
         result = pot.compute(nl)
-        return dloss_denergy * result["energy"] + (dloss_dforces * result["forces"]).sum() + (dloss_dvirial * result["virials"]).sum()
+        return dloss_denergy * result["energy"] + (dloss_dforces * result["forces"]).sum() + (dloss_dvirial * result["virial"]).sum()
 
     pot.set_coeffs(coeffs)
     grad = pot.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial)

@@ -44,4 +44,4 @@ class PotentialCalculator(Calculator):
             self.results["energies"] = numpy.array(result["eatom"], dtype=float64)
 
         if "stress" in properties:
-            self.results["stress"] = stress_from_virial(result["virials"], atoms.get_volume())
+            self.results["stress"] = stress_from_virial(result["virial"], atoms.get_volume())

@@ -457,7 +457,7 @@ int main(int argc, char** argv) {
         print(prefix + "energy", {}, {calc.get_energy()});
         print(prefix + "eatom", {n_atoms}, eatom);
         print(prefix + "forces", {n_atoms, 3}, folded);
-        print(prefix + "virials", {6}, {stress[0], stress[1], stress[2], stress[5], stress[4], stress[3]});
+        print(prefix + "virial", {6}, {stress[0], stress[1], stress[2], stress[5], stress[4], stress[3]});
         print(prefix + "inputs", {kept, inputs.size() / kept}, inputs);
         for (size_t b = 0; b <= core_count; b++) {
             print(prefix + "bonds/" + std::to_string(b), {kept, bonds_re[b].size() / kept}, bonds_re[b]);

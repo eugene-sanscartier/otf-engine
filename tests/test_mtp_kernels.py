@@ -58,7 +58,7 @@ def test_against_mlp(name, structures, candidates, stored, mlip3_probe, tmp_path
         assert numpy.max(numpy.abs(numpy.asarray(result["forces"]) - forces)) <= 1e-12 * numpy.max(numpy.abs(forces))
         stresses = theirs["stresses"][k].reshape(3, 3)
         virial = stresses[[0, 1, 2, 0, 0, 1], [0, 1, 2, 1, 2, 2]]
-        assert numpy.max(numpy.abs(numpy.asarray(result["virials"]) - virial)) <= 1e-12 * numpy.max(numpy.abs(virial))
+        assert numpy.max(numpy.abs(numpy.asarray(result["virial"]) - virial)) <= 1e-12 * numpy.max(numpy.abs(virial))
 
     for k, r in enumerate(DISTANCES):
         vals, ders = pot.eval_radial_basis(r)
@@ -86,12 +86,12 @@ def test_forward_passes_agree(name, structures):
     for atoms in cells:
         nl = neighbors(atoms, pot.get_max_cutoff())
         result = pot.compute(nl)
-        energy, forces, virial = result["energy"], numpy.asarray(result["forces"]), numpy.asarray(result["virials"])
+        energy, forces, virial = result["energy"], numpy.asarray(result["forces"]), numpy.asarray(result["virial"])
         scale_f, scale_v = numpy.max(numpy.abs(forces)), numpy.max(numpy.abs(virial))
 
         graded = grader.compute(nl)
         assert numpy.max(numpy.abs(numpy.asarray(graded["forces"]) - forces)) <= 1e-13 * scale_f
-        assert numpy.max(numpy.abs(numpy.asarray(graded["virials"]) - virial)) <= 1e-13 * scale_v
+        assert numpy.max(numpy.abs(numpy.asarray(graded["virial"]) - virial)) <= 1e-13 * scale_v
         assert abs(numpy.sum(result["eatom"]) - energy) <= 1e-13 * abs(energy)
 
         site, force_grad, virial_grad = (numpy.asarray(x) for x in pot.eval_grad(nl, forces=True, virial=True))

@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
         print(prefix + "energy", {}, {calc.get_energy()});
         print(prefix + "eatom", {n_atoms}, eatom);
         print(prefix + "forces", {n_atoms, 3}, forces);
-        print(prefix + "virials", {6}, {stress[0], stress[1], stress[2], stress[5], stress[4], stress[3]});
+        print(prefix + "virial", {6}, {stress[0], stress[1], stress[2], stress[5], stress[4], stress[3]});
     }
     return 0;
 }
