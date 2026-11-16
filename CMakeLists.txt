@@ -24,7 +24,7 @@ add_library(core STATIC
     ${CORE_CSRC}/comm.cpp
     ${CORE_CSRC}/text_file_reader.cpp
     ${CORE_CSRC}/mtp_radial_basis.cpp
-    ${CORE_CSRC}/etn_radial_basis.cpp
+    ${CORE_CSRC}/rb_cinf.cpp
     ${CORE_CSRC}/pair.cpp
     ${CORE_CSRC}/maxvol.cpp
 )
@@ -39,20 +39,20 @@ pybind11_add_module(_core_ext
 target_link_libraries(_core_ext PRIVATE core Eigen3::Eigen)
 install(TARGETS _core_ext DESTINATION otf_engine/_core)
 
-# The MTP potential classes, linked into _mtp_ext and _mtp_testing
+# The MTP potential classes and their trainer, linked into _mtp_ext and _mtp_testing
 add_library(mtp STATIC
     ${MTP_CSRC}/mtp_basis.cpp
     ${MTP_CSRC}/pair_mtp.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation.cpp
     ${MTP_CSRC}/mtp.cpp
+    ${MTP_CSRC}/bfgs.cpp
+    ${MTP_CSRC}/mtp_trainer.cpp
 )
 target_include_directories(mtp PUBLIC ${MTP_CSRC})
-target_link_libraries(mtp PUBLIC core)
+target_link_libraries(mtp PUBLIC core PRIVATE Eigen3::Eigen)
 set_target_properties(mtp PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
 
 pybind11_add_module(_mtp_ext
-    ${MTP_CSRC}/bfgs.cpp
-    ${MTP_CSRC}/mtp_trainer.cpp
     ${MTP_CSRC}/mtp_module.cpp
     ${MTP_CSRC}/pair_mtp_bindings.cpp
     ${MTP_CSRC}/pair_mtp_extrapolation_bindings.cpp
@@ -64,27 +64,25 @@ install(TARGETS _mtp_ext DESTINATION otf_engine/_mtp)
 
 # MTPTrainer's stages one at a time, for the tests
 pybind11_add_module(_mtp_testing
-    ${MTP_CSRC}/bfgs.cpp
-    ${MTP_CSRC}/mtp_trainer.cpp
     ${MTP_CSRC}/mtp_trainer_bindings.cpp
     ${MTP_CSRC}/mtp_testing_bindings.cpp
 )
 target_link_libraries(_mtp_testing PRIVATE mtp Eigen3::Eigen)
 install(TARGETS _mtp_testing DESTINATION otf_engine/_mtp)
 
-# The ETN potential classes, linked into _etn_ext
+# The ETN potential classes and their trainer, linked into _etn_ext
 add_library(etn STATIC
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/pair_etn.cpp
     ${ETN_CSRC}/etn.cpp
     ${ETN_CSRC}/wolfe_bfgs.cpp
+    ${ETN_CSRC}/etn_trainer.cpp
 )
 target_include_directories(etn PUBLIC ${ETN_CSRC})
-target_link_libraries(etn PUBLIC core)
+target_link_libraries(etn PUBLIC core PRIVATE Eigen3::Eigen)
 set_target_properties(etn PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_VISIBILITY_PRESET hidden)
 
 pybind11_add_module(_etn_ext
-    ${ETN_CSRC}/etn_trainer.cpp
     ${ETN_CSRC}/etn_module.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/pair_etn_bindings.cpp

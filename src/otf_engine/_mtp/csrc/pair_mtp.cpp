@@ -355,12 +355,7 @@ void PairMTP::read_file(std::istream& is) {
     }
 }
 
-PairMTP::PairMTP(const std::vector<std::vector<int>>& basis_functions, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) {
-    if (species_count < 0)
-        throw std::runtime_error("PairMTP: species count must not be negative");
-    this->species_count = species_count;
-    set_radial_basis(radial_basis_type, min_dist, max_dist, radial_basis_size);
-
+PairMTP::PairMTP(const std::vector<std::vector<int>>& basis_functions, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) : Pair(species_count, radial_basis_type, min_dist, max_dist, radial_basis_size) {
     MTP_Basis basis(basis_functions);
     radial_func_count = basis.radial_function_count();
     alpha_moment_count = basis.alpha_moment_count;

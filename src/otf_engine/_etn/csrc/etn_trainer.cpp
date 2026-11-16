@@ -21,13 +21,7 @@ void ETNTrainer::add_species() {
     const int new_spec = training_species_count();
     if (old_spec == new_spec) return;
 
-    if (log && new_spec > old_spec) {
-        *log << "Following atomic numbers will be added to the ETN potential: ";
-        for (int t = old_spec; t < new_spec; t++)
-            *log << t << (t != new_spec - 1 ? ", " : "");
-        *log << std::endl;
-    }
-
+    log_added_species("ETN", old_spec, new_spec);
     potential.set_species_count(new_spec);
     if (!potential.is_trained())
         potential.fill_initial_coeffs();
@@ -43,8 +37,7 @@ void ETNTrainer::add_species() {
             potential.set_species_pair_coeffs(l, a.data());
         }
 
-    coeffs.resize(potential.coeff_count());
-    potential.get_coeffs(coeffs.data());
+    load_coeffs();
 }
 
 /* ---------------------------------------------------------------------- */

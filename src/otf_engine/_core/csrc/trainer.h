@@ -46,11 +46,25 @@ class Trainer {
         if (structure_count == 0)
             throw std::runtime_error("no training structures");
 
+        load_coeffs();
+    }
+
+  protected:
+    // Sets coeffs to the potential's coefficients.
+    void load_coeffs() {
         coeffs.resize(potential.coeff_count());
         potential.get_coeffs(coeffs.data());
     }
 
-  protected:
+    // Logs the species old_spec .. new_spec - 1 that training adds to the potential of model (MTP, ETN), as mlip-3 logs them.
+    void log_added_species(const std::string& model, int old_spec, int new_spec) {
+        if (!log || new_spec <= old_spec) return;
+        *log << "Following atomic numbers will be added to the " << model << " potential: ";
+        for (int t = old_spec; t < new_spec; t++)
+            *log << t << (t != new_spec - 1 ? ", " : "");
+        *log << std::endl;
+    }
+
     // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
     // each present in the training set, and a trained potential's species are all present. Throws on every rank together.
     int training_species_count() {

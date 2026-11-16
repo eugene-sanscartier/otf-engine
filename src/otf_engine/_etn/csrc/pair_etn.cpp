@@ -29,12 +29,7 @@ PairETN::PairETN(const std::string& filename) {
     PairETN::read_file(f);
 }
 
-PairETN::PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) : species_ranks(std::move(species_ranks)), radial_func_counts(std::move(radial_func_counts)), radial_ranks(std::move(radial_ranks)), bond_ranks(std::move(bond_ranks)) {
-    if (species_count < 0)
-        throw std::runtime_error("PairETN: species count must not be negative");
-    this->species_count = species_count;
-    set_radial_basis(radial_basis_type, min_dist, max_dist, radial_basis_size);
-
+PairETN::PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) : Pair(species_count, radial_basis_type, min_dist, max_dist, radial_basis_size), species_ranks(std::move(species_ranks)), radial_func_counts(std::move(radial_func_counts)), radial_ranks(std::move(radial_ranks)), bond_ranks(std::move(bond_ranks)) {
     prepare_cores();
     trained = false;
     fill_initial_coeffs();
@@ -212,8 +207,7 @@ void PairETN::train_forward(const double* v, double* bond) const {
         const CovariantShape& right = bond_shapes[c + 1];
         for (const CoreTerm& t : core_terms[c]) {
             const Core& core = t.imaginary ? cores_im[c] : cores[c];
-            const double* coeffs = t.imaginary ? core_coeffs_im[c].data() : core_coeffs[c].data();
-            contract(core, coeffs, left, right, bond + bond_offsets[c] + t.in_part * left.size, v, bond + bond_offsets[c + 1] + t.out_part * right.size);
+            contract(core, left, right, bond + bond_offsets[c] + t.in_part * left.size, v, bond + bond_offsets[c + 1] + t.out_part * right.size);
         }
     }
 }
@@ -224,16 +218,16 @@ void PairETN::train_backward(const double* v, const double* bond, double* bond_a
         const CovariantShape& right = bond_shapes[c + 1];
         for (const CoreTerm& t : core_terms[c]) {
             const Core& core = t.imaginary ? cores_im[c] : cores[c];
-            const double* coeffs = t.imaginary ? core_coeffs_im[c].data() : core_coeffs[c].data();
             double* c_adj = core_adj ? (t.imaginary ? core_im_adj[c] : core_adj[c]) : nullptr;
             const int in = bond_offsets[c] + t.in_part * left.size;
             const int out = bond_offsets[c + 1] + t.out_part * right.size;
-            contract_adjoint(core, coeffs, left, right, bond + in, v, bond_adj + out, bond_adj + in, v_adj, c_adj);
+            contract_adjoint(core, left, right, bond + in, v, bond_adj + out, bond_adj + in, v_adj, c_adj);
         }
     }
 }
 
-void PairETN::contract(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const {
+void PairETN::contract(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const {
+    const double* c = core.coeffs.data();
     for (const CoreBlock& block : core.blocks) {
         const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
         for (int e = block.w_begin; e < block.w_end; e++) {
@@ -256,7 +250,8 @@ void PairETN::contract(const Core& core, const double* c, const CovariantShape& 
     }
 }
 
-void PairETN::contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const {
+void PairETN::contract_adjoint(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const {
+    const double* c = core.coeffs.data();
     for (const CoreBlock& block : core.blocks) {
         const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
         for (int e = block.w_begin; e < block.w_end; e++) {
@@ -287,16 +282,23 @@ void PairETN::contract_adjoint(const Core& core, const double* c, const Covarian
 }
 
 void PairETN::get_coeffs(double* c) const {
-    for (const auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
+    for (const auto* blocks : {&radial_coeffs, &species_pair_coeffs})
         for (const auto& block : *blocks) c = std::copy(block.begin(), block.end(), c);
+    for (const auto* part : {&cores, &cores_im})
+        for (const Core& core : *part) c = std::copy(core.coeffs.begin(), core.coeffs.end(), c);
     std::copy(species_coeffs.begin(), species_coeffs.end(), c);
 }
 
 void PairETN::set_coeffs(const double* c) {
-    for (auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
+    for (auto* blocks : {&radial_coeffs, &species_pair_coeffs})
         for (auto& block : *blocks) {
             std::copy(c, c + block.size(), block.begin());
             c += block.size();
+        }
+    for (auto* part : {&cores, &cores_im})
+        for (Core& core : *part) {
+            std::copy(c, c + core.coeffs.size(), core.coeffs.begin());
+            c += core.coeffs.size();
         }
     std::copy(c, c + species_count, species_coeffs.begin());
     prepare_radial_mixing();
@@ -339,7 +341,7 @@ void PairETN::set_species_pair_coeffs(int l, const double* c) {
 }
 
 void PairETN::set_core_coeffs(int i, bool imaginary, const double* c) {
-    std::vector<double>& block = imaginary ? core_coeffs_im[i] : core_coeffs[i];
+    std::vector<double>& block = (imaginary ? cores_im[i] : cores[i]).coeffs;
     std::copy(c, c + block.size(), block.begin());
 }
 
@@ -408,11 +410,11 @@ void PairETN::read_file(std::istream& is) {
         read_block(species_pair_coeffs[l], "species_pair_coeffs of l = " + std::to_string(l));
     tfr.expect("core_coeffs");
     for (int c = 0; c < core_count; c++)
-        read_block(core_coeffs[c], "core_coeffs of core " + std::to_string(c));
+        read_block(cores[c].coeffs, "core_coeffs of core " + std::to_string(c));
     if (has_imaginary_cores()) {
         tfr.expect("core_coeffs_im");
         for (int c = 1; c < core_count - 1; c++)
-            read_block(core_coeffs_im[c], "core_coeffs_im of core " + std::to_string(c));
+            read_block(cores_im[c].coeffs, "core_coeffs_im of core " + std::to_string(c));
     }
 
     tfr.expect("species_coeffs");
@@ -489,12 +491,6 @@ void PairETN::prepare_cores() {
         if (core_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({true, 0, 1});
     }
 
-    core_coeffs.resize(core_count);
-    core_coeffs_im.resize(core_count);
-    for (int c = 0; c < core_count; c++) {
-        core_coeffs[c].resize(cores[c].coeff_count);
-        core_coeffs_im[c].resize(cores_im[c].coeff_count);
-    }
     species_coeffs.resize(species_count);
     prepare_columns();
 
@@ -514,9 +510,9 @@ void PairETN::prepare_columns() {
     species_pair_columns.resize(l_count);
     for (int l = 0; l < l_count; l++) species_pair_columns[l] = column, column += (int) species_pair_coeffs[l].size();
     core_columns.resize(core_count);
-    for (int c = 0; c < core_count; c++) core_columns[c] = column, column += (int) core_coeffs[c].size();
+    for (int c = 0; c < core_count; c++) core_columns[c] = column, column += (int) cores[c].coeffs.size();
     core_im_columns.resize(core_count);
-    for (int c = 0; c < core_count; c++) core_im_columns[c] = column, column += (int) core_coeffs_im[c].size();
+    for (int c = 0; c < core_count; c++) core_im_columns[c] = column, column += (int) cores_im[c].coeffs.size();
     species_columns = column;
 }
 
@@ -561,7 +557,7 @@ Core PairETN::prepare_core(int i, bool imaginary) {
         }
         base3 += right[l3] * stride3;
     }
-    core.coeff_count = base3;
+    core.coeffs.assign(base3, 0.0);
     return core;
 }
 

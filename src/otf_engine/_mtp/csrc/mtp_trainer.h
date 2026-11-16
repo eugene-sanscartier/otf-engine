@@ -70,7 +70,7 @@ class MTPTrainer : public Trainer<MTP, MTPTrainerOptions> {
     void update_min_dist();
     void fit_nonlinear(int max_iter);
     void fit_riemannian(int max_iter);
-    void fit_linear(bool orthonormalize = true);
+    void fit_linear();
     void assemble_linear();
     void solve_linear();
     void broadcast_linear();

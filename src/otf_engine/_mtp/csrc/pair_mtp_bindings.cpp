@@ -23,7 +23,7 @@ void bind_pair_mtp(py::module_& m) {
 Compute energy, per-atom energies, forces and virial.
 
 Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
-"virials" (6) as xx,yy,zz,xy,xz,yz.
+"virial" (6) as xx,yy,zz,xy,xz,yz.
 )doc");
 
     // ---- no counterpart in the reference ----

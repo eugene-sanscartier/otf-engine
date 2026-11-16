@@ -116,7 +116,7 @@ def test_teacher_linear_fit(teacher_labelled):
     zeroed[n_radial:] = 0.0
     stage.coeffs = zeroed
     at_zero = stage.objective(zeroed)[0]
-    stage.fit_linear(orthonormalize=False)
+    stage.fit_linear()
     fitted = stage.objective(stage.coeffs)[0]
 
     assert fitted <= at_teacher

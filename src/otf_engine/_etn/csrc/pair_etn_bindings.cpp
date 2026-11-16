@@ -46,7 +46,7 @@ void bind_pair_etn(py::module_& m) {
                   R"doc(
 Compute energy, per-atom energies, forces and virial, and each central atom's tensors.
 
-Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3), "virials"
+Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3), "virial"
 (6) as xx,yy,zz,xy,xz,yz, "inputs" (inum, input size), and "bonds" and "bonds_im",
 lists of (inum, bond size) arrays for bonds 0 .. core_count. A covariant vector holds
 entry (l, m, n) at offset(l) + (m + l) * rank(l) + n.

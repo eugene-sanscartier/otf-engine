@@ -35,10 +35,11 @@ struct CoreBlock {
     int w_begin, w_end;
 };
 
-// The blocks of the real or the imaginary part of one core, between bond i, the input and bond i + 1.
+// The real or the imaginary part of one core, between bond i, the input and bond i + 1: its blocks and its
+// coefficients, ordered l3, n3, l2, n2, l1, n1.
 struct Core {
-    int coeff_count = 0;
     std::vector<CoreBlock> blocks;
+    std::vector<double> coeffs;
 };
 
 // One term of a core: its real or imaginary part applied to one part (0 real, 1 imaginary) of
@@ -87,8 +88,8 @@ class PairETN : public Pair {
     const std::vector<double>& get_radial_coeffs(int l) const { return radial_coeffs[l]; }
     // species_pair_coeffs[l]: [species_count^2 * species_rank], row-major (s_i, s_j, k)
     const std::vector<double>& get_species_pair_coeffs(int l) const { return species_pair_coeffs[l]; }
-    // core_coeffs[i], core_coeffs_im[i]: the core's blocks, ordered l3, n3, l2, n2, l1, n1
-    const std::vector<double>& get_core_coeffs(int i, bool imaginary) const { return imaginary ? core_coeffs_im[i] : core_coeffs[i]; }
+    // The coefficients of core i's real or imaginary part, ordered l3, n3, l2, n2, l1, n1
+    const std::vector<double>& get_core_coeffs(int i, bool imaginary) const { return (imaginary ? cores_im[i] : cores[i]).coeffs; }
 
     void set_radial_coeffs(int l, const double* c);
     void set_species_pair_coeffs(int l, const double* c);
@@ -116,8 +117,8 @@ class PairETN : public Pair {
     void train_backward(const double* v, const double* bond, double* bond_adj, double* v_adj, double* const* core_adj, double* const* core_im_adj) const;
 
     // One core part applied to (u, v), added into out, and its adjoint; c_adj may be null.
-    void contract(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const;
-    void contract_adjoint(const Core& core, const double* c, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const;
+    void contract(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const;
+    void contract_adjoint(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const;
 
     // Shape: per l of the input, the species rank, radial functions and radial rank;
     // per bond, its rank per l, {1} at both ends
@@ -126,11 +127,9 @@ class PairETN : public Pair {
     std::vector<int> radial_ranks;
     std::vector<std::vector<int>> bond_ranks;
 
-    // Coefficients, in get_coeffs' order
+    // Coefficients, in get_coeffs' order: these, the cores' and species_coeffs
     std::vector<std::vector<double>> radial_coeffs;        // [l] B_l
     std::vector<std::vector<double>> species_pair_coeffs;  // [l] A_l
-    std::vector<std::vector<double>> core_coeffs;          // [core] real part
-    std::vector<std::vector<double>> core_coeffs_im;       // [core] imaginary part, empty but for 1 .. d-2 when d > 3
 
     // First column of each coefficient block in get_coeffs' order
     std::vector<int> radial_columns;        // [l]

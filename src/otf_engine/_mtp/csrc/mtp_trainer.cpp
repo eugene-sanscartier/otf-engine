@@ -88,6 +88,7 @@ void MTPTrainer::train() {
 
     // pre-training, for the initial scaling
     if (!potential.is_trained() && options.iteration_limit > 0 && !options.skip_preinit) {
+        orthogonalize();
         fit_linear();
         rescale();
         if (log) *log << "Pre-training started" << std::endl;
@@ -119,6 +120,7 @@ void MTPTrainer::train() {
         else
             fit_nonlinear(options.iteration_limit);
         if (!options.radial_only && !options.bfgs_only) {
+            orthogonalize();
             fit_linear();
             rescale();
         }
@@ -140,12 +142,7 @@ void MTPTrainer::add_species() {
     const int new_spec = training_species_count();
 
     if (old_spec < new_spec) {
-        if (log) {
-            *log << "Following atomic numbers will be added to the MTP potential: ";
-            for (int t = old_spec; t < new_spec; t++)
-                *log << t << (t != new_spec - 1 ? ", " : "");
-            *log << std::endl;
-        }
+        log_added_species("MTP", old_spec, new_spec);
 
         const int K = potential.get_radial_func_count();
         const int R = potential.get_radial_basis_size();
@@ -250,6 +247,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             if (rank == 0) bfgs.set_x(coeffs.data(), n);
 
             if (!options.radial_only && !options.bfgs_only && !options.varpro && linear_fit_step(num_step)) {
+                orthogonalize();
                 fit_linear();
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian
@@ -382,7 +380,7 @@ void MTPTrainer::fit_riemannian(int max_iter) {
     // the start on the manifold, a lower-triangular change of the radial functions, with the linear coefficients refitted
     retract(coeffs);
     if (!options.varpro) {
-        fit_linear(false);
+        fit_linear();
         reg_init = false;
     }
     double f = evaluate_tangent(g);
@@ -391,7 +389,7 @@ void MTPTrainer::fit_riemannian(int max_iter) {
     double linf = 9e99;    // the loss 50 steps ago
     while (true) {
         if (!options.varpro && linear_fit_step(num_step)) {
-            fit_linear(false);
+            fit_linear();
             f = evaluate_tangent(g);
             // a new regularization invalidates the memory
             if (reg_init) {
@@ -507,11 +505,9 @@ void MTPTrainer::fit_riemannian(int max_iter) {
 }
 
 /* ----------------------------------------------------------------------
-   Least squares for the species and linear coefficients, after
-   orthonormalizing the radial functions unless told not to. Rank 0 solves the summed system.
+   Least squares for the species and linear coefficients. Rank 0 solves the summed system.
 ------------------------------------------------------------------------- */
-void MTPTrainer::fit_linear(bool orthonormalize) {
-    if (orthonormalize) orthogonalize();
+void MTPTrainer::fit_linear() {
     potential.set_coeffs(coeffs.data());
     assemble_linear();
     if (rank == 0) solve_linear();
@@ -675,6 +671,7 @@ void MTPTrainer::rescale() {
     auto fit_at = [&](double scaling) {
         potential.set_scaling(scaling);
         if (!scalable) {
+            orthogonalize();
             fit_linear();
             return;
         }
@@ -750,7 +747,7 @@ void MTPTrainer::rescale() {
 
 double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>& grad) {
     // fixes the regularization at the potential's own radial coefficients, where BFGS's first evaluation fixes it
-    if (options.varpro) fit_linear(false);
+    if (options.varpro) fit_linear();
     std::copy(at.begin(), at.end(), coeffs.begin());
     double terms[4];
     grad.assign(coeffs.size(), 0.0);
@@ -765,7 +762,7 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
 }
 
 double MTPTrainer::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]) {
-    if (options.varpro) fit_linear(false);    // the linear coefficients at their optimum for these radial ones
+    if (options.varpro) fit_linear();    // the linear coefficients at their optimum for these radial ones
     local_grad.resize(coeffs.size());
     double loss = loss_grad(local_grad) / structure_count;
     for (double& g : local_grad) g /= structure_count;

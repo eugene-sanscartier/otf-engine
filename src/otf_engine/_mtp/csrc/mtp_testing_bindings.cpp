@@ -23,7 +23,7 @@ class MTPTrainerStages {
     void add_species() { trainer->add_species(); }
     void update_min_dist() { trainer->update_min_dist(); }
     void orthogonalize() { trainer->orthogonalize(); }
-    void fit_linear(bool orthonormalize) { trainer->fit_linear(orthonormalize); }
+    void fit_linear() { trainer->fit_linear(); }
     void rescale() { trainer->rescale(); }
     void fit_nonlinear(int max_iter) { trainer->fit_nonlinear(max_iter); }
     void fit_riemannian(int max_iter) { trainer->fit_riemannian(max_iter); }
@@ -120,7 +120,7 @@ PYBIND11_MODULE(_mtp_testing, m) {
         .def("add_species", &MTPTrainerStages::add_species)
         .def("update_min_dist", &MTPTrainerStages::update_min_dist)
         .def("orthogonalize", &MTPTrainerStages::orthogonalize)
-        .def("fit_linear", &MTPTrainerStages::fit_linear, py::arg("orthonormalize") = true)
+        .def("fit_linear", &MTPTrainerStages::fit_linear)
         .def("rescale", &MTPTrainerStages::rescale)
         .def("fit_nonlinear", &MTPTrainerStages::fit_nonlinear, py::arg("max_iter"))
         .def("fit_riemannian", &MTPTrainerStages::fit_riemannian, py::arg("max_iter"))

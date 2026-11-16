@@ -60,6 +60,7 @@ def run_ours(potential, settings, script, structures):
         elif command == "orthogonalize":
             stages.orthogonalize()
         elif command == "lin_optimize":
+            stages.orthogonalize()
             stages.fit_linear()
         elif command == "rescale":
             stages.rescale()

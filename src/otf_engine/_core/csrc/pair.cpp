@@ -4,7 +4,7 @@
 
 #include "pair.h"
 
-#include "etn_radial_basis.h"
+#include "rb_cinf.h"
 #include "text_file_reader.h"
 
 #include <stdexcept>
@@ -15,6 +15,12 @@ void Pair::eval_grad(const NeighList&, double*, double*, double*) {
 
 void Pair::eval_loss_grad(const NeighList&, double, const double*, const double*, double*) {
     throw std::runtime_error("eval_loss_grad needs an MTP or ETN");
+}
+
+Pair::Pair(int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) : species_count(species_count) {
+    if (species_count < 0)
+        throw std::runtime_error("species count must not be negative");
+    set_radial_basis(radial_basis_type, min_dist, max_dist, radial_basis_size);
 }
 
 void Pair::read_header(TextFileReader& tfr, const std::string& model, const std::string& version) {

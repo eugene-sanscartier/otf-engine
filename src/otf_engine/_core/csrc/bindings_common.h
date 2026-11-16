@@ -28,7 +28,6 @@
 #include <iostream>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -92,7 +91,7 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
 }
 
 // Runs self.compute on nb with the GIL released, and copies out the results it leaves in the potential:
-// "energy", "forces" (n_atoms, 3), "virials" (6) and "eatom" (n_atoms).
+// "energy", "forces" (n_atoms, 3), "virial" (6) and "eatom" (n_atoms).
 inline py::dict compute_results(Pair& self, const PyNeighbors& nb) {
     {
         py::gil_scoped_release unlocked;
@@ -102,7 +101,7 @@ inline py::dict compute_results(Pair& self, const PyNeighbors& nb) {
     py::dict result;
     result["energy"] = self.get_energy();
     result["forces"] = to_array(self.get_forces(), {nb.n_atoms(), 3});
-    result["virials"] = DoubleArray({6}, self.get_virial().data());
+    result["virial"] = DoubleArray({6}, self.get_virial().data());
     result["eatom"] = to_array(self.get_eatom());
     return result;
 }

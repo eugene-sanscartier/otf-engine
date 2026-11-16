@@ -1,11 +1,11 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Standalone ETN radial basis — no LAMMPS dependency.
+   RBCinf, a radial basis of the ETN and the MTP.
    Computes mlip-4's RadialBasisCinf (src/pots/radial_basis/cinf/rb_cinf.cpp
    at 79a39bf) as the ETN program evaluates it.
 ------------------------------------------------------------------------- */
 
-#include "etn_radial_basis.h"
-#include "etn_radial_basis_tables.h"
+#include "rb_cinf.h"
+#include "rb_cinf_tables.h"
 
 #include <cmath>
 #include <stdexcept>
@@ -15,11 +15,11 @@
 // expansions, summed as RadialBasisCinf::PostConstruct sums them.
 RBCinf::RBCinf(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(min_cutoff, max_cutoff, size) {
     if (size > RADIAL_BASIS_MAX_SIZE)
-        throw std::runtime_error("ETN radial basis: radial_basis_size must not exceed " + std::to_string(RADIAL_BASIS_MAX_SIZE));
+        throw std::runtime_error("RBCinf: radial_basis_size must not exceed " + std::to_string(RADIAL_BASIS_MAX_SIZE));
 
     const double min_to_max_ratio = min_cutoff / max_cutoff;
     if (!(min_to_max_ratio > 0.0 && min_to_max_ratio <= 0.8))
-        throw std::runtime_error("ETN radial basis: min_dist / max_dist must lie in (0, 0.8]");
+        throw std::runtime_error("RBCinf: min_dist / max_dist must lie in (0, 0.8]");
 
     exp_ratio = -2 * (1 - min_to_max_ratio * min_to_max_ratio);
 

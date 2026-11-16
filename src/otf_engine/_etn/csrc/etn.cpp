@@ -112,11 +112,10 @@ void ETN::accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, do
             const CovariantShape& right = bond_shapes[c + 1];
             for (const CoreTerm& t : core_terms[c]) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
-                const double* coeffs = t.imaginary ? core_coeffs_im[c].data() : core_coeffs[c].data();
                 const int in = bond_offsets[c] + t.in_part * left.size;
                 const int out = bond_offsets[c + 1] + t.out_part * right.size;
-                contract(core, coeffs, left, right, bond_tangent.data() + in, v, bond_tangent.data() + out);
-                contract(core, coeffs, left, right, bond + in, input_tangent.data(), bond_tangent.data() + out);
+                contract(core, left, right, bond_tangent.data() + in, v, bond_tangent.data() + out);
+                contract(core, left, right, bond + in, input_tangent.data(), bond_tangent.data() + out);
             }
         }
     }
@@ -141,12 +140,11 @@ void ETN::accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, do
             const CovariantShape& right = bond_shapes[c + 1];
             for (const CoreTerm& t : core_terms[c]) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
-                const double* coeffs = t.imaginary ? core_coeffs_im[c].data() : core_coeffs[c].data();
                 double* c_adj = t.imaginary ? core_im_adj[c] : core_adj[c];
                 const int in = bond_offsets[c] + t.in_part * left.size;
                 const int out = bond_offsets[c + 1] + t.out_part * right.size;
-                contract_adjoint(core, coeffs, left, right, bond_tangent.data() + in, v, bond_tangent_adj.data() + out, bond_tangent_adj.data() + in, input_adj.data(), c_adj);
-                contract_adjoint(core, coeffs, left, right, bond + in, input_tangent.data(), bond_tangent_adj.data() + out, bond_adj.data() + in, input_tangent_adj.data(), c_adj);
+                contract_adjoint(core, left, right, bond_tangent.data() + in, v, bond_tangent_adj.data() + out, bond_tangent_adj.data() + in, input_adj.data(), c_adj);
+                contract_adjoint(core, left, right, bond + in, input_tangent.data(), bond_tangent_adj.data() + out, bond_adj.data() + in, input_tangent_adj.data(), c_adj);
             }
         }
     }

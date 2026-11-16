@@ -42,20 +42,20 @@ std::istringstream TextFileReader::rest() const {
 
 void TextFileReader::advance() {
     if (!next_line())
-        throw std::runtime_error("MTP file: unexpected end of file");
+        throw std::runtime_error("potential file: unexpected end of file");
 }
 
 void TextFileReader::expect(const std::string& keyword) {
     advance();
     if (keyword_ != keyword)
-        throw std::runtime_error("MTP file: expected '" + keyword + "', got '" + keyword_ + "'");
+        throw std::runtime_error("potential file: expected '" + keyword + "', got '" + keyword_ + "'");
 }
 
 int TextFileReader::next_int(const std::string& keyword) {
     expect(keyword);
     int value;
     if (!(rest() >> value))
-        throw std::runtime_error("MTP file: no value after '" + keyword + "'");
+        throw std::runtime_error("potential file: no value after '" + keyword + "'");
     return value;
 }
 
@@ -63,7 +63,7 @@ double TextFileReader::next_double(const std::string& keyword) {
     expect(keyword);
     double value;
     if (!(rest() >> value))
-        throw std::runtime_error("MTP file: no value after '" + keyword + "'");
+        throw std::runtime_error("potential file: no value after '" + keyword + "'");
     return value;
 }
 

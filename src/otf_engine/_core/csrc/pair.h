@@ -65,6 +65,11 @@ class Pair {
     void set_trained(bool t) { trained = t; }
 
   protected:
+    Pair() = default;
+    // The start of a potential built from its shape: species_count species, 0 leaving the count to training, and the
+    // radial basis radial_basis_type names from its cutoffs and size.
+    Pair(int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size);
+
     // Reads a file's first lines: model (MTP, ETN) and version, then potential_name, scaling and species_count,
     // each optional, and leaves tfr at the next line.
     void read_header(TextFileReader& tfr, const std::string& model, const std::string& version);

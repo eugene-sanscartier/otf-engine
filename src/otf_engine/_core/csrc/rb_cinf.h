@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Standalone ETN radial basis — no LAMMPS dependency.
+   RBCinf, a radial basis of the ETN and the MTP.
    Computes mlip-4's RadialBasisCinf (src/pots/radial_basis/cinf/rb_cinf.cpp
    at 79a39bf) as the ETN program evaluates it.
 ------------------------------------------------------------------------- */
