@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <ostream>
 #include <vector>
 
 // Minimises f along a ray from 0, given f'(0) < 0. The caller evaluates f and
@@ -21,6 +22,8 @@ class LineSearch {
     void reduce_step(double ratio);
     // Returns false when the function increases along the ray.
     bool iterate(double curr_f, double curr_g);
+
+    std::ostream* log = nullptr;    // where mlip-3's warnings go, the trainer's log
 
   private:
     double curr_x;
@@ -49,6 +52,7 @@ class BFGS {
     // Returns false when the loss increases along the direction.
     bool iterate(double f, const std::vector<double>& g);
     void reduce_step(double ratio = 0.25);
+    void set_log(std::ostream* log) { linesearch.log = log; }
 
   private:
     void update_inv_hess(const std::vector<double>& g);

@@ -7,7 +7,6 @@
 #include "wolfe_bfgs.h"
 
 #include <cmath>
-#include <stdexcept>
 
 static const double HUGE_DOUBLE = 1.0e300;
 
@@ -33,8 +32,11 @@ bool WolfeLineSearch::iterate(double curr_f, double curr_g) {
         left_f = prev_f = curr_f;
         left_g = prev_g = curr_g;
         curr_x = right_x;
-        if (curr_g > 0)
-            throw std::runtime_error("WolfeLineSearch: line search with increasing function");
+        // mlip-4 throws here; a failed search ends as the others below do, so that no rank raises alone
+        if (curr_g > 0) {
+            if (log) *log << "\t Line search: increasing function";
+            return false;
+        }
         return true;
     }
 

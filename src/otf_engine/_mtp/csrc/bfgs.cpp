@@ -7,7 +7,7 @@
 #include "bfgs.h"
 
 #include <cmath>
-#include <iostream>
+#include <ostream>
 
 static const double HUGE_DOUBLE = 9.9e99;
 
@@ -18,8 +18,9 @@ static double dot(const std::vector<double>& a, const std::vector<double>& b) {
     return res;
 }
 
-static void warning(const char* message) {
-    std::cerr << "WARNING: " << message << std::endl;
+// mlip-3 writes its warnings to the terminal; here they go to the trainer's log, when it has one.
+static void warning(std::ostream* log, const char* message) {
+    if (log) *log << "WARNING: " << message << std::endl;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -42,14 +43,14 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         left_g = prev_g = curr_g;
         curr_x = right_x;
         if (curr_g > 0) {
-            warning("Linesearch with increasing funcion!");
+            warning(log, "Linesearch with increasing funcion!");
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        warning("prev_x == curr_x");
+        warning(log, "prev_x == curr_x");
         return false;
     }
 
@@ -189,7 +190,7 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
         p_dot_g_start = p_dot_g;
 
         if (p_dot_g > 0)
-            warning("BFGS: stepping in accend direction detected.");
+            warning(linesearch.log, "BFGS: stepping in accend direction detected.");
 
         loss_decrease = linesearch.iterate(f, p_dot_g);
     }

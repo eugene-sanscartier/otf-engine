@@ -228,6 +228,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
     double bfgs_f = 0.0, bfgs_terms[4] = {};
 
     if (rank == 0) {
+        bfgs.set_log(log);
         bfgs.set_x(coeffs.data(), n);
         if (options.inverse_hessian)
             bfgs.set_inverse_hessian(options.inverse_hessian);
