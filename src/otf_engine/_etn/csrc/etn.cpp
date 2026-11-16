@@ -14,31 +14,7 @@ void ETN::prepare_buffers() {
     site_bonds.resize(bonds_size);
     bond_tangent.resize(bonds_size);
     bond_tangent_adj.resize(bonds_size);
-    prepare_columns();
-}
-
-void ETN::set_species_count(int n) {
-    PairETN::set_species_count(n);
-    prepare_columns();
-}
-
-void ETN::prepare_columns() {
-    const int l_count = (int) species_ranks.size();
-    const int core_count = get_core_count();
-    int column = 0;
-
-    radial_columns.resize(l_count);
-    for (int l = 0; l < l_count; l++) radial_columns[l] = column, column += (int) radial_coeffs[l].size();
-    species_pair_columns.resize(l_count);
-    for (int l = 0; l < l_count; l++) species_pair_columns[l] = column, column += (int) species_pair_coeffs[l].size();
-    core_columns.resize(core_count);
-    for (int c = 0; c < core_count; c++) core_columns[c] = column, column += (int) core_coeffs[c].size();
-    core_im_columns.resize(core_count);
-    for (int c = 0; c < core_count; c++) core_im_columns[c] = column, column += (int) core_coeffs_im[c].size();
-    species_columns = column;
-
-    mixing_adj.resize(l_count);
-    for (int l = 0; l < l_count; l++) mixing_adj[l].resize(radial_mixing[l].size());
+    mixing_adj.resize(species_ranks.size());
 }
 
 void ETN::eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double*) {
@@ -49,7 +25,7 @@ void ETN::eval_grad(const NeighList& list, double* site_energy_grad, double* for
     for (int ii = 0; ii < list.inum; ii++) {
         double* row = site_energy_grad + (size_t) ii * width;
         std::fill(row, row + width, 0.0);
-        for (auto& adj : mixing_adj) std::fill(adj.begin(), adj.end(), 0.0);
+        for (size_t l = 0; l < mixing_adj.size(); l++) mixing_adj[l].assign(radial_mixing[l].size(), 0.0);
         accumulate_site_grad(list, ii, nbr_offset, 1.0, nullptr, nullptr, row);
         scatter_mixing_adj(row);
         nbr_offset += list.numneigh[ii];
@@ -57,7 +33,7 @@ void ETN::eval_grad(const NeighList& list, double* site_energy_grad, double* for
 }
 
 void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
-    for (auto& adj : mixing_adj) std::fill(adj.begin(), adj.end(), 0.0);
+    for (size_t l = 0; l < mixing_adj.size(); l++) mixing_adj[l].assign(radial_mixing[l].size(), 0.0);
     int nbr_offset = 0;
     for (int ii = 0; ii < list.inum; ii++) {
         accumulate_site_grad(list, ii, nbr_offset, dloss_denergy, dloss_dforces, dloss_dvirial, loss_grad);

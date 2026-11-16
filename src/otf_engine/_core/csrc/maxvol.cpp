@@ -3,6 +3,7 @@
 ------------------------------------------------------------------------- */
 
 #include "maxvol.h"
+#include "sample.h"
 
 #include <algorithm>
 #include <cmath>
@@ -54,8 +55,7 @@ void Equations::add(const NeighList& list, const double* site_energy_grad, const
         for (int r = 0; r < 3 * n_atoms; r++) append(&force_grad[(size_t) r * cc], force_weight, s, 1 + r);
     if (stress) {
         // mlip-3 stores the full 3x3 stress, not its 6 Voigt components
-        const int voigt[9] = {0, 3, 4, 3, 1, 5, 4, 5, 2};
-        for (int q = 0; q < 9; q++) append(&virial_grad[(size_t) voigt[q] * cc], stress_weight / scale, s, 1 + 3 * n_atoms + q);
+        for (int q = 0; q < 9; q++) append(&virial_grad[(size_t) VIRIAL_INDEX[q / 3][q % 3] * cc], stress_weight / scale, s, 1 + 3 * n_atoms + q);
     }
     if (site_en_weight != 0.0)
         for (int ii = 0; ii < list.inum; ii++) append(&site_energy_grad[(size_t) ii * cc], 1.0, s, 1 + 3 * n_atoms + 9 + ii);

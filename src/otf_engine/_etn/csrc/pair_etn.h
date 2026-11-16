@@ -103,6 +103,7 @@ class PairETN : public Pair {
     void read_file(std::istream& is);
     void prepare_cores();
     Core prepare_core(int i, bool imaginary);
+    void prepare_columns();
     void prepare_radial_mixing();
 
     // The input vector v of central atom ii, whose neighbors start at nbr_offset in list; fills
@@ -130,6 +131,13 @@ class PairETN : public Pair {
     std::vector<std::vector<double>> species_pair_coeffs;  // [l] A_l
     std::vector<std::vector<double>> core_coeffs;          // [core] real part
     std::vector<std::vector<double>> core_coeffs_im;       // [core] imaginary part, empty but for 1 .. d-2 when d > 3
+
+    // First column of each coefficient block in get_coeffs' order
+    std::vector<int> radial_columns;        // [l]
+    std::vector<int> species_pair_columns;  // [l]
+    std::vector<int> core_columns;          // [core]
+    std::vector<int> core_im_columns;       // [core]
+    int species_columns = 0;
 
     // Tensor-train layout
     std::vector<Core> cores;                // [core_count]

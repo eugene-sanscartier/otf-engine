@@ -56,13 +56,7 @@ void PairMTP::compute(const NeighList& list) {
         double nbh_energy = 0;
         nbr_offset += jnum;
 
-        // Resize per neighbor arrays
-        if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * cache_stride);
-            cached_j.resize(jnum);
-            valid_dr.resize(jnum);
-            cache_size = jnum;
-        }
+        grow_cache(jnum);
 
         // Clear moment and derivative arrays
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
@@ -219,32 +213,9 @@ void PairMTP::compute(const NeighList& list) {
 void PairMTP::read_file(std::istream& is) {
     TextFileReader tfr(is);
 
-    tfr.expect("MTP");
-    if (tfr.next_string("version") != "1.1.0")
-        throw std::runtime_error("PairMTP: MTP file must have version \"1.1.0\"");
-
-    tfr.advance();
-
-    // Read the potential name (optional field)
-    if (tfr.keyword() == "potential_name") {
-        tfr.rest() >> potential_name;
-        tfr.advance();
-    }
-
-    // Check the scaling
-    if (tfr.keyword() == "scaling") {
-        tfr.rest() >> scaling;
-        tfr.advance();
-    }
-
     // An untrained potential may omit the species count, the radial coeffs
     // and the linear coeffs; mlip-3's MLMTPR::Load gives them defaults.
-    if (tfr.keyword() == "species_count") {
-        tfr.rest() >> species_count;
-        if (species_count < 1)
-            throw std::runtime_error("PairMTP: MTP species count must be positive");
-        tfr.advance();
-    }
+    read_header(tfr, "MTP", "1.1.0");
 
     // Read the potential tag (also optional field)
     if (tfr.keyword() == "potential_tag") {

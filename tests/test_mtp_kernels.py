@@ -1,7 +1,7 @@
 """The MTP's kernels: against mlip-3's evaluation, against each other, and their derivatives against finite differences.
 
 The forward pass is written out five times, in PairMTP::compute, PairMTPExtrapolation::compute and MTP's
-eval_basis, eval_grad and add_loss_grad (through eval_loss_grad); each must give what the others give.
+eval_basis, eval_grad and eval_loss_grad; each must give what the others give.
 """
 
 import subprocess

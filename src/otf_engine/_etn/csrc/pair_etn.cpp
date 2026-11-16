@@ -147,13 +147,7 @@ int PairETN::site_input(const NeighList& list, int ii, int nbr_offset, double* v
     const double* dr = list.displacements + nbr_offset * 3;
     int valid_count = 0;
 
-    // Resize per neighbor arrays
-    if (cache_size < jnum) {
-        neighbor_cache.resize((size_t) jnum * cache_stride);
-        cached_j.resize(jnum);
-        valid_dr.resize(jnum);
-        cache_size = jnum;
-    }
+    grow_cache(jnum);
 
     std::fill(v, v + input_shape.size, 0.0);
     v[0] = 1.0;
@@ -309,10 +303,7 @@ void PairETN::set_coeffs(const double* c) {
 }
 
 int PairETN::coeff_count() const {
-    int count = species_count;
-    for (const auto* blocks : {&radial_coeffs, &species_pair_coeffs, &core_coeffs, &core_coeffs_im})
-        for (const auto& block : *blocks) count += (int) block.size();
-    return count;
+    return species_columns + species_count;
 }
 
 void PairETN::set_radial_coeffs(int l, const double* c) {
@@ -332,6 +323,7 @@ void PairETN::set_species_count(int n) {
     }
     species_coeffs.resize(n, 0.0);
     species_count = n;
+    prepare_columns();
     prepare_radial_mixing();
 }
 
@@ -366,31 +358,8 @@ static std::vector<T> parse_values(std::istringstream ss) {
 void PairETN::read_file(std::istream& is) {
     TextFileReader tfr(is);
 
-    tfr.expect("ETN");
-    if (tfr.next_string("version") != "1.0.0")
-        throw std::runtime_error("PairETN: ETN file must have version \"1.0.0\"");
-
-    tfr.advance();
-
-    // Read the potential name (optional field)
-    if (tfr.keyword() == "potential_name") {
-        tfr.rest() >> potential_name;
-        tfr.advance();
-    }
-
-    // Check the scaling
-    if (tfr.keyword() == "scaling") {
-        tfr.rest() >> scaling;
-        tfr.advance();
-    }
-
     // An untrained potential may omit the species count, which training then sets
-    if (tfr.keyword() == "species_count") {
-        tfr.rest() >> species_count;
-        if (species_count < 1)
-            throw std::runtime_error("PairETN: ETN species count must be positive");
-        tfr.advance();
-    }
+    read_header(tfr, "ETN", "1.0.0");
 
     read_radial_basis(tfr);
 
@@ -527,10 +496,28 @@ void PairETN::prepare_cores() {
         core_coeffs_im[c].resize(cores_im[c].coeff_count);
     }
     species_coeffs.resize(species_count);
+    prepare_columns();
 
     cache_stride = 1 + 4 * l_count * l_count + 2 * mixed_offsets[l_count];
     input_adj.resize(input_shape.size);
     bond_adj.resize(bonds_size);
+}
+
+// The first column of each coefficient block in get_coeffs' order, for the current shape and species count.
+void PairETN::prepare_columns() {
+    const int l_count = (int) species_ranks.size();
+    const int core_count = get_core_count();
+    int column = 0;
+
+    radial_columns.resize(l_count);
+    for (int l = 0; l < l_count; l++) radial_columns[l] = column, column += (int) radial_coeffs[l].size();
+    species_pair_columns.resize(l_count);
+    for (int l = 0; l < l_count; l++) species_pair_columns[l] = column, column += (int) species_pair_coeffs[l].size();
+    core_columns.resize(core_count);
+    for (int c = 0; c < core_count; c++) core_columns[c] = column, column += (int) core_coeffs[c].size();
+    core_im_columns.resize(core_count);
+    for (int c = 0; c < core_count; c++) core_im_columns[c] = column, column += (int) core_coeffs_im[c].size();
+    species_columns = column;
 }
 
 // The coefficients of core i ordered l3, n3, l2, n2, l1, n1 with n1 fastest, over the

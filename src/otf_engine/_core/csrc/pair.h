@@ -65,6 +65,9 @@ class Pair {
     void set_trained(bool t) { trained = t; }
 
   protected:
+    // Reads a file's first lines: model (MTP, ETN) and version, then potential_name, scaling and species_count,
+    // each optional, and leaves tfr at the next line.
+    void read_header(TextFileReader& tfr, const std::string& model, const std::string& version);
     // Reads radial_basis_type at the current line of tfr and the cutoffs and size below it, and sets the basis.
     void read_radial_basis(TextFileReader& tfr);
     // Builds the radial basis type names, RBChebyshev or RBCinf, and sets the radial basis members
@@ -94,6 +97,15 @@ class Pair {
     std::vector<double> eatom;   // [n_atoms] site energies
     std::vector<double> forces;  // [n_atoms * 3]
     std::array<double, 6> virial{};    // xx,yy,zz,xy,xz,yz
+
+    // Grows cached_j, valid_dr and neighbor_cache to hold jnum neighbors.
+    void grow_cache(int jnum) {
+        if (cache_size >= jnum) return;
+        neighbor_cache.resize((size_t) jnum * cache_stride);
+        cached_j.resize(jnum);
+        valid_dr.resize(jnum);
+        cache_size = jnum;
+    }
 
     // Cache values between forwards and backwards pass
     int cache_size = 0;

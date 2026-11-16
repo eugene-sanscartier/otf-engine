@@ -52,13 +52,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
         double nbh_energy = 0;
         nbr_offset += jnum;
 
-        // Resize per neighbor arrays
-        if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * cache_stride);
-            cached_j.resize(jnum);
-            valid_dr.resize(jnum);
-            cache_size = jnum;
-        }
+        grow_cache(jnum);
         if (radial_basis_cache_size < jnum) {
             radial_basis_cache.resize((size_t) jnum * radial_basis_size);
             radial_basis_cache_size = jnum;

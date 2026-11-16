@@ -24,31 +24,20 @@ class ETN : public PairETN {
     // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
-    // PairETN::set_species_count, with the columns of the coefficient blocks moved to match.
-    void set_species_count(int n);
 
   private:
     // The working buffers of the derivatives, for the shape.
     void prepare_buffers();
-    // The first column of each coefficient block, and mixing_adj's size, for the current species count.
-    void prepare_columns();
     // Adds to grad the derivative of energy_weight * E_i, plus that of E_i's derivative along the
     // neighbor displacements dloss_dforces and dloss_dvirial give, for central atom ii.
     void accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, double energy_weight, const double* dloss_dforces, const double* dloss_dvirial, double* grad);
     // Adds mixing_adj, the adjoint of the radial mixing, into the radial and species-pair columns of grad.
     void scatter_mixing_adj(double* grad) const;
 
-    // First column of each coefficient block in the params order
-    std::vector<int> radial_columns;        // [l]
-    std::vector<int> species_pair_columns;  // [l]
-    std::vector<int> core_columns;          // [core]
-    std::vector<int> core_im_columns;       // [core]
-    int species_columns = 0;
-
     // Per central atom: v, its tangent along the neighbor displacements, and their adjoints;
     // the bond vectors' tangents and adjoints; each neighbor's displacement
     std::vector<double> site_input_vals, input_tangent, input_tangent_adj;
     std::vector<double> site_bonds, bond_tangent, bond_tangent_adj;
     std::vector<double> neighbor_displacements;  // [cache_size * 3]
-    std::vector<std::vector<double>> mixing_adj;  // [l] laid out as radial_mixing
+    std::vector<std::vector<double>> mixing_adj;  // [l] laid out as radial_mixing, zeroed by each derivative
 };

@@ -29,8 +29,7 @@ class MTP : public PairMTP {
     // Adds dL/dc to loss_grad [coeff_count], for a loss L whose derivatives
     // with respect to the energy, forces and virial of this structure are
     // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
-    void add_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad);
-    void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override { add_loss_grad(list, dloss_denergy, dloss_dforces, dloss_dvirial, loss_grad); }
+    void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
   private:
     // Per neighbor, the radial basis at its distance
@@ -42,7 +41,7 @@ class MTP : public PairMTP {
 
     // The neighbors of the current atom, each array in rows over the neighbors: the unit displacement's three
     // components and the inverse distance, the angular monomials, the radial functions' values and derivatives;
-    // add_loss_grad's tangents of the unit displacement along the loss weight, with that weight's radial component,
+    // eval_loss_grad's tangents of the unit displacement along the loss weight, with that weight's radial component,
     // and the monomials' tangents; and for eval_grad's force passes the monomials' derivatives w.r.t. the displacement
     int rows_size = 0, jac_size = 0;
     std::vector<double> neighbor_units;              // [4 * rows_size]
@@ -59,7 +58,7 @@ class MTP : public PairMTP {
     std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] the basis values' rows of moment_ders, transposed
     std::vector<char> first_product;  // [alpha_index_times_count] whether the product is the first to add to its moment
 
-    // add_loss_grad: per moment, the tangent and the adjoint of the moment value.
+    // eval_loss_grad: per moment, the tangent and the adjoint of the moment value.
     std::vector<double> moment_tangents;                    // [alpha_moment_count]
     std::vector<double> moment_adjoints;                    // [alpha_moment_count]
     std::vector<double> basic_adjoints_by_mu;               // [alpha_index_basic_count] moment_adjoints of the basic moments, grouped

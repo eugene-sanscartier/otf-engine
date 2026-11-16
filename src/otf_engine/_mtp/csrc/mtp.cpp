@@ -88,6 +88,8 @@ void MTP::grow_neighbor_rows(int jnum) {
     neighbor_radial_funcs.resize((size_t) radial_func_count * 2 * rows_size);
     neighbor_unit_tangents.resize((size_t) 4 * rows_size);
     neighbor_angular_tangents.resize((size_t) angular_count * rows_size);
+    neighbor_radial_vals.resize((size_t) radial_basis_size * rows_size);
+    neighbor_radial_ders.resize((size_t) radial_basis_size * rows_size);
 }
 
 /* ----------------------------------------------------------------------
@@ -141,17 +143,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 
         int valid_count = 0;
 
-        // Resize per neighbor arrays
-        if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * cache_stride);
-            cached_j.resize(jnum);
-            valid_dr.resize(jnum);
-            cache_size = jnum;
-        }
-        if (neighbor_radial_vals.size() < (size_t) jnum * radial_basis_size) {
-            neighbor_radial_vals.resize((size_t) jnum * radial_basis_size);
-            neighbor_radial_ders.resize((size_t) jnum * radial_basis_size);
-        }
+        grow_cache(jnum);
         grow_neighbor_rows(jnum);
         if (force_grad && jac_size < jnum) {
             jac_size = jnum;
@@ -182,7 +174,6 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             const double inv_dist = 1.0 / dist;
             for (int a = 0; a < 3; a++) u[a][valid_count] = r[a] * inv_dist;
             inv_dists[valid_count] = inv_dist;
-            neighbor_cache[(size_t) valid_count * cache_stride] = inv_dist;
             radial_basis->calc_radial_basis_ders(dist);
             std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size);
             std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size);
@@ -413,8 +404,6 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             const int j = cached_j[jj];
             const int jtype = list.types[j];
             const auto& r = valid_dr[jj];
-            const double inv_dist = neighbor_cache[(size_t) jj * cache_stride];
-            const double unit_r[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
             const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
             const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
             const int pair_off = itype * species_count + jtype;
@@ -429,7 +418,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 
                 for (int d = 0; d < 3; d++) {
                     for (int ri = 0; ri < radial_basis_size; ri++) {
-                        const double contrib = G_k * (basis_ders[ri] * unit_r[d] * angular_factor + basis_vals[ri] * angular_jacobian[d]);
+                        const double contrib = G_k * (basis_ders[ri] * u[d][jj] * angular_factor + basis_vals[ri] * angular_jacobian[d]);
                         const int col = coeff_offset + ri;
                         force_grad[((size_t) i * 3 + d) * width + col] += contrib;
                         force_grad[((size_t) j * 3 + d) * width + col] -= contrib;
@@ -474,7 +463,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
    shared tree, and their tangents follow the same tree along
    v = (w - (w.u) u) / |r|, the tangent of u.
 ------------------------------------------------------------------------- */
-void MTP::add_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
+void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
     const int sp_off = n_radial;
     const int lin_off = n_radial + species_count;
@@ -507,16 +496,7 @@ void MTP::add_loss_grad(const NeighList& list, double dloss_denergy, const doubl
 
         int valid_count = 0;
 
-        if (cache_size < jnum) {
-            neighbor_cache.resize((size_t) jnum * (1 + 2 * radial_func_count));
-            cached_j.resize(jnum);
-            valid_dr.resize(jnum);
-            cache_size = jnum;
-        }
-        if (neighbor_radial_vals.size() < (size_t) jnum * radial_basis_size) {
-            neighbor_radial_vals.resize((size_t) jnum * radial_basis_size);
-            neighbor_radial_ders.resize((size_t) jnum * radial_basis_size);
-        }
+        grow_cache(jnum);
         grow_neighbor_rows(jnum);
         const int N = jnum;    // a row of the neighbor arrays
 

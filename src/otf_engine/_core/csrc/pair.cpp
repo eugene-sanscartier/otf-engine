@@ -17,6 +17,33 @@ void Pair::eval_loss_grad(const NeighList&, double, const double*, const double*
     throw std::runtime_error("eval_loss_grad needs an MTP or ETN");
 }
 
+void Pair::read_header(TextFileReader& tfr, const std::string& model, const std::string& version) {
+    tfr.expect(model);
+    if (tfr.next_string("version") != version)
+        throw std::runtime_error("Pair" + model + ": " + model + " file must have version \"" + version + "\"");
+
+    tfr.advance();
+
+    // Read the potential name (optional field)
+    if (tfr.keyword() == "potential_name") {
+        tfr.rest() >> potential_name;
+        tfr.advance();
+    }
+
+    // Check the scaling
+    if (tfr.keyword() == "scaling") {
+        tfr.rest() >> scaling;
+        tfr.advance();
+    }
+
+    if (tfr.keyword() == "species_count") {
+        tfr.rest() >> species_count;
+        if (species_count < 1)
+            throw std::runtime_error("Pair" + model + ": " + model + " species count must be positive");
+        tfr.advance();
+    }
+}
+
 void Pair::read_radial_basis(TextFileReader& tfr) {
     if (tfr.keyword() != "radial_basis_type")
         throw std::runtime_error("potential file: no radial basis set type is specified");
