@@ -5,7 +5,7 @@ from numpy import float64
 from ase.calculators.calculator import Calculator, all_changes
 
 from .neighbors import neighbors
-from .sample import stress_from_virial
+from .fit_structure import stress_from_virial
 
 
 class PotentialCalculator(Calculator):

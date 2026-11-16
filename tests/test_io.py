@@ -34,8 +34,8 @@ def test_cfg_round_trip(structures):
 
 
 def test_cfg_left_handed_stress(structures):
-    """A left-handed cell keeps the sign of its stress, and of the virial Sample takes, through write_cfg and read_cfg."""
-    from otf_engine._core import Sample
+    """A left-handed cell keeps the sign of its stress, and of the virial FitStructure takes, through write_cfg and read_cfg."""
+    from otf_engine._core import FitStructure
 
     atoms = structures[1].copy()
     atoms.calc = structures[1].calc
@@ -44,7 +44,7 @@ def test_cfg_left_handed_stress(structures):
     assert numpy.linalg.det(atoms.cell[:]) < 0
     back = round_trip([atoms])[0]
     numpy.testing.assert_allclose(back.calc.results["stress"], atoms.calc.results["stress"], atol=1e-6)
-    numpy.testing.assert_allclose(Sample(back, 5.0, 0).virial, Sample(atoms, 5.0, 0).virial, atol=1e-5)
+    numpy.testing.assert_allclose(FitStructure(back, 5.0, 0).virial, FitStructure(atoms, 5.0, 0).virial, atol=1e-5)
 
 
 def test_cfg_without_energy(structures):
@@ -65,15 +65,15 @@ def test_cfg_species_maps(structures):
     assert by_list[1].get_chemical_symbols() == [names[t] for t in structures[1].arrays["type_index"]]
 
 
-def test_sample_virial():
-    """Sample gives a cfg's PlusStress (xx yy zz yz xz xy in the file) as the virial (xx yy zz xy xz yz)."""
-    from otf_engine._core import Sample
+def test_fit_structure_virial():
+    """FitStructure gives a cfg's PlusStress (xx yy zz yz xz xy in the file) as the virial (xx yy zz xy xz yz)."""
+    from otf_engine._core import FitStructure
 
     text = (DATA / "structures.cfg").read_text()
     block = text.split("BEGIN_CFG")[2]
     plus_stress = numpy.array(block.split("PlusStress:")[1].splitlines()[1].split(), dtype=float)
     atoms = read_cfg(io.StringIO("BEGIN_CFG" + block))[0]
-    virial = Sample(atoms, 5.0, 0).virial
+    virial = FitStructure(atoms, 5.0, 0).virial
     numpy.testing.assert_allclose(virial, plus_stress[[0, 1, 2, 5, 4, 3]], rtol=1e-12)
 
 

@@ -94,7 +94,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
     std::string log_target;
     const MTPFitOptions o = parse_options<MTPFitOptions>("objective_on_threads", options, log_target);
     ProcessRanks process("objective_on_threads", ranks, py::none());
-    std::vector<std::vector<Sample>> shares = split_structures(structures, ranks);
+    std::vector<std::vector<FitStructure>> shares = split_structures(structures, ranks);
 
     double loss = 0.0;
     std::vector<double> grad;
@@ -113,7 +113,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
 
 PYBIND11_MODULE(_mtp_testing, m) {
     m.doc() = "MTPFit's stages and BFGS, for the tests.";
-    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTP and Sample
+    py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTP and FitStructure
 
     py::class_<MTPFitStages>(m, "MTPFitStages")
         .def(py::init<const std::string&, py::iterable, const std::map<std::string, std::string>&>(), py::arg("filename"), py::arg("structures"), py::arg("options"))

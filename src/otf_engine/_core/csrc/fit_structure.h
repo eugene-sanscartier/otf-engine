@@ -13,7 +13,7 @@
 constexpr int VIRIAL_INDEX[3][3] = {{0, 3, 4}, {3, 1, 5}, {4, 5, 2}};
 
 // A structure to fit: its neighbor list at the potential's cutoff and its reference values.
-struct Sample {
+struct FitStructure {
     std::vector<int> types, ilist, numneigh, firstneigh;
     std::vector<double> displacements;    // [sum(numneigh) * 3]
 

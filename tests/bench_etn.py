@@ -30,7 +30,7 @@ import test_etn_fit as training
 from conftest import ETN_REFERENCE
 from otf_engine._etn import ETN, fit_etn
 from otf_engine.io_cfg import read_cfg
-from otf_engine._core import Sample
+from otf_engine._core import FitStructure
 
 BENCH_SOURCE = ETN_REFERENCE / "mlip4_bench.cpp"
 
@@ -61,7 +61,7 @@ def main():
         train_probe = kernels.compile_probe(args.mlip4_build, workdir, ETN_REFERENCE / "mlip4_train.cpp")
         for name in args.potentials:
             potential = ETN(str(ETN_REFERENCE / f"{name}.etn"))
-            labelled = [(atoms, Sample(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
+            labelled = [(atoms, FitStructure(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(configs)]
             settings = dict(training.SETTINGS, pretrain=False, max_iter_count=args.iterations)
             training_file = Path(workdir) / f"{name}.txt"
             training.write_training_file(training_file, potential, labelled, settings)

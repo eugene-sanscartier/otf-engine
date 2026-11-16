@@ -11,7 +11,7 @@ import numpy
 import pytest
 
 from conftest import DATA, MTP_REFERENCE, StoredOutputs, parse_probe
-from otf_engine._core import Sample
+from otf_engine._core import FitStructure
 from otf_engine.train import MLP_ALGORITHM
 
 TEACHER = MTP_REFERENCE / "potential-16.mtp"
@@ -49,7 +49,7 @@ def run_ours(potential_path, settings, script, structures):
     """The script's outputs from MTPFitStages, as mlip3_probe prints them: (name, values, whether a linear solve came before, radial coefficient count)."""
     from otf_engine._mtp._mtp_testing import MTPFitStages
 
-    stages = MTPFitStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
+    stages = MTPFitStages(str(potential_path), [FitStructure(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **settings, "log": "none"})
     outputs = []
     solved = False
     for line in script:
@@ -177,7 +177,7 @@ def test_fit_log(name, structures, stored, recapture, mlip3, tmp_path):
         printed = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=tmp_path).stdout
         stored[f"fit_{name}/log"] = numpy.array(fit_log(printed, last))
 
-    stages = MTPFitStages(str(potential_path), [Sample(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
+    stages = MTPFitStages(str(potential_path), [FitStructure(atoms, 5.0, k) for k, atoms in enumerate(structures)], {**MLP_ALGORITHM, **options, "log": "none"})
     stages.run()
     ours, theirs = fit_log(stages.log, last), list(stored[f"fit_{name}/log"])
 

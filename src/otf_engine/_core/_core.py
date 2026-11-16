@@ -5,7 +5,7 @@ and _etn_ext import for Pair and NeighList.
 
     NeighList     the neighbor list a Pair's compute takes
     Pair          the base of PairMTP and PairETN: coefficients, gradients, accessors
-    Sample        a structure to fit, which sample.py builds from an ASE structure
+    FitStructure        a structure to fit, which rfit_structure.py builds from an ASE structure
     error_table   a potential's errors on structures, as fit_mtp and fit_etn log them
     Equations     the MaxVol equations of structures, from an MTP's or ETN's gradients
     MaxVol        an active set, graded against and searched

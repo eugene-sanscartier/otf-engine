@@ -52,7 +52,7 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
   public:
     // log receives mlp's fit log on the rank given one; checkpoint is called
     // on rank 0 wherever mlp saves the potential during the fit.
-    MTPFit(MTP& potential, std::vector<Sample> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    MTPFit(MTP& potential, std::vector<FitStructure> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, with the
     // species of the training set it lacked added, and logs the errors on the
@@ -99,11 +99,11 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
     // QR retraction: Gram-Schmidt over the rows of the radial block of c, in order, a lower-triangular change of the radial functions.
     void retract(std::vector<double>& c) const;
 
-    double energy_weight(const Sample& s) const;
+    double energy_weight(const FitStructure& s) const;
     // The weight of atom i's force, scale_by_force taking it at forces: the reference ones in the linear fit, the
     // predicted ones in the loss, as mlip-3 takes them.
-    double force_weight(const Sample& s, int i, const double* forces) const;
-    double stress_weight(const Sample& s) const;
+    double force_weight(const FitStructure& s, int i, const double* forces) const;
+    double stress_weight(const FitStructure& s) const;
 
     double loss_terms[3] = {};    // the energy, force and stress terms of the last loss_grad
 

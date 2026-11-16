@@ -9,7 +9,7 @@
 
 #include "comm.h"
 #include "error_table.h"
-#include "sample.h"
+#include "fit_structure.h"
 
 #include <algorithm>
 #include <functional>
@@ -36,10 +36,10 @@ class Fit {
 
     // log receives the fit log on the rank given one; checkpoint saves the potential, which then
     // holds the coefficients. Throws on every rank together when no rank has a structure.
-    Fit(Potential& potential, std::vector<Sample> structures, const Options& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+    Fit(Potential& potential, std::vector<FitStructure> structures, const Options& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
         : potential(potential), structures(std::move(structures)), options(options), comm(comm), rank(comm.rank()), size(comm.size()), log(log), checkpoint(std::move(checkpoint)) {
         if (options.balance_species)
-            for (Sample& s : this->structures) s.balance_species();
+            for (FitStructure& s : this->structures) s.balance_species();
 
         int local_count = (int) this->structures.size();
         comm.allreduce(&local_count, &structure_count, 1, ReduceOp::sum);
@@ -70,7 +70,7 @@ class Fit {
     int training_species_count() {
         // the species count, and minus the lowest species when it is negative, so that every rank raises together
         int local[2] = {0, 0}, global[2] = {0, 0};
-        for (const Sample& s : structures)
+        for (const FitStructure& s : structures)
             for (int t : s.types) {
                 local[0] = std::max(local[0], t + 1);
                 local[1] = std::max(local[1], -t);
@@ -81,7 +81,7 @@ class Fit {
         const int type_count = global[0];
 
         std::vector<int> present(type_count, 0), present_anywhere(type_count, 0);
-        for (const Sample& s : structures)
+        for (const FitStructure& s : structures)
             for (int t : s.types)
                 present[t] = 1;
         comm.allreduce(present.data(), present_anywhere.data(), type_count, ReduceOp::max);
@@ -109,7 +109,7 @@ class Fit {
     }
 
     Potential& potential;
-    std::vector<Sample> structures;
+    std::vector<FitStructure> structures;
     Options options;
     Comm& comm;
     const int rank, size;

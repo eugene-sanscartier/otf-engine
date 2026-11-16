@@ -3,7 +3,7 @@
 ------------------------------------------------------------------------- */
 
 #include "maxvol.h"
-#include "sample.h"
+#include "fit_structure.h"
 
 #include <algorithm>
 #include <cmath>

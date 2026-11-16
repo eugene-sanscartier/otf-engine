@@ -19,7 +19,7 @@ import logging
 import os
 import sys
 
-from ._core import Sample, error_table, potential_class, read_potential
+from ._core import FitStructure, error_table, potential_class, read_potential
 from .io_cfg import read_cfg
 from .selection import converge_active_set, stored_selection, write_active_set
 
@@ -30,7 +30,7 @@ def errors(potential_path: str, structures: list, title: str, first: int = 1, sp
     """The errors of the potential in *potential_path* on the labelled *structures*, numbered from *first*, as the table training logs, under *title*."""
     potential = read_potential(potential_path)
     cutoff = potential.get_max_cutoff()
-    table = error_table(potential, [Sample(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
+    table = error_table(potential, [FitStructure(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
     return table
 
 
@@ -69,7 +69,7 @@ def train(potential_path: str, training_set: list, save_path: str, settings: dic
     cutoff = template.get_max_cutoff()
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
-    structures = (Sample(training_set[i], cutoff, i + 1) for i in range(rank, len(training_set), size))
+    structures = (FitStructure(training_set[i], cutoff, i + 1) for i in range(rank, len(training_set), size))
     options = {key: str(value) for key, value in (settings or {}).items()}
     potential = fit(potential_path, structures, options, checkpoint=lambda potential: potential.write(save_path), ranks=ranks, comm=comm)
 

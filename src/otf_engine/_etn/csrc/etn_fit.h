@@ -33,7 +33,7 @@ class ETNFit : public Fit<ETN, ETNFitOptions> {
   public:
     // log receives mlip-4's fit log on the rank given one; checkpoint is called
     // with the potential holding the coefficients at every step outside a line search.
-    ETNFit(ETN& potential, std::vector<Sample> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    ETNFit(ETN& potential, std::vector<FitStructure> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, and logs
     // the errors on the training set before and after.

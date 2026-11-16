@@ -26,7 +26,7 @@ import pytest
 from conftest import ETN_REFERENCE, StoredOutputs, TESTS
 from etn_potentials import compile_probe, untrained_etn
 from otf_engine._core import neighbors
-from otf_engine._core import Sample
+from otf_engine._core import FitStructure
 
 SETTINGS = {"max_iter_count": 1000, "max_func_eval": 10000, "linstop": 5e-4, "rescale": True, "pretrain": True, "wolfe_c1": 0.1, "wolfe_c2": 0.5, "bfgs_max_iters_no_improve": 10}
 WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
@@ -82,7 +82,7 @@ def case_inputs(name, structures, workdir):
     path = Path(workdir) / f"{potential_name}.etn"
     if not path.exists(): untrained_etn(potential_name).write(path)
     settings = dict(SETTINGS, **overrides)
-    labelled = [(structures[k], Sample(structures[k], ETN(str(path)).get_max_cutoff(), k + 1)) for k in chosen]
+    labelled = [(structures[k], FitStructure(structures[k], ETN(str(path)).get_max_cutoff(), k + 1)) for k in chosen]
     return path, settings, labelled
 
 

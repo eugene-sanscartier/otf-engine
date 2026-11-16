@@ -1,4 +1,4 @@
-"""Sample: a structure to fit, built from an ASE structure and its calculator's results."""
+"""FitStructure: a structure to fit, built from an ASE structure and its calculator's results."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def virial_from_stress(stress, volume: float):
     return virial
 
 
-class Sample(_core._ext.Sample):
+class FitStructure(_core._ext.FitStructure):
     """A structure to fit, which the fits and error_table take: its neighbor list, its reference energy, forces and virial, and its number."""
 
     def __init__(self, atoms, cutoff: float, number: int):

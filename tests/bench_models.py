@@ -37,7 +37,7 @@ from ase.neighborlist import neighbor_list
 from tqdm import tqdm
 
 from bench_mtp import rmse
-from otf_engine._core import Sample, neighbors, read_potential
+from otf_engine._core import FitStructure, neighbors, read_potential
 from otf_engine._etn import ETN
 from otf_engine._mtp import MTP
 from otf_engine.io_cfg import read_cfg
@@ -115,18 +115,18 @@ def run(name, args):
     workdir.mkdir(parents=True, exist_ok=True)
     model = FAMILIES[name][0]
     trained = workdir / f"trained.{model}"
-    train_set, test_set = split(args.cfg, args.train, args.test, args.seed)
+    training_set, test_set = split(args.cfg, args.train, args.test, args.seed)
 
     with tqdm(total=3, desc=name, **BAR) as bar:
         if not (workdir / "fit.json").exists():
-            min_dist = 0.99 * min(neighbor_list("d", atoms, MAX_DIST).min() for atoms in train_set)
+            min_dist = 0.99 * min(neighbor_list("d", atoms, MAX_DIST).min() for atoms in training_set)
             template = workdir / f"untrained.{model}"
             untrained(name, min_dist).write(str(template))
-            samples = [Sample(atoms, MAX_DIST, k + 1) for k, atoms in enumerate(train_set)]
+            fit_structures = [FitStructure(atoms, MAX_DIST, k + 1) for k, atoms in enumerate(training_set)]
             options = {"log": str(workdir / "fit.log")} | ({"no_mindist_update": "true"} if model == "mtp" else {})
 
             start = time.perf_counter()
-            potential = fit(str(template), samples, options, ranks=args.ranks)
+            potential = fit(str(template), fit_structures, options, ranks=args.ranks)
             seconds = time.perf_counter() - start
 
             potential.write(str(trained))
@@ -138,13 +138,13 @@ def run(name, args):
 
         if not (workdir / "errors.json").exists():
             test_e, test_f = rmse(trained, test_set)
-            train_e, train_f = rmse(trained, train_set)
-            record = dict(test_energy=test_e, test_force=test_f, train_energy=train_e, train_force=train_f, n_train=len(train_set), n_test=len(test_set), seed=args.seed)
+            train_e, train_f = rmse(trained, training_set)
+            record = dict(test_energy=test_e, test_force=test_f, train_energy=train_e, train_force=train_f, n_train=len(training_set), n_test=len(test_set), seed=args.seed)
             (workdir / "errors.json").write_text(json.dumps(record, indent=1))
         bar.update()
 
         potential = read_potential(str(trained))
-        labelled = [(atoms, Sample(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(test_set[: args.timed])]
+        labelled = [(atoms, FitStructure(atoms, potential.get_max_cutoff(), k + 1)) for k, atoms in enumerate(test_set[: args.timed])]
         eval_ms, eval_build_ms, loss_grad_ms = timings(potential, labelled, args.repeats, LOSS_WEIGHTS)
         record = dict(eval_ms=eval_ms, eval_build_ms=eval_build_ms, loss_grad_ms=loss_grad_ms, atoms=float(numpy.mean([len(a) for a, _ in labelled])), structures=len(labelled), host=socket.gethostname())
         (workdir / f"timing-{os.environ.get('SLURM_JOB_ID', os.getpid())}.json").write_text(json.dumps(record, indent=1))

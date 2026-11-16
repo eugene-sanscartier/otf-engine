@@ -23,7 +23,7 @@ void bind_etn_fit(py::module_& m) {
     m.def("fit_etn", &train, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks") = 1, py::arg("comm") = py::none(), py::arg("checkpoint") = py::none(), R"doc(
 Train the potential in filename with ETNFit on `ranks` threads, or over the ranks of comm, and return it.
 
-structures : iterable of Sample; under comm, this rank's share
+structures : iterable of FitStructure; under comm, this rank's share
 options    : the fields of ETNFitOptions without the leading "--", as strings, log (stdout, none
              or a file), which rank 0 writes, and species, the species' names for the error tables,
              comma-separated

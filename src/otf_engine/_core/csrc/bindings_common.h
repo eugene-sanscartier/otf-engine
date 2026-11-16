@@ -21,7 +21,7 @@
 
 #include "comm.h"
 #include "pair.h"
-#include "sample.h"
+#include "fit_structure.h"
 
 #include <fstream>
 #include <functional>
@@ -122,12 +122,12 @@ inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     return nullptr;
 }
 
-// structures, an iterable of Sample, split round-robin into rank_count shares, as mlp's MPI_LoadCfgs deals a file.
-inline std::vector<std::vector<Sample>> split_structures(py::iterable structures, int rank_count) {
-    std::vector<std::vector<Sample>> shares(rank_count);
+// structures, an iterable of FitStructure, split round-robin into rank_count shares, as mlp's MPI_LoadCfgs deals a file.
+inline std::vector<std::vector<FitStructure>> split_structures(py::iterable structures, int rank_count) {
+    std::vector<std::vector<FitStructure>> shares(rank_count);
     int k = 0;
     for (py::handle item : structures)
-        shares[k++ % rank_count].push_back(item.cast<Sample>());
+        shares[k++ % rank_count].push_back(item.cast<FitStructure>());
     return shares;
 }
 
@@ -280,7 +280,7 @@ py::object train_potential(const char* name, const std::string& filename, py::it
     ProcessRanks process(name, ranks, comm);
     const bool holds_rank0 = process[0].rank() == 0;
 
-    std::vector<std::vector<Sample>> shares = split_structures(structures, process.count());
+    std::vector<std::vector<FitStructure>> shares = split_structures(structures, process.count());
     std::ofstream log_file;
     std::ostream* log = holds_rank0 ? open_log(log_target, log_file) : nullptr;
     py::object potential = py::cast(std::make_unique<Potential>(filename));

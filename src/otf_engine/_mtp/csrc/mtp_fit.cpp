@@ -23,7 +23,7 @@ static bool linear_fit_step(int step) {
     return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
 }
 
-MTPFit::MTPFit(MTP& potential, std::vector<Sample> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+MTPFit::MTPFit(MTP& potential, std::vector<FitStructure> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
     : Fit(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
     n_radial = potential.get_radial_coeff_count();
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();
@@ -190,7 +190,7 @@ void MTPFit::add_species() {
 
 void MTPFit::update_min_dist() {
     double min_dist = 999;
-    for (const Sample& s : structures)
+    for (const FitStructure& s : structures)
         for (size_t p = 0; p < s.firstneigh.size(); p++) {
             const double* r = s.displacements.data() + p * 3;
             min_dist = std::min(min_dist, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]));
@@ -528,13 +528,13 @@ void MTPFit::assemble_linear() {
     // E, F and virial are linear in these coefficients, with the gradients as components: a structure's equations are
     // the components of each value it has, and its references the values, each scaled by the square root of its weight
     int most_atoms = 0;
-    for (const Sample& s : structures) most_atoms = std::max(most_atoms, (int) s.ilist.size());
+    for (const FitStructure& s : structures) most_atoms = std::max(most_atoms, (int) s.ilist.size());
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> equations(1 + 3 * most_atoms + 9, n);
     Eigen::VectorXd references(equations.rows());
     std::vector<double> scratch_rows;
     if (options.varpro) linear_rows.resize(structures.size());
     for (size_t index = 0; index < structures.size(); index++) {
-        const Sample& s = structures[index];
+        const FitStructure& s = structures[index];
         const NeighList list = s.list();
         site_energy_grad.resize((size_t) list.inum * width);
         force_grad.resize((size_t) list.n_atoms * 3 * width);
@@ -786,7 +786,7 @@ double MTPFit::loss_grad(std::vector<double>& grad) {
     const bool from_rows = linear_rows.size() == structures.size() && linear_rows_at.size() == (size_t) n_radial + 1 && std::equal(coeffs.begin(), coeffs.begin() + n_radial, linear_rows_at.begin()) && linear_rows_at[n_radial] == potential.get_scaling();
 
     for (size_t index = 0; index < structures.size(); index++) {
-        const Sample& s = structures[index];
+        const FitStructure& s = structures[index];
         const NeighList list = s.list();
         double energy;
         const double *forces, *virial;
@@ -955,11 +955,11 @@ void MTPFit::retract(std::vector<double>& c) const {
 }
 
 /* ---------------------------------------------------------------------- */
-double MTPFit::energy_weight(const Sample& s) const {
+double MTPFit::energy_weight(const FitStructure& s) const {
     return options.energy_weight / std::pow(s.ilist.size(), options.weight_scaling) * options.select_factor;
 }
 
-double MTPFit::force_weight(const Sample& s, int i, const double* forces) const {
+double MTPFit::force_weight(const FitStructure& s, int i, const double* forces) const {
     double wgt = options.force_weight / std::pow(s.ilist.size(), options.weight_scaling_forces);
     if (options.scale_by_force > 0.0) {
         const double* f = forces + i * 3;
@@ -970,6 +970,6 @@ double MTPFit::force_weight(const Sample& s, int i, const double* forces) const 
     return wgt * options.select_factor;
 }
 
-double MTPFit::stress_weight(const Sample& s) const {
+double MTPFit::stress_weight(const FitStructure& s) const {
     return options.stress_weight / s.ilist.size() * options.select_factor;
 }

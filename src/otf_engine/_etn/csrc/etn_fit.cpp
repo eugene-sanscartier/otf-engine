@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-ETNFit::ETNFit(ETN& potential, std::vector<Sample> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+ETNFit::ETNFit(ETN& potential, std::vector<FitStructure> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
     : Fit(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
 
 /* ---------------------------------------------------------------------- */
@@ -258,7 +258,7 @@ double ETNFit::loss_grad(std::vector<double>& grad) {
     std::fill(grad.begin(), grad.end(), 0.0);
     double loss = 0.0;
 
-    for (const Sample& s : structures) {
+    for (const FitStructure& s : structures) {
         const NeighList list = s.list();
         potential.compute(list);
         const double* forces = potential.get_forces().data();
