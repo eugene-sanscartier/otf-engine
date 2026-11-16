@@ -33,6 +33,6 @@ def select_add(comm, potential, training_set, candidates, species=None) -> list 
     return selected if comm.Get_rank() == 0 else None
 
 
-def train_potential(comm, potential, training_set, save_to, species=None, settings=None) -> None:
-    """Train potential on training_set over the ranks of comm, and write it with an active set to save_to on rank 0."""
-    train.train(potential, otf_cycle.load_structures(training_set, species), save_to, settings=settings, comm=comm)
+def train_potential(comm, potential, training_set, save_path, species=None, settings=None) -> None:
+    """Train potential on training_set over the ranks of comm, and write it with an active set to the file save_path on rank 0."""
+    train.train(potential, otf_cycle.load_structures(training_set, species), save_path, settings=settings, comm=comm)

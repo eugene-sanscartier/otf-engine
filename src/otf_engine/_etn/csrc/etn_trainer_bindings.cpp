@@ -32,9 +32,9 @@ options    : the fields of ETNTrainerOptions without the leading "--", as string
              comma-separated
 ranks      : threads
 comm       : an mpi4py communicator, in place of threads. Every rank calls with the same other
-             arguments and returns the fitted potential; an error on any rank is raised on every rank
+             arguments and returns the fitted potential; the trainer raises its errors on every rank
 checkpoint : called on rank 0 with the potential being trained at every step outside a line
-             search; a failure ends checkpointing and is raised after the fit
+             search; its first failure is a warning and ends checkpointing
 balance_species : give every species of a structure an equal share of its force weight
 )doc");
 }

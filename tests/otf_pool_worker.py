@@ -34,7 +34,7 @@ numpy.save("mpi_grades.npy", grades)
 candidates = [graded[i] for i in numpy.argsort(grades)[::-1][:candidate_count]]
 selected = manager.global_select_add(potential="mpi_updated.almtp", training_set="train.cfg", candidates=candidates, species=species)
 numpy.save("mpi_selected.npy", [next(i for i, c in enumerate(candidates) if numpy.array_equal(c.positions, s.positions)) for s in selected])
-manager.global_train_potential(potential="potential.almtp", training_set="train.cfg", save_to="mpi.almtp", species=species, settings={"iteration_limit": iterations, "log": "mpi_train.log"})
+manager.global_train_potential(potential="potential.almtp", training_set="train.cfg", save_path="mpi.almtp", species=species, settings={"iteration_limit": iterations, "log": "mpi_train.log"})
 
 
 def evaluator(structure):

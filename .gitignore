@@ -52,3 +52,6 @@ examples/**
 AGENTS.md
 tmp-*
 tmp
+src/otf_engine/_etn/etn_paper/
+specs/
+experiments.md

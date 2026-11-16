@@ -13,7 +13,6 @@
 #include <cstddef>
 #include <exception>
 #include <mutex>
-#include <string>
 #include <vector>
 
 enum class ReduceOp { sum, min, max };
@@ -35,17 +34,15 @@ class Comm {
     virtual void allreduce(const double* in, double* out, int count, ReduceOp op) = 0;
     virtual void allreduce(const int* in, int* out, int count, ReduceOp op) = 0;
 
-    // Ends every rank after an exception on this one alone: MPI ends the job, and the other threads raise CommAborted.
+    // Stops the other ranks after an exception on this one alone, which leaves them waiting in a collective: MPI ends
+    // the job, and the other threads raise CommAborted.
     virtual void abort() = 0;
 
   protected:
     virtual void bcast_bytes(void* data, size_t bytes, int root) = 0;
 };
 
-// Returns if no rank of comm has an error, else raises on every rank the error of the lowest rank that has one.
-void raise_together(Comm& comm, const std::string& error);
-
-// Raised in every rank still waiting on a group another rank has aborted.
+// Raised in every rank waiting on a group another rank has aborted.
 class CommAborted : public std::exception {
   public:
     const char* what() const noexcept override { return "thread group aborted"; }
@@ -60,7 +57,7 @@ class ThreadGroup {
     std::vector<const void*> slots;    // one buffer per rank, published before a barrier
 
     void barrier();
-    // Releases every waiting rank with CommAborted.
+    // Releases every waiting rank, and every later barrier, with CommAborted.
     void abort();
 
   private:

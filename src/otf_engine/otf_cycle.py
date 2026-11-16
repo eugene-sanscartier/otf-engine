@@ -352,11 +352,11 @@ class OTFCycle:
     @property
     def training(self):
         """The training this cycle needs, as otf_pool.train_potential's keyword arguments."""
-        return dict(potential=self.potential, training_set=self.training_set, save_to=f"tmp_{self.potential}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG, "species": ",".join(self.species or [])})
+        return dict(potential=self.potential, training_set=self.training_set, save_path=f"tmp_{self.potential}", species=self.species, settings={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG, "species": ",".join(self.species or [])})
 
     def replace_potential(self):
         """Replace the potential with the one training wrote, and log its errors on the evaluated structures."""
-        os.replace(self.training["save_to"], self.potential)
+        os.replace(self.training["save_path"], self.potential)
         if self.evaluated: logger.info(errors(self.potential, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.train_structures) + 1, species=self.species))
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {self.potential}.")
 
@@ -371,5 +371,5 @@ def run_cycle(extrapolative_dumps, launcher: Launcher, *, mlp_command, **options
         candidates = cycle.preselect(grade_extrapolative_dumps(cycle.potential, extrapolative_dumps, cycle.species))
         selected, _ = select_add(cycle.potential, cycle.train_structures, candidates, train_eqns=train_eqns)
         n_ok = cycle.evaluate(selected)
-        launcher.run(f"{mlp_command} train {cycle.potential} {cycle.training_set} --save_to={cycle.training['save_to']} --iteration_limit={cycle.iteration_limit}", log_file=TRAIN_LOG, training_set_size=len(cycle.train_structures) + n_ok)
+        launcher.run(f"{mlp_command} train {cycle.potential} {cycle.training_set} --save_to={cycle.training['save_path']} --iteration_limit={cycle.iteration_limit}", log_file=TRAIN_LOG, training_set_size=len(cycle.train_structures) + n_ok)
         cycle.replace_potential()

@@ -196,20 +196,35 @@ def test_riemannian_orthonormal(structures):
     assert stage.objective(stage.coeffs)[0] < stage.objective(start)[0]
 
 
-def test_checkpoint(structures):
-    """The checkpoint receives the potential during the fit, and its failure is raised once the fit ends."""
+def test_checkpoint(structures, caplog):
+    """The checkpoint receives the potential during the fit; its first failure is a warning, ends checkpointing, and the fit goes on."""
     from otf_engine._mtp import train_mtp
 
     data = labelled(structures)
+    options = {**MLP_ALGORITHM, "iteration_limit": "30", "skip_preinit": "true", "log": "none"}
     saved = []
-    train_mtp(str(TEMPLATE), data, {**MLP_ALGORITHM, "iteration_limit": "30", "skip_preinit": "true", "log": "none"}, 1, checkpoint=lambda p: saved.append(numpy.array(p.get_coeffs())))
+    train_mtp(str(TEMPLATE), data, options, 1, checkpoint=lambda p: saved.append(numpy.array(p.get_coeffs())))
     assert len(saved) >= 2 and not numpy.array_equal(saved[0], saved[-1])
 
+    calls = []
+
     def failing(potential):
+        calls.append(1)
         raise OSError("disk full")
 
-    with pytest.raises(OSError, match="disk full"):
-        train_mtp(str(TEMPLATE), data, {**MLP_ALGORITHM, "iteration_limit": "5", "skip_preinit": "true", "log": "none"}, 1, checkpoint=failing)
+    trained = train_mtp(str(TEMPLATE), data, options, 2, checkpoint=failing)
+    assert len(calls) == 1 and trained.is_trained()
+    assert "checkpoint failed, training goes on without checkpoints: OSError: disk full" in caplog.text
+
+
+def test_log_cannot_open(structures, tmp_path, caplog):
+    """A log that cannot be opened is a warning, and the fit goes on without it."""
+    from otf_engine._mtp import train_mtp
+
+    log = tmp_path / "missing" / "train.log"
+    trained = train_mtp(str(TEMPLATE), labelled(structures), {**MLP_ALGORITHM, "iteration_limit": "5", "skip_preinit": "true", "log": str(log)}, 2)
+    assert trained.is_trained()
+    assert f"cannot open the trainer's log '{log}', training without it" in caplog.text
 
 
 def test_no_iterations_leaves_untrained(structures):

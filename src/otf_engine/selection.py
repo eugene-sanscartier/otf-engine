@@ -200,13 +200,24 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     Returns the selection equations of *training_structs*, or under *comm* of this rank's share, for select_add to reuse.
     """
     calc, _ = _open_calculator(potential)
-    pot = calc.potential
     try:
         stored_weights, saved, stored_cfgs = read_mvs_state(potential, _POOL_SAVED)
     except RuntimeError:
-        stored_weights, saved = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None
+        stored_weights, saved, stored_cfgs = dict(DEFAULT_SELECTION_WEIGHTS[al_mode]), None, []
     weights = weights or stored_weights
 
+    active_set, train_eqns = converge_active_set(calc, training_structs, weights, threshold, saved, stored_cfgs, comm)
+    if comm is None or comm.Get_rank() == 0: write_active_set(potential, weights, active_set, training_structs)
+    return train_eqns
+
+
+def converge_active_set(calc: PotentialCalculator, training_structs: list, weights: dict, threshold: float = 1.001, saved: MaxVol | None = None, stored_cfgs: list = (), comm=None) -> tuple[MaxVol, Equations]:
+    """The active set of the calculator's potential over *training_structs*, seeded from *saved*, and the selection equations of *training_structs*.
+
+    saved, stored_cfgs : the active set saved with the potential and the structures its rows come from, as read_mvs_state reads them
+    comm : an mpi4py communicator to search over its ranks; the equations are then those of this rank's share
+    """
+    pot = calc.potential
     train_eqns = selection_equations(calc, training_structs, weights, comm)
 
     # The seed is the saved active equations of structures still in the training set, taken from train_eqns
@@ -219,11 +230,13 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
         saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_struct_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
-    mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=pot.threshold_swap)
-    mv.maximize_volume(seed, pool_id=_POOL_TRAIN, comm=comm)
-    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
+    active_set = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=pot.threshold_swap)
+    active_set.maximize_volume(seed, pool_id=_POOL_TRAIN, comm=comm)
+    active_set.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
+    return active_set, train_eqns
 
-    if comm is None or comm.Get_rank() == 0:
-        stored = write_mvs_state(potential, weights, mv, training_structs, _POOL_TRAIN)
-        logger.info(f"Active set: {len(stored)}/{len(training_structs)} active structures.")
-    return train_eqns
+
+def write_active_set(path: str, weights: dict, active_set: MaxVol, training_structs: list) -> None:
+    """Write *active_set*, converged over *training_structs* under the selection *weights*, as the #MVS_v1.1 section of the potential in *path*."""
+    stored = write_mvs_state(path, weights, active_set, training_structs, _POOL_TRAIN)
+    logger.info(f"Active set: {len(stored)}/{len(training_structs)} active structures.")

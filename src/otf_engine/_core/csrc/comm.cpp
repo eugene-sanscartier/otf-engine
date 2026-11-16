@@ -6,21 +6,6 @@
 
 #include <algorithm>
 #include <cstring>
-#include <stdexcept>
-
-void raise_together(Comm& comm, const std::string& error) {
-    const int mine = error.empty() ? comm.size() : comm.rank();
-    int failed = comm.size();
-    comm.allreduce(&mine, &failed, 1, ReduceOp::min);
-    if (failed == comm.size()) return;
-
-    std::string message = comm.rank() == failed ? error : std::string();
-    int length = (int) message.size();
-    comm.bcast(&length, 1, failed);
-    message.resize(length);
-    comm.bcast(message.data(), length, failed);
-    throw std::runtime_error(message);
-}
 
 void ThreadGroup::barrier() {
     std::unique_lock<std::mutex> lock(mutex);

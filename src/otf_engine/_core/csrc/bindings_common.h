@@ -102,14 +102,20 @@ inline py::dict potential_results(const Pair& self, int n_atoms) {
     return result;
 }
 
-// The stream a trainer's log option names: stdout (or empty), none, or a file, opened into file.
+// Logs message as a warning through the otf_engine logger, as the Python modules log; the caller holds the GIL.
+inline void log_warning(const std::string& message) {
+    py::module_::import("logging").attr("getLogger")("otf_engine._core").attr("warning")(message);
+}
+
+// The stream a trainer's log option names: stdout (or empty), none, or a file, opened into file. A file that cannot
+// be opened is a warning, and gives no log.
 inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     if (target == "stdout" || target.empty()) return &std::cout;
     if (target == "none") return nullptr;
     file.open(target);
-    if (!file)
-        throw std::runtime_error("cannot open log '" + target + "'");
-    return &file;
+    if (file) return &file;
+    log_warning("cannot open the trainer's log '" + target + "', training without it");
+    return nullptr;
 }
 
 // The ranks this process runs: `ranks` threads of a group of their own, or, given an mpi4py communicator comm, its
@@ -134,29 +140,19 @@ class ProcessRanks {
     Comm& operator[](int r) { return *comms[r]; }
 
     // Runs fn(comm, r) on each rank r of this process with the GIL released, each on a thread of its own and rank 0
-    // on the calling thread. A runtime_error, which a trainer raises on every rank together, is raised on every rank
-    // as the lowest rank's; any other exception ends an MPI job, and on threads is raised once every rank has stopped.
+    // on the calling thread, and raises the exception of the lowest rank that raised. A runtime_error is one a
+    // trainer raises on every rank together; any other exception stops the other ranks with Comm::abort.
     void run(const std::function<void(Comm&, int)>& fn) {
         std::vector<std::exception_ptr> raised(count());
         auto run_rank = [&](int r) {
-            Comm& comm = *comms[r];
-            std::string error;
             try {
-                fn(comm, r);
-            } catch (const std::runtime_error& e) {
-                error = e.what();
+                fn(*comms[r], r);
             } catch (const CommAborted&) {
-                return;
+            } catch (const std::runtime_error&) {
+                raised[r] = std::current_exception();
             } catch (...) {
                 raised[r] = std::current_exception();
-                comm.abort();    // the other ranks are left waiting in a collective
-                return;
-            }
-            try {
-                raise_together(comm, error);
-            } catch (const CommAborted&) {
-            } catch (...) {
-                raised[r] = std::current_exception();
+                comms[r]->abort();
             }
         };
 
@@ -264,64 +260,46 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
 // Trains the potential in filename with TrainerT over the ranks of this process, and returns it. Under MPI every
 // process calls it with its share of the structures; on threads they are dealt round-robin, as mlp's MPI_LoadCfgs
 // deals a file. make_options gives the options and sets the log target, which rank 0 writes. Rank 0 trains the
-// potential it returns and hands it to checkpoint, whose first failure ends checkpointing and is raised after the fit,
-// as itself on rank 0 and as a RuntimeError on the other ranks. A failure to set up on any rank is raised on every
-// rank before the trainer's first collective. name (train_mtp, train_etn) prefixes the errors.
+// potential it returns and hands it to checkpoint, whose first failure is a warning and ends checkpointing.
+// name (train_mtp, train_etn) prefixes the errors.
 template <class TrainerT>
 py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const std::function<typename TrainerT::Options(std::string&)>& make_options, int ranks, py::object comm, py::object checkpoint) {
     using Potential = typename TrainerT::Potential;
     ProcessRanks process(name, ranks, comm);
     const bool holds_rank0 = process[0].rank() == 0;
 
-    std::string setup_error;
-    typename TrainerT::Options options;
+    std::string log_target = "stdout";
+    const typename TrainerT::Options options = make_options(log_target);
     std::vector<std::vector<Sample>> shares(process.count());
+    int count = 0;
+    for (py::handle item : structures)
+        shares[count++ % process.count()].push_back(item.cast<Sample>());
     std::ofstream log_file;
-    std::ostream* log = nullptr;
-    py::object potential;
-    Potential* potential_ptr = nullptr;
-    try {
-        std::string log_target = "stdout";
-        options = make_options(log_target);
-        int count = 0;
-        for (py::handle item : structures)
-            shares[count++ % process.count()].push_back(item.cast<Sample>());
-        if (holds_rank0) log = open_log(log_target, log_file);
-        potential = py::cast(std::make_unique<Potential>(filename));
-        potential_ptr = &potential.cast<Potential&>();
-    } catch (const std::exception& e) {
-        setup_error = e.what();
-    }
+    std::ostream* log = holds_rank0 ? open_log(log_target, log_file) : nullptr;
+    py::object potential = py::cast(std::make_unique<Potential>(filename));
+    Potential& potential_ref = potential.cast<Potential&>();
 
-    std::exception_ptr checkpoint_failure;
-    std::string checkpoint_error;
+    bool checkpointing = true;
     std::function<void()> save;
     if (holds_rank0 && !checkpoint.is_none())
         save = [&]() {
-            if (checkpoint_failure) return;
+            if (!checkpointing) return;
             py::gil_scoped_acquire gil;
             try {
                 checkpoint(potential);
             } catch (const std::exception& e) {
-                checkpoint_failure = std::current_exception();
-                checkpoint_error = std::string(name) + ": checkpoint failed: " + e.what();
+                checkpointing = false;
+                log_warning(std::string(name) + ": checkpoint failed, training goes on without checkpoints: " + e.what());
             }
         };
 
-    try {
-        process.run([&](Comm& comm, int r) {
-            raise_together(comm, setup_error);
-            std::unique_ptr<Potential> own;
-            if (r != 0) own = std::make_unique<Potential>(filename);
-            Potential& pot = r == 0 ? *potential_ptr : *own;
-            TrainerT trainer(pot, std::move(shares[r]), options, comm, r == 0 ? log : nullptr, r == 0 ? save : nullptr);
-            trainer.train();
-            raise_together(comm, checkpoint_error);
-        });
-    } catch (const std::runtime_error&) {
-        if (checkpoint_failure) std::rethrow_exception(checkpoint_failure);
-        throw;
-    }
+    process.run([&](Comm& comm, int r) {
+        std::unique_ptr<Potential> own;
+        if (r != 0) own = std::make_unique<Potential>(filename);
+        Potential& pot = r == 0 ? potential_ref : *own;
+        TrainerT trainer(pot, std::move(shares[r]), options, comm, r == 0 ? log : nullptr, r == 0 ? save : nullptr);
+        trainer.train();
+    });
     return potential;
 }
 
