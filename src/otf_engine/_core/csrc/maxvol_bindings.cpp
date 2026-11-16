@@ -1,7 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for Equations and MaxVol (see maxvol.h). Built into
-   _core_ext, they bind both classes; built with MTP_MPI, into _core_mpi, the
-   search over the ranks of an mpi4py communicator.
+   Python bindings for Equations and MaxVol (see maxvol.h).
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
@@ -13,54 +11,6 @@ static void check_width(const MaxVol& self, const Equations& eqns) {
     if (eqns.coeff_count != self.n)
         throw std::runtime_error("MaxVol: equations of " + std::to_string(eqns.coeff_count) + " coefficients against an active set of " + std::to_string(self.n));
 }
-
-#ifdef MTP_MPI
-
-#include <mpi.h>
-
-class MPIPoolRanks : public PoolRanks {
-  public:
-    explicit MPIPoolRanks(MPI_Comm comm) : comm(comm) { MPI_Comm_rank(comm, &me); }
-
-    int rank() const override { return me; }
-
-    void reduce_best(double& grade, double& position, int& owner) override {
-        double best_grade, best_position;
-        MPI_Allreduce(&grade, &best_grade, 1, MPI_DOUBLE, MPI_MAX, comm);
-        const double mine = grade == best_grade ? position : HUGE_VAL;
-        MPI_Allreduce(&mine, &best_position, 1, MPI_DOUBLE, MPI_MIN, comm);
-        const int candidate = mine == best_position ? me : -1;
-        MPI_Allreduce(&candidate, &owner, 1, MPI_INT, MPI_MAX, comm);
-        grade = best_grade;
-        position = best_position;
-    }
-
-    void broadcast(double* row, int n, int* provenance, int owner) override {
-        MPI_Bcast(row, n, MPI_DOUBLE, owner, comm);
-        MPI_Bcast(provenance, 3, MPI_INT, owner, comm);
-    }
-
-  private:
-    MPI_Comm comm;
-    int me = 0;
-};
-
-void bind_maxvol(py::module_& m) {
-    m.def("maximize_volume",
-          [](MaxVol& self, Equations& pool, int pool_id, py::object comm_object, int max_swaps) {
-              check_width(self, pool);
-              MPIPoolRanks ranks(MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>()));
-              py::gil_scoped_release unlocked;
-              self.maximize_volume(pool, pool_id, max_swaps, &ranks);
-          },
-          py::arg("maxvol"), py::arg("equations"), py::arg("pool_id"), py::arg("comm"), py::arg("max_swaps") = 99999, R"doc(
-MaxVol.maximize_volume over the ranks of comm. Every rank passes the same active set and its own
-share of the pool, numbered by structure across the whole pool; every rank ends with the same A,
-invA and provenance.
-)doc");
-}
-
-#else
 
 using BoolArray = py::array_t<bool, py::array::c_style | py::array::forcecast>;
 
@@ -113,13 +63,19 @@ void bind_maxvol(py::module_& m) {
              },
              py::arg("equations"), "The extrapolation grade of each equation, max_i |v . invA[i]|.")
         .def("maximize_volume",
-             [](MaxVol& self, Equations& pool, int pool_id, int max_swaps) {
+             [](MaxVol& self, Equations& pool, int pool_id, py::object comm, int max_swaps) {
                  check_width(self, pool);
+                 ProcessRanks process("maximize_volume", 1, comm);
                  py::gil_scoped_release unlocked;
-                 self.maximize_volume(pool, pool_id, max_swaps);
+                 self.maximize_volume(pool, pool_id, process[0], max_swaps);
              },
-             py::arg("equations"), py::arg("pool_id") = -1, py::arg("max_swaps") = 99999,
-             "Swap equations of the pool into the active set, the highest-grading first, until none grades above threshold.")
+             py::arg("equations"), py::arg("pool_id") = -1, py::arg("comm") = py::none(), py::arg("max_swaps") = 99999, R"doc(
+Swap equations of the pool into the active set, the highest-grading first, until none grades above threshold.
+
+comm : an mpi4py communicator to search over its ranks. Every rank passes the same active set and
+       its own share of the pool, numbered by structure across the whole pool, and ends with the
+       same A, invA and provenance.
+)doc")
         .def("restore_active",
              [](MaxVol& self, IntArray cfg_indices, IntArray eqn_indices, int pool_id) {
                  if (cfg_indices.size() != self.n || eqn_indices.size() != self.n)
@@ -135,5 +91,3 @@ void bind_maxvol(py::module_& m) {
         .def_property_readonly("active_struct_indices", [](const MaxVol& self) { return IntArray({self.n}, self.active_struct_indices.data()); })
         .def_property_readonly("active_eqn_indices", [](const MaxVol& self) { return IntArray({self.n}, self.active_eqn_indices.data()); });
 }
-
-#endif

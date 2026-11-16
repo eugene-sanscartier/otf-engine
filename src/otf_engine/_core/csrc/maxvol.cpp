@@ -97,9 +97,7 @@ void MaxVol::grade(const double* rows, int count, double* grades) {
     }
 }
 
-void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps, PoolRanks* ranks) {
-    PoolRanks one_rank;
-    if (!ranks) ranks = &one_rank;
+void MaxVol::maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_swaps) {
     const int count = pool.size();
     sweep_grades.resize(count);
 
@@ -132,19 +130,26 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, int max_swaps, PoolRa
                 best_position = positions[r];
                 best = r;
             }
-        int owner = ranks->rank();
-        ranks->reduce_best(best_grade, best_position, owner);
+        // the best grade of every rank, the lowest position among equal grades, and the rank holding it
+        double grade = best_grade, position = best_position;
+        comm.allreduce(&grade, &best_grade, 1, ReduceOp::max);
+        position = grade == best_grade ? position : HUGE_VAL;
+        comm.allreduce(&position, &best_position, 1, ReduceOp::min);
+        const int candidate = position == best_position ? comm.rank() : -1;
+        int owner = -1;
+        comm.allreduce(&candidate, &owner, 1, ReduceOp::max);
         const double bound = swaps > 0 && threshold_swap ? *threshold_swap : threshold;
         if (best_grade <= bound) break;
 
-        const bool mine = owner == ranks->rank();
+        const bool mine = owner == comm.rank();
         if (mine) {
             std::copy_n(&pool.grads[(size_t) best * n], n, v.begin());
             provenance[0] = pool_ids[best];
             provenance[1] = pool.structure_indices[best];
             provenance[2] = pool.equation_indices[best];
         }
-        ranks->broadcast(v.data(), n, provenance, owner);
+        comm.bcast(v.data(), n, owner);
+        comm.bcast(provenance, 3, owner);
 
         int displaced_pool_id, displaced_struct_index, displaced_eqn_index;
         if (!try_swap(v.data(), bound, provenance[0], provenance[1], provenance[2], displaced.data(), displaced_pool_id, displaced_struct_index, displaced_eqn_index)) break;

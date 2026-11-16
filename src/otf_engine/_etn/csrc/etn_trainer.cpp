@@ -12,7 +12,7 @@
 #include <cstdio>
 #include <stdexcept>
 
-ETNTrainer::ETNTrainer(ETN& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+ETNTrainer::ETNTrainer(ETN& potential, std::vector<Sample> structures, const ETNTrainerOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
     : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {}
 
 /* ---------------------------------------------------------------------- */
@@ -50,7 +50,7 @@ void ETNTrainer::add_species() {
 /* ---------------------------------------------------------------------- */
 void ETNTrainer::train() {
     const auto start = std::chrono::steady_clock::now();
-    MPI_Barrier(comm);
+    comm.barrier();
 
     add_species();
     log_errors("Training set errors before training:");
@@ -72,7 +72,7 @@ void ETNTrainer::train() {
     potential.set_trained(true);
     log_errors("Training set errors:");
     if (log) *log << "Trained in " << std::round(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 10) / 10 << " s" << std::endl;
-    MPI_Barrier(comm);
+    comm.barrier();
 }
 
 /* ----------------------------------------------------------------------
@@ -109,7 +109,7 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
     if (rank == 0) rescale_flag = num_iter == 0;    // ETN::rescale_this_iter
 
     while (true) {
-        MPI_Bcast(shared.data(), 3 + n, MPI_DOUBLE, 0, comm);
+        comm.bcast(shared.data(), 3 + n, 0);
         std::copy(shared.begin() + 3, shared.end(), coeffs.begin());
         if (break_flag) break;
 
@@ -135,7 +135,7 @@ void ETNTrainer::fit(const ETNTrainerOptions& o) {
         loss_data[0] = loss_grad(grad);
         std::copy(grad.begin(), grad.end(), loss_data.begin() + 1);
         std::vector<double> total(1 + n);
-        MPI_Reduce(loss_data.data(), total.data(), 1 + n, MPI_DOUBLE, MPI_SUM, 0, comm);
+        comm.reduce(loss_data.data(), total.data(), 1 + n, ReduceOp::sum, 0);
         num_func_eval++;
         if (rank != 0) continue;
 
@@ -230,7 +230,7 @@ void ETNTrainer::rescale() {
         for (int i = 0; i < n; i++)
             loss_der += grad[i] * sign * x0[i];
         double local[2] = {loss, loss_der}, total[2];
-        MPI_Allreduce(local, total, 2, MPI_DOUBLE, MPI_SUM, comm);
+        comm.allreduce(local, total, 2, ReduceOp::sum);
         loss = total[0];
         loss_der = total[1];
     };

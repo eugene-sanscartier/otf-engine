@@ -53,13 +53,6 @@ def selection_equations(calc: PotentialCalculator, structures: list, weights: di
     return eqns
 
 
-def maximize_volume(mv: MaxVol, equations: Equations, pool_id: int, comm=None) -> None:
-    """mv.maximize_volume over *equations*, or with an mpi4py communicator over its ranks, each holding the equations of its share."""
-    if comm is None: return mv.maximize_volume(equations, pool_id=pool_id)
-    from ._core import _core_mpi    # only under a communicator, so a process without one never loads the MPI library
-    _core_mpi.maximize_volume(mv, equations, pool_id, comm)
-
-
 def _open_calculator(potential) -> tuple[PotentialCalculator, str | None]:
     """Accept either a potential path or a preloaded calculator."""
     if isinstance(potential, str):
@@ -181,11 +174,11 @@ def select_add(potential, training_structs: list, candidate_structs: list, thres
     # This three-pass sequence matches mlip-3's select_add and must stay ordered:
     # training rebuild at 1.001, candidate selection at threshold, training pass again, if the model makes it.
     mv.threshold = 1.001
-    maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
+    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
     initial = MaxVol(mv.A, mv.invA)
     mv.threshold = threshold
-    maximize_volume(mv, cand_eqns, _POOL_CAND, comm)
-    if pot.retrain_pass: maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
+    mv.maximize_volume(cand_eqns, pool_id=_POOL_CAND, comm=comm)
+    if pot.retrain_pass: mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
 
     active_indices = sorted({int(struct_index) for active_pool_id, struct_index in zip(mv.active_pool_ids, mv.active_struct_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(struct_index) >= 0})
     selected_structs = [candidate_structs[i] for i in active_indices]
@@ -227,8 +220,8 @@ def update_active_set(potential: str, training_structs: list, threshold: float =
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
     mv = MaxVol(pot.get_coeff_count(), threshold=threshold, threshold_swap=pot.threshold_swap)
-    maximize_volume(mv, seed, _POOL_TRAIN, comm)
-    maximize_volume(mv, train_eqns, _POOL_TRAIN, comm)
+    mv.maximize_volume(seed, pool_id=_POOL_TRAIN, comm=comm)
+    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
 
     if comm is None or comm.Get_rank() == 0:
         stored = write_mvs_state(potential, weights, mv, training_structs, _POOL_TRAIN)

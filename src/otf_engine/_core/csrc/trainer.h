@@ -1,22 +1,15 @@
 /* -*- c++ -*- ----------------------------------------------------------
    What MTPTrainer and ETNTrainer share.
 
-   A trainer is SPMD: every rank of a communicator holds a copy of the
-   potential and a share of the structures, and the MPI collectives combine
-   them. Built with MTP_MPI it uses <mpi.h>; otherwise thread_mpi.h, whose
-   ranks are threads.
+   A trainer is SPMD: every rank of a Comm holds a copy of the potential
+   and a share of the structures, and the Comm's collectives combine them.
 ------------------------------------------------------------------------- */
 
 #pragma once
 
+#include "comm.h"
 #include "error_table.h"
 #include "sample.h"
-
-#ifdef MTP_MPI
-#include <mpi.h>
-#else
-#include "thread_mpi.h"
-#endif
 
 #include <algorithm>
 #include <functional>
@@ -43,16 +36,13 @@ class Trainer {
 
     // log receives the fit log on the rank given one; checkpoint saves the potential, which then
     // holds the coefficients. Throws on every rank together when no rank has a structure.
-    Trainer(Potential& potential, std::vector<Sample> structures, const Options& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
-        : potential(potential), structures(std::move(structures)), options(options), comm(comm), log(log), checkpoint(std::move(checkpoint)) {
-        MPI_Comm_rank(comm, &rank);
-        MPI_Comm_size(comm, &size);
-
+    Trainer(Potential& potential, std::vector<Sample> structures, const Options& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
+        : potential(potential), structures(std::move(structures)), options(options), comm(comm), rank(comm.rank()), size(comm.size()), log(log), checkpoint(std::move(checkpoint)) {
         if (options.balance_species)
             for (Sample& s : this->structures) s.balance_species();
 
         int local_count = (int) this->structures.size();
-        MPI_Allreduce(&local_count, &structure_count, 1, MPI_INT, MPI_SUM, comm);
+        comm.allreduce(&local_count, &structure_count, 1, ReduceOp::sum);
         if (structure_count == 0)
             throw std::runtime_error("no training structures");
 
@@ -71,7 +61,7 @@ class Trainer {
                 local[0] = std::max(local[0], t + 1);
                 local[1] = std::max(local[1], -t);
             }
-        MPI_Allreduce(local, global, 2, MPI_INT, MPI_MAX, comm);
+        comm.allreduce(local, global, 2, ReduceOp::max);
         if (global[1] > 0)
             throw std::runtime_error("a training structure has species " + std::to_string(-global[1]));
         const int type_count = global[0];
@@ -80,7 +70,7 @@ class Trainer {
         for (const Sample& s : structures)
             for (int t : s.types)
                 present[t] = 1;
-        MPI_Allreduce(present.data(), present_anywhere.data(), type_count, MPI_INT, MPI_MAX, comm);
+        comm.allreduce(present.data(), present_anywhere.data(), type_count, ReduceOp::max);
 
         const int old_spec = potential.is_trained() ? potential.get_species_count() : 0;
         for (int t = 0; t < std::max(old_spec, type_count); t++)
@@ -100,8 +90,8 @@ class Trainer {
     Potential& potential;
     std::vector<Sample> structures;
     Options options;
-    MPI_Comm comm;
-    int rank = 0, size = 1;
+    Comm& comm;
+    const int rank, size;
     int structure_count = 0;    // over all ranks
     std::ostream* log;
     std::function<void()> checkpoint;

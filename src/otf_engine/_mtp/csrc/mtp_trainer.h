@@ -52,7 +52,7 @@ class MTPTrainer : public Trainer<MTP, MTPTrainerOptions> {
   public:
     // log receives mlp's fit log on the rank given one; checkpoint is called
     // on rank 0 wherever mlp saves the potential during the fit.
-    MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
+    MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, with the
     // species of the training set it lacked added, and logs the errors on the

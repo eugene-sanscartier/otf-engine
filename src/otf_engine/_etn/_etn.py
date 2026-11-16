@@ -11,7 +11,7 @@ from _core_ext's Pair.
     real_wigner_3j   3-j symbols of real harmonics, which the cores carry
 
 PairETN and ETN load an .etn file or build the untrained ETN of a shape given by the file's fields.
-PairETN carries what the selection and the training call for every ETN: write, its trainers,
+PairETN carries what the selection and the training call for every ETN: write, fit (train_etn),
 and mlip-4's CfgCalc rules threshold_swap and retrain_pass.
 """
 
@@ -29,8 +29,7 @@ wigner_3j = _ext.wigner_3j
 real_wigner_3j = _ext.real_wigner_3j
 
 PairETN.write = write_etn                                  # pot.write(path)
-PairETN.train_on_threads = staticmethod(train_etn)
-PairETN.mpi_trainer = ("otf_engine._etn._etn_mpi", "train_etn")    # imported only under a communicator
+PairETN.fit = staticmethod(train_etn)
 PairETN.threshold_swap = 1.00001    # mlip-4's MaximizeVol goes on swapping, once a search has swapped, while a grade exceeds this
 PairETN.retrain_pass = False        # mlip-4's CfgCalc makes no training pass after the candidates
 

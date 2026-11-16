@@ -8,11 +8,7 @@
 #include "pair.h"
 #include "sample.h"
 
-#ifdef MTP_MPI
-#include <mpi.h>
-#else
-#include "thread_mpi.h"
-#endif
+#include "comm.h"
 
 #include <algorithm>
 #include <cmath>
@@ -34,7 +30,7 @@
    the structures with the largest energy and force errors; on rank 0, and
    empty on the others.
 ------------------------------------------------------------------------- */
-inline std::string error_table(Pair& potential, const std::vector<Sample>& structures, const std::vector<std::string>& species, MPI_Comm comm, const std::string& title) {
+inline std::string error_table(Pair& potential, const std::vector<Sample>& structures, const std::vector<std::string>& species, Comm& comm, const std::string& title) {
     enum { ENE, EPA, FRC, VIR, KINDS };    // then the forces of each species
     const int species_count = potential.get_species_count();
     const int rows = KINDS + species_count;
@@ -54,7 +50,7 @@ inline std::string error_table(Pair& potential, const std::vector<Sample>& struc
         }
         fit[C * C + C] += 1.0;
     }
-    MPI_Allreduce(fit.data(), total_fit.data(), (int) fit.size(), MPI_DOUBLE, MPI_SUM, comm);
+    comm.allreduce(fit.data(), total_fit.data(), (int) fit.size(), ReduceOp::sum);
 
     // Gauss-Jordan, pivoting on the largest remaining diagonal; species beyond the independent compositions get no energy
     double* G = total_fit.data();
@@ -135,16 +131,14 @@ inline std::string error_table(Pair& potential, const std::vector<Sample>& struc
         }
     }
 
-    int rank = 0;
-    MPI_Comm_rank(comm, &rank);
     std::vector<double> total_sums(rows * 4), total_maxima(rows * 3), total_at(rows);
-    MPI_Reduce(sums.data(), total_sums.data(), rows * 4, MPI_DOUBLE, MPI_SUM, 0, comm);
-    MPI_Allreduce(maxima.data(), total_maxima.data(), rows * 3, MPI_DOUBLE, MPI_MAX, comm);
+    comm.reduce(sums.data(), total_sums.data(), rows * 4, ReduceOp::sum, 0);
+    comm.allreduce(maxima.data(), total_maxima.data(), rows * 3, ReduceOp::max);
     // the max |diff|'s place, the first in number among the ranks holding it
     for (int r = 0; r < rows; r++)
         if (maxima[r * 3] != total_maxima[r * 3]) at[r] = 1e300;
-    MPI_Reduce(at.data(), total_at.data(), rows, MPI_DOUBLE, MPI_MIN, 0, comm);
-    if (rank != 0) return "";
+    comm.reduce(at.data(), total_at.data(), rows, ReduceOp::min, 0);
+    if (comm.rank() != 0) return "";
 
     char line[160];
     std::ostringstream out;

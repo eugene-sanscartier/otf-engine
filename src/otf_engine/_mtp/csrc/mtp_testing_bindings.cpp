@@ -8,21 +8,20 @@
 #include "mtp_trainer.h"
 
 #include <sstream>
-#include <thread>
 
 void add_option_fields(MTPTrainerOptions& o, OptionFields& fields);    // mtp_trainer_bindings.cpp
 
 // An MTPTrainer on one thread, whose stages the tests call in any order.
 class MTPTrainerStages {
   public:
-    MTPTrainerStages(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, bool balance_species) : potential(filename), group(1), comm{&group, 0} {
+    MTPTrainerStages(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, bool balance_species) : potential(filename), process("MTPTrainerStages", 1, py::none()) {
         std::string log_target;
         MTPTrainerOptions o = parse_options<MTPTrainerOptions>("MTPTrainerStages", options, log_target);
         o.balance_species = balance_species;
         std::vector<Sample> share;
         for (py::handle item : structures)
             share.push_back(item.cast<Sample>());
-        trainer = std::make_unique<MTPTrainer>(potential, std::move(share), o, &comm, &log);
+        trainer = std::make_unique<MTPTrainer>(potential, std::move(share), o, process[0], &log);
     }
 
     void add_species() { trainer->add_species(); }
@@ -52,8 +51,7 @@ class MTPTrainerStages {
     std::ostringstream log;
 
   private:
-    ThreadGroup group;
-    ThreadComm comm;
+    ProcessRanks process;
     std::unique_ptr<MTPTrainer> trainer;
 };
 
@@ -100,33 +98,24 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
     std::string log_target;
     MTPTrainerOptions o = parse_options<MTPTrainerOptions>("objective_on_threads", options, log_target);
     o.balance_species = balance_species;
+    ProcessRanks process("objective_on_threads", ranks, py::none());
     std::vector<std::vector<Sample>> shares(ranks);
     int count = 0;
     for (py::handle item : structures)
         shares[count++ % ranks].push_back(item.cast<Sample>());
 
-    ThreadGroup group(ranks);
-    std::vector<ThreadComm> comms(ranks);
-    for (int r = 0; r < ranks; r++) comms[r] = ThreadComm{&group, r};
     double loss = 0.0;
     std::vector<double> grad;
-    auto run_rank = [&](int r) {
+    process.run([&](Comm& comm, int r) {
         MTP potential(filename);
-        MTPTrainer trainer(potential, std::move(shares[r]), o, &comms[r]);
+        MTPTrainer trainer(potential, std::move(shares[r]), o, comm);
         std::vector<double> rank_grad;
         const double rank_loss = trainer.objective(coeffs, rank_grad);
         if (r == 0) {
             loss = rank_loss;
             grad = rank_grad;
         }
-    };
-    {
-        py::gil_scoped_release unlocked;
-        std::vector<std::thread> threads;
-        for (int r = 1; r < ranks; r++) threads.emplace_back(run_rank, r);
-        run_rank(0);
-        for (std::thread& t : threads) t.join();
-    }
+    });
     return py::make_tuple(loss, py::array_t<double>(grad.size(), grad.data()));
 }
 

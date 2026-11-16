@@ -23,7 +23,7 @@ static bool linear_fit_step(int step) {
     return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
 }
 
-MTPTrainer::MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, MPI_Comm comm, std::ostream* log, std::function<void()> checkpoint)
+MTPTrainer::MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTPTrainerOptions& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
     : Trainer(potential, std::move(structures), options, comm, log, std::move(checkpoint)) {
     n_radial = potential.get_radial_coeff_count();
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();
@@ -48,7 +48,7 @@ MTPTrainer::MTPTrainer(MTP& potential, std::vector<Sample> structures, const MTP
 /* ---------------------------------------------------------------------- */
 void MTPTrainer::train() {
     const auto start = std::chrono::steady_clock::now();
-    MPI_Barrier(comm);
+    comm.barrier();
     if (log) *log << structure_count << " configurations found in the training set" << std::endl;
 
     add_species();
@@ -83,7 +83,7 @@ void MTPTrainer::train() {
                     c[std::min(k, R - 1)] = 1e-7 * (1 + uniform(generator));
                 }
         }
-        MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
+        comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
     }
 
     // pre-training, for the initial scaling
@@ -127,7 +127,7 @@ void MTPTrainer::train() {
     potential.set_coeffs(coeffs.data());
     log_errors("Training set errors:");
     if (log) *log << "Trained in " << std::round(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 10) / 10 << " s" << std::endl;
-    MPI_Barrier(comm);
+    comm.barrier();
 }
 
 /* ----------------------------------------------------------------------
@@ -200,7 +200,7 @@ void MTPTrainer::update_min_dist() {
         }
 
     double total_min_dist = min_dist;
-    MPI_Allreduce(&min_dist, &total_min_dist, 1, MPI_DOUBLE, MPI_MIN, comm);
+    comm.allreduce(&min_dist, &total_min_dist, 1, ReduceOp::min);
 
     if (!options.no_mindist_update) {
         if (log) *log << "min_dist = " << total_min_dist << ", mindist updated" << std::endl;
@@ -214,7 +214,7 @@ void MTPTrainer::update_min_dist() {
 ------------------------------------------------------------------------- */
 void MTPTrainer::fit_nonlinear(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
-    MPI_Barrier(comm);
+    comm.barrier();
     if (log) {
         *log << "MTPR training started on " << size << " core(s)" << std::endl;
         char header[128];
@@ -265,7 +265,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
         }
 
         if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
-        MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
+        comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
         bfgs_f = evaluate(bfgs_g, n, true, bfgs_terms);
 
         if (rank == 0) {
@@ -316,9 +316,9 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
             }
         }
 
-        MPI_Bcast(&converge, 1, MPI_C_BOOL, 0, comm);
-        MPI_Bcast(&linesearch, 1, MPI_C_BOOL, 0, comm);
-        MPI_Bcast(&num_step, 1, MPI_INT, 0, comm);
+        comm.bcast(&converge, 1, 0);
+        comm.bcast(&linesearch, 1, 0);
+        comm.bcast(&num_step, 1, 0);
     }
 
     if (rank == 0 && options.inverse_hessian)
@@ -349,7 +349,7 @@ void MTPTrainer::fit_nonlinear(int max_iter) {
 ------------------------------------------------------------------------- */
 void MTPTrainer::fit_riemannian(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
-    MPI_Barrier(comm);
+    comm.barrier();
     if (log) {
         *log << "Riemannian L-BFGS started on " << size << " core(s)" << std::endl;
         char header[128];
@@ -372,10 +372,10 @@ void MTPTrainer::fit_riemannian(int max_iter) {
 
     // the loss at coeffs, and its Riemannian gradient into out, on every rank
     auto evaluate_tangent = [&](std::vector<double>& out) {
-        MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
+        comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
         double loss = evaluate(out, n, false, terms);
-        MPI_Bcast(&loss, 1, MPI_DOUBLE, 0, comm);
-        MPI_Bcast(out.data(), n, MPI_DOUBLE, 0, comm);
+        comm.bcast(&loss, 1, 0);
+        comm.bcast(out.data(), n, 0);
         project_tangent(coeffs.data(), out.data());
         evaluations++;
         return loss;
@@ -593,8 +593,8 @@ void MTPTrainer::assemble_linear() {
     }
 
     std::vector<double> matrix_sum(rank == 0 ? (size_t) n * n : 0), vector_sum(rank == 0 ? n : 0);
-    MPI_Reduce(lin_matrix.data(), matrix_sum.data(), n * n, MPI_DOUBLE, MPI_SUM, 0, comm);
-    MPI_Reduce(lin_vector.data(), vector_sum.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
+    comm.reduce(lin_matrix.data(), matrix_sum.data(), n * n, ReduceOp::sum, 0);
+    comm.reduce(lin_vector.data(), vector_sum.data(), n, ReduceOp::sum, 0);
     if (rank == 0) {
         lin_matrix.swap(matrix_sum);
         lin_vector.swap(vector_sum);
@@ -603,9 +603,9 @@ void MTPTrainer::assemble_linear() {
 
 // Hands rank 0's linear coefficients and regularization to every rank.
 void MTPTrainer::broadcast_linear() {
-    MPI_Bcast(coeffs.data(), (int) coeffs.size(), MPI_DOUBLE, 0, comm);
-    MPI_Bcast(reg_vector.data(), n_linear, MPI_DOUBLE, 0, comm);
-    MPI_Bcast(&reg_init, 1, MPI_C_BOOL, 0, comm);
+    comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
+    comm.bcast(reg_vector.data(), n_linear, 0);
+    comm.bcast(&reg_init, 1, 0);
     potential.set_coeffs(coeffs.data());
 }
 
@@ -760,8 +760,8 @@ double MTPTrainer::objective(const std::vector<double>& at, std::vector<double>&
     double terms[4];
     grad.assign(coeffs.size(), 0.0);
     double total = evaluate(grad, (int) grad.size(), !options.riemannian, terms);
-    MPI_Bcast(&total, 1, MPI_DOUBLE, 0, comm);
-    MPI_Bcast(grad.data(), (int) grad.size(), MPI_DOUBLE, 0, comm);
+    comm.bcast(&total, 1, 0);
+    comm.bcast(grad.data(), (int) grad.size(), 0);
     // the linear coefficients are a function of the radial ones: their partial gradient is zero at the optimum
     if (options.varpro) std::fill(grad.begin() + n_radial, grad.end(), 0.0);
     // under riemannian, the Riemannian gradient at the radial functions in at, which must be orthonormal
@@ -779,9 +779,9 @@ double MTPTrainer::evaluate(std::vector<double>& grad, int n, bool radial, doubl
     local_terms[3] = loss - local_terms[3];
 
     double total = 0.0;
-    MPI_Reduce(&loss, &total, 1, MPI_DOUBLE, MPI_SUM, 0, comm);
-    MPI_Reduce(local_terms, terms, 4, MPI_DOUBLE, MPI_SUM, 0, comm);
-    MPI_Reduce(local_grad.data(), grad.data(), n, MPI_DOUBLE, MPI_SUM, 0, comm);
+    comm.reduce(&loss, &total, 1, ReduceOp::sum, 0);
+    comm.reduce(local_terms, terms, 4, ReduceOp::sum, 0);
+    comm.reduce(local_grad.data(), grad.data(), n, ReduceOp::sum, 0);
     return total;
 }
 

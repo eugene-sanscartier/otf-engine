@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include "comm.h"
 #include "pair.h"
 
 #include <optional>
@@ -58,19 +59,6 @@ class Equations {
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };
 
-// The ranks a pool of equations is spread over, each holding a share of it and the same active set.
-// The base class is one rank.
-class PoolRanks {
-  public:
-    virtual ~PoolRanks() = default;
-    virtual int rank() const { return 0; }
-    // On entry this rank's best grade and that equation's position, on return the best of every rank,
-    // the lowest position among equal grades, and the rank holding it.
-    virtual void reduce_best(double& grade, double& position, int& owner) {}
-    // Sends row [n] and provenance [3] from owner to every rank.
-    virtual void broadcast(double* row, int n, int* provenance, int owner) {}
-};
-
 class MaxVol {
   public:
     // A = init_scale * I; the defaults are mlip-3's.
@@ -86,9 +74,9 @@ class MaxVol {
     // max_swaps are made. Each swap puts the equation it displaces from A into pool in its place, with its
     // provenance, so later sweeps grade the displaced one; pool is restored when the search ends.
     // pool_id is recorded as the pool of each of pool's equations that enters A.
-    // Over ranks, pool is this rank's share; the swaps, and so A and its provenance, are those of the
-    // whole pool searched on one rank, with its structures added in order.
-    void maximize_volume(Equations& pool, int pool_id, int max_swaps = 99999, PoolRanks* ranks = nullptr);
+    // Over the ranks of comm, each holding the same active set, pool is this rank's share; the swaps, and so A
+    // and its provenance, are those of the whole pool searched on one rank, with its structures added in order.
+    void maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_swaps = 99999);
 
     // Provenance of each active equation, from indices saved beside A.
     void restore_active(const int* cfg_indices, const int* eqn_indices, int pool_id);

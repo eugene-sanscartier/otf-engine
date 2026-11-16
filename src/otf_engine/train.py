@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from importlib import import_module
 
 from ._core import Sample, error_table, read_potential
 from .almtp_io import read_mvs_header
@@ -40,16 +39,15 @@ MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", 
 def fit(potential: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None, balance_species: bool = True):
     """train_mtp or train_etn, as the file *potential* holds, on *ranks* threads, or with an mpi4py communicator over its ranks, each passing its share of *structures*.
 
+    ranks           : threads; without comm, defaults to the CPUs this process may run on
     inverse_hessian : (n, n) float64 array BFGS starts from and leaves its final inverse Hessian in, as train_mtp's; an MTP's only
     balance_species : give every species of a structure an equal share of its force weight; False weighs every force alike
     """
     pot = read_potential(potential)
     extra = {} if inverse_hessian is None else {"inverse_hessian": inverse_hessian}
-    if comm is None: return pot.train_on_threads(potential, structures, options, ranks or os.process_cpu_count(), checkpoint=checkpoint, balance_species=balance_species, **extra)
-
-    module, name = pot.mpi_trainer    # imported here, so a process without a communicator never loads the MPI library
-    train_over_mpi = getattr(import_module(module), name)
-    return train_over_mpi(potential, structures, options, comm, checkpoint=checkpoint, balance_species=balance_species, **extra)
+    if ranks is None: ranks = os.process_cpu_count() if comm is None else 1
+    trained = pot.fit(potential, structures, options, ranks, comm, checkpoint=checkpoint, balance_species=balance_species, **extra)
+    return trained
 
 
 def train(potential: str, training_structs: list, save_to: str, settings: dict | None = None, ranks: int | None = None, al_mode: str = "nbh", comm=None, balance_species: bool = True) -> None:

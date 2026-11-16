@@ -15,21 +15,13 @@
      pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
      etn_bindings.cpp                     <- etn.{h,cpp}
      etn_trainer_bindings.cpp             <- etn_trainer.{h,cpp}
-   Built with MTP_MPI, core_bindings.cpp and maxvol_bindings.cpp are the
-   _core_mpi module, mtp_trainer_bindings.cpp the _mtp_mpi module, and
-   etn_trainer_bindings.cpp the _etn_mpi module.
 ------------------------------------------------------------------------- */
 
 #pragma once
 
+#include "comm.h"
 #include "pair.h"
 #include "sample.h"
-
-#ifdef MTP_MPI
-#include <mpi.h>
-#else
-#include "thread_mpi.h"
-#endif
 
 #include <fstream>
 #include <functional>
@@ -120,25 +112,72 @@ inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     return &file;
 }
 
-#ifdef MTP_MPI
-// Raises error on every rank of comm, or else the error of the lowest rank that has one.
-inline void raise_together(MPI_Comm comm, const std::string& error) {
-    int rank = 0, size = 1;
-    MPI_Comm_rank(comm, &rank);
-    MPI_Comm_size(comm, &size);
-    const int mine = error.empty() ? size : rank;
-    int failed = size;
-    MPI_Allreduce(&mine, &failed, 1, MPI_INT, MPI_MIN, comm);
-    if (failed == size) return;
+// The ranks this process runs: `ranks` threads of a group of their own, or, given an mpi4py communicator comm, its
+// rank of comm. name (train_mtp, maximize_volume, ...) prefixes the errors.
+class ProcessRanks {
+  public:
+    ProcessRanks(const char* name, int ranks, py::object comm) {
+        if (!comm.is_none()) {
+            if (ranks != 1)
+                throw std::runtime_error(std::string(name) + ": ranks and comm exclude each other");
+            comms.push_back(std::make_unique<MPIComm>(MPI_Comm_f2c(comm.attr("py2f")().cast<MPI_Fint>())));
+            return;
+        }
+        if (ranks < 1)
+            throw std::runtime_error(std::string(name) + ": ranks must be at least 1");
+        group = std::make_unique<ThreadGroup>(ranks);
+        for (int r = 0; r < ranks; r++)
+            comms.push_back(std::make_unique<ThreadComm>(*group, r));
+    }
 
-    std::string message = rank == failed ? error : std::string();
-    int length = (int) message.size();
-    MPI_Bcast(&length, 1, MPI_INT, failed, comm);
-    message.resize(length);
-    MPI_Bcast(message.data(), length, MPI_CHAR, failed, comm);
-    throw std::runtime_error(message);
-}
-#endif
+    int count() const { return (int) comms.size(); }
+    Comm& operator[](int r) { return *comms[r]; }
+
+    // Runs fn(comm, r) on each rank r of this process with the GIL released, each on a thread of its own and rank 0
+    // on the calling thread. A runtime_error, which a trainer raises on every rank together, is raised on every rank
+    // as the lowest rank's; any other exception ends an MPI job, and on threads is raised once every rank has stopped.
+    void run(const std::function<void(Comm&, int)>& fn) {
+        std::vector<std::exception_ptr> raised(count());
+        auto run_rank = [&](int r) {
+            Comm& comm = *comms[r];
+            std::string error;
+            try {
+                fn(comm, r);
+            } catch (const std::runtime_error& e) {
+                error = e.what();
+            } catch (const CommAborted&) {
+                return;
+            } catch (...) {
+                raised[r] = std::current_exception();
+                comm.abort();    // the other ranks are left waiting in a collective
+                return;
+            }
+            try {
+                raise_together(comm, error);
+            } catch (const CommAborted&) {
+            } catch (...) {
+                raised[r] = std::current_exception();
+            }
+        };
+
+        {
+            py::gil_scoped_release unlocked;
+            std::vector<std::thread> threads;
+            for (int r = 1; r < count(); r++)
+                threads.emplace_back(run_rank, r);
+            run_rank(0);
+            for (std::thread& t : threads)
+                t.join();
+        }
+
+        for (const std::exception_ptr& e : raised)
+            if (e) std::rethrow_exception(e);
+    }
+
+  private:
+    std::unique_ptr<ThreadGroup> group;
+    std::vector<std::unique_ptr<Comm>> comms;
+};
 
 // Raises unless every atom of nb has one of the potential's species, which the
 // kernels index their coefficients with.
@@ -222,133 +261,69 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
     return o;
 }
 
-#ifdef MTP_MPI
-
-// Trains the potential in filename with TrainerT over the ranks of comm_object, each passing its share of the
-// structures, and returns it on every rank. make_options gives the options and sets the log target, which rank 0
-// writes. An error on any rank is raised on every rank, and an exception other than the trainer's errors ends the
-// job with MPI_Abort. name (train_mtp, train_etn) prefixes the errors.
+// Trains the potential in filename with TrainerT over the ranks of this process, and returns it. Under MPI every
+// process calls it with its share of the structures; on threads they are dealt round-robin, as mlp's MPI_LoadCfgs
+// deals a file. make_options gives the options and sets the log target, which rank 0 writes. Rank 0 trains the
+// potential it returns and hands it to checkpoint, whose first failure ends checkpointing and is raised after the fit,
+// as itself on rank 0 and as a RuntimeError on the other ranks. A failure to set up on any rank is raised on every
+// rank before the trainer's first collective. name (train_mtp, train_etn) prefixes the errors.
 template <class TrainerT>
-py::object train_over_mpi(const char* name, const std::string& filename, py::iterable structures, const std::function<typename TrainerT::Options(std::string&)>& make_options, py::object comm_object, py::object checkpoint) {
+py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const std::function<typename TrainerT::Options(std::string&)>& make_options, int ranks, py::object comm, py::object checkpoint) {
     using Potential = typename TrainerT::Potential;
-    const MPI_Comm comm = MPI_Comm_f2c(comm_object.attr("py2f")().cast<MPI_Fint>());
-    int rank = 0;
-    MPI_Comm_rank(comm, &rank);
+    ProcessRanks process(name, ranks, comm);
+    const bool holds_rank0 = process[0].rank() == 0;
 
-    // A rank failing to set up fails every rank, before the trainer's first collective.
-    std::string error;
-    typename TrainerT::Options trainer_options;
-    std::vector<Sample> share;
+    std::string setup_error;
+    typename TrainerT::Options options;
+    std::vector<std::vector<Sample>> shares(process.count());
     std::ofstream log_file;
     std::ostream* log = nullptr;
     py::object potential;
+    Potential* potential_ptr = nullptr;
     try {
         std::string log_target = "stdout";
-        trainer_options = make_options(log_target);
+        options = make_options(log_target);
+        int count = 0;
         for (py::handle item : structures)
-            share.push_back(item.cast<Sample>());
-        if (rank == 0) log = open_log(log_target, log_file);
+            shares[count++ % process.count()].push_back(item.cast<Sample>());
+        if (holds_rank0) log = open_log(log_target, log_file);
         potential = py::cast(std::make_unique<Potential>(filename));
+        potential_ptr = &potential.cast<Potential&>();
     } catch (const std::exception& e) {
-        error = e.what();
+        setup_error = e.what();
     }
-    raise_together(comm, error);
 
-    Potential& potential_ref = potential.cast<Potential&>();
-    std::string checkpoint_error;    // the first failed checkpoint, which ends checkpointing
+    std::exception_ptr checkpoint_failure;
+    std::string checkpoint_error;
     std::function<void()> save;
-    if (rank == 0 && !checkpoint.is_none())
+    if (holds_rank0 && !checkpoint.is_none())
         save = [&]() {
-            if (!checkpoint_error.empty()) return;
+            if (checkpoint_failure) return;
             py::gil_scoped_acquire gil;
             try {
                 checkpoint(potential);
             } catch (const std::exception& e) {
+                checkpoint_failure = std::current_exception();
                 checkpoint_error = std::string(name) + ": checkpoint failed: " + e.what();
             }
         };
 
-    {
-        py::gil_scoped_release unlocked;
-        try {
-            TrainerT trainer(potential_ref, std::move(share), trainer_options, comm, log, save);
-            trainer.train();
-        } catch (const std::runtime_error& e) {
-            error = e.what();    // a trainer raises its errors on every rank together
-        } catch (...) {
-            MPI_Abort(comm, 1);    // the other ranks are left waiting in a collective
-        }
-    }
-    raise_together(comm, error);
-    raise_together(comm, checkpoint_error);
-    return potential;
-}
-
-#else
-
-// Trains the potential in filename with TrainerT on ranks threads, the structures dealt round-robin as mlp's
-// MPI_LoadCfgs deals a file, and returns it. Rank 0 trains the potential returned and hands it to checkpoint.
-// name (train_mtp, train_etn) prefixes the errors.
-template <class TrainerT>
-py::object train_on_threads(const char* name, const std::string& filename, py::iterable structures, const typename TrainerT::Options& options, const std::string& log_target, int ranks, py::object checkpoint) {
-    using Potential = typename TrainerT::Potential;
-    if (ranks < 1)
-        throw std::runtime_error(std::string(name) + ": ranks must be at least 1");
-
-    std::vector<std::vector<Sample>> shares(ranks);
-    int count = 0;
-    for (py::handle item : structures)
-        shares[count++ % ranks].push_back(item.cast<Sample>());
-
-    std::ofstream log_file;
-    std::ostream* log = open_log(log_target, log_file);
-
-    py::object potential = py::cast(std::make_unique<Potential>(filename));
-    Potential& potential_ref = potential.cast<Potential&>();
-    std::function<void()> save;
-    if (!checkpoint.is_none())
-        save = [&]() {
-            py::gil_scoped_acquire gil;
-            checkpoint(potential);
-        };
-
-    ThreadGroup group(ranks);
-    std::vector<ThreadComm> comms(ranks);
-    for (int r = 0; r < ranks; r++)
-        comms[r] = ThreadComm{&group, r};
-
-    std::exception_ptr failure;
-    std::mutex failure_mutex;
-    auto run_rank = [&](int r) {
-        try {
+    try {
+        process.run([&](Comm& comm, int r) {
+            raise_together(comm, setup_error);
             std::unique_ptr<Potential> own;
             if (r != 0) own = std::make_unique<Potential>(filename);
-            Potential& pot = r == 0 ? potential_ref : *own;
-            TrainerT trainer(pot, std::move(shares[r]), options, &comms[r], r == 0 ? log : nullptr, r == 0 ? save : nullptr);
+            Potential& pot = r == 0 ? *potential_ptr : *own;
+            TrainerT trainer(pot, std::move(shares[r]), options, comm, r == 0 ? log : nullptr, r == 0 ? save : nullptr);
             trainer.train();
-        } catch (const CommAborted&) {
-        } catch (...) {
-            std::lock_guard<std::mutex> lock(failure_mutex);
-            if (!failure) failure = std::current_exception();
-            group.abort();
-        }
-    };
-
-    {
-        py::gil_scoped_release unlocked;
-        std::vector<std::thread> threads;
-        for (int r = 1; r < ranks; r++)
-            threads.emplace_back(run_rank, r);
-        run_rank(0);
-        for (std::thread& t : threads)
-            t.join();
+            raise_together(comm, checkpoint_error);
+        });
+    } catch (const std::runtime_error&) {
+        if (checkpoint_failure) std::rethrow_exception(checkpoint_failure);
+        throw;
     }
-
-    if (failure) std::rethrow_exception(failure);
     return potential;
 }
-
-#endif
 
 void bind_core(py::module_& m);
 void bind_maxvol(py::module_& m);

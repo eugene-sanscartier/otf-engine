@@ -1,21 +1,9 @@
 /* -*- c++ -*- ----------------------------------------------------------
    The _core_ext module: the neighbor list, Pair and the error table, then
-   Equations and MaxVol. Built with MTP_MPI, the _core_mpi module: the
-   MaxVol search over MPI.
+   Equations and MaxVol.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
-
-#ifdef MTP_MPI
-
-PYBIND11_MODULE(_core_mpi, m) {
-    m.doc() = "The MaxVol search over MPI.";
-    py::module_::import("otf_engine._core._core_ext");    // registers Equations and MaxVol
-    bind_maxvol(m);
-}
-
-#else
-
 #include "error_table.h"
 
 static py::object eval_grad(Pair& self, const PyNeighbors& nb, bool forces, bool virial) {
@@ -181,10 +169,9 @@ MTP and ETN only.
         std::vector<Sample> share;
         for (py::handle item : structures)
             share.push_back(item.cast<Sample>());
-        ThreadGroup group(1);
-        ThreadComm comm{&group, 0};
+        ProcessRanks process("error_table", 1, py::none());
         py::gil_scoped_release unlocked;
-        return error_table(potential, share, species, &comm, title);
+        return error_table(potential, share, species, process[0], title);
     }, py::arg("potential"), py::arg("structures"), py::arg("species"), py::arg("title"), R"doc(
 The errors of potential on the structures, as the table train_mtp and train_etn log, under title.
 
@@ -199,5 +186,3 @@ PYBIND11_MODULE(_core_ext, m) {
     bind_core(m);
     bind_maxvol(m);
 }
-
-#endif
