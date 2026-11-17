@@ -91,7 +91,7 @@ void MTPFit::run() {
         log_event(log, "phase", "pre-training, iteration_limit 75");
         orthogonalize();
         fit_linear();
-        log_event(log, "linear", "fit_linear");
+        log_linear_fit(true);
         rescale();
         fit_nonlinear(75);
         rescale();
@@ -112,7 +112,7 @@ void MTPFit::run() {
         if (!options.radial_only && !options.bfgs_only) {
             orthogonalize();
             fit_linear();
-            log_event(log, "linear", "fit_linear");
+            log_linear_fit(!options.riemannian);
             rescale();
         }
     }
@@ -226,6 +226,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
     int curr_line_search = 0;
     bool converge = false;
     bool linesearch = false;
+    bool linear_fitted = false;    // the next evaluation is at the coefficients of a linear fit
 
     while (!converge) {
         if (!linesearch) {
@@ -235,7 +236,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
             if (!options.radial_only && !options.bfgs_only && !options.varpro && linear_fit_step(num_step)) {
                 orthogonalize();
                 fit_linear();
-                log_event(log, "linear", "fit_linear");
+                linear_fitted = true;
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian
                 if (reg_init) {
@@ -250,6 +251,8 @@ void MTPFit::fit_nonlinear(int max_iter) {
         if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
         comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
         bfgs_f = evaluate(bfgs_g, n, true, bfgs_terms);
+        if (linear_fitted) log_event(log, "linear", "fit_linear, loss %.7e", bfgs_f);
+        linear_fitted = false;
 
         if (rank == 0) {
             if (!bfgs.iterate(bfgs_f, bfgs_g)) {
@@ -358,8 +361,8 @@ void MTPFit::fit_riemannian(int max_iter) {
     while (true) {
         if (!options.varpro && linear_fit_step(num_step)) {
             fit_linear();
-            log_event(log, "linear", "fit_linear");
             f = evaluate_tangent(g);
+            log_event(log, "linear", "fit_linear, loss %.7e", f);
             // a new regularization invalidates the memory
             if (reg_init) {
                 s_memory.clear();
@@ -709,8 +712,8 @@ double MTPFit::objective(const std::vector<double>& at, std::vector<double>& gra
     return total;
 }
 
-double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]) {
-    if (options.varpro) fit_linear();    // the linear coefficients at their optimum for these radial ones
+double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4], bool solve_linear) {
+    if (options.varpro && solve_linear) fit_linear();    // the linear coefficients at their optimum for these radial ones
     local_grad.resize(coeffs.size());
     double loss = loss_grad(local_grad) / structure_count;
     for (double& g : local_grad) g /= structure_count;
@@ -723,6 +726,14 @@ double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double te
     comm.reduce(local_terms, terms, 4, ReduceOp::sum, 0);
     comm.reduce(local_grad.data(), grad.data(), n, ReduceOp::sum, 0);
     return total;
+}
+
+/* ---------------------------------------------------------------------- */
+void MTPFit::log_linear_fit(bool radial) {
+    std::vector<double> grad(coeffs.size());
+    double terms[4];
+    const double loss = evaluate(grad, (int) grad.size(), radial, terms, false);
+    log_event(log, "linear", "fit_linear, loss %.7e", loss);
 }
 
 /* ---------------------------------------------------------------------- */

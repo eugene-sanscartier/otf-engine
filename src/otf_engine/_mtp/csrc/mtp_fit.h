@@ -90,8 +90,10 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
 
     // The loss at coeffs, penalty included (the radial one if radial), on rank 0, with its gradient over the first n
     // coefficients in grad and its energy, force, stress and penalty terms in terms, summed over the ranks onto rank 0.
-    // Under varpro the linear coefficients are solved for coeffs first.
-    double evaluate(std::vector<double>& grad, int n, bool radial, double terms[4]);
+    // Under varpro, unless solve_linear is false, the linear coefficients are solved for coeffs first.
+    double evaluate(std::vector<double>& grad, int n, bool radial, double terms[4], bool solve_linear = true);
+    // Logs the loss at coeffs after a linear fit, as the step lines of a phase with the radial penalty if radial give it.
+    void log_linear_fit(bool radial);
     // Loss and dL/dc over this rank's structures, without the penalty.
     double loss_grad(std::vector<double>& grad);
     // Adds the penalty on the radial functions' norms and overlaps, unless radial is false,
