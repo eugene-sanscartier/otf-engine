@@ -15,6 +15,7 @@
      pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
      etn_bindings.cpp                     <- etn.{h,cpp}
      etn_fit_bindings.cpp             <- etn_fit.{h,cpp}
+   and the test-only _mtp_testing (mtp_testing_bindings.cpp) and _etn_testing (etn_testing_bindings.cpp).
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -273,9 +274,9 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
 // Trains the potential in filename with FitT over the ranks of this process, and returns it. Under MPI every
 // process calls it with its share of the structures; on threads they are dealt over the ranks. Rank 0 writes the
 // log to log_target, trains the potential it returns and hands it to checkpoint, whose first failure is a warning
-// and ends checkpointing. name (fit_mtp, fit_etn) prefixes the errors.
+// and ends checkpointing, and passes its fit to finished once it has run. name (fit_mtp, fit_etn) prefixes the errors.
 template <class FitT>
-py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const typename FitT::Options& options, const std::string& log_target, int ranks, py::object comm, py::object checkpoint) {
+py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const typename FitT::Options& options, const std::string& log_target, int ranks, py::object comm, py::object checkpoint, const std::function<void(const FitT&)>& finished = nullptr) {
     using Potential = typename FitT::Potential;
     ProcessRanks process(name, ranks, comm);
     const bool holds_rank0 = process[0].rank() == 0;
@@ -306,6 +307,7 @@ py::object train_potential(const char* name, const std::string& filename, py::it
         Potential& pot = r == 0 ? potential_ref : *own;
         FitT fit(pot, std::move(shares[r]), options, comm, r == 0 ? log : nullptr, r == 0 ? save : nullptr);
         fit.run();
+        if (r == 0 && finished) finished(fit);
     });
     return potential;
 }

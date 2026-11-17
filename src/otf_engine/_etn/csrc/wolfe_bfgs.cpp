@@ -34,18 +34,18 @@ bool WolfeLineSearch::iterate(double curr_f, double curr_g) {
         curr_x = right_x;
         // mlip-4 throws here; a failed search ends as the others below do, so that no rank raises alone
         if (curr_g > 0) {
-            if (log) *log << "\t Line search: increasing function";
+            if (log) *log << "line search failed: the loss increases along the direction" << std::endl;
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        if (log) *log << "\t Line search: prev_x == curr_x";
+        if (log) *log << "line search failed: the step stopped moving" << std::endl;
         return false;
     }
     if (curr_x <= 1e-30) {
-        if (log) *log << "\t Line search: too small curr_x";
+        if (log) *log << "line search failed: the step fell below 1e-30" << std::endl;
         return false;
     }
 
@@ -186,15 +186,20 @@ bool WolfeBFGS::iterate(double f, const std::vector<double>& g) {
         if (!in_linesearch_) {
             if (iters_no_improve >= max_iters_no_improve) {
                 // A stalled search restarts from its start with a simpler inverse Hessian
-                if (hess_just_diaged)
+                alpha_ = 0.0;
+                if (hess_just_diaged) {
                     reset_inv_hess();
-                else
+                    if (linesearch.log) *linesearch.log << "line search stalled: inverse Hessian reset to its mean diagonal" << std::endl;
+                } else {
                     diag_inv_hess();
+                    if (linesearch.log) *linesearch.log << "line search stalled: inverse Hessian made diagonal" << std::endl;
+                }
                 linesearch.reset();
                 x_ = x_start;
                 if (hess_just_diaged >= 2) return false;
                 hess_just_diaged++;
             } else {
+                alpha_ = linesearch.x();
                 update_inv_hess(g);
                 hess_just_diaged = 0;
             }
@@ -219,7 +224,7 @@ bool WolfeBFGS::make_nonlinesearch_iteration(double f, const std::vector<double>
     set_start(f, g);
 
     if (p_dot_g > 0) {
-        if (linesearch.log) *linesearch.log << "\nBFGS: stepping in accend direction detected.";
+        if (linesearch.log) *linesearch.log << "BFGS: the search direction ascends" << std::endl;
         return false;
     }
 

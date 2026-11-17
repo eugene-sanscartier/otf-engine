@@ -49,10 +49,10 @@ MTPFit::MTPFit(MTP& potential, std::vector<FitStructure> structures, const MTPFi
 void MTPFit::run() {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
-    if (log) *log << structure_count << " configurations found in the training set" << std::endl;
+    log_header("MTP");
 
     add_species();
-    if (log) *log << coeffs.size() << " coefficients (" << n_radial << " radial, " << n_linear << " linear)" << std::endl;
+    if (log) *log << "coefficients: " << coeffs.size() << " (" << n_radial << " radial, " << n_linear << " linear)" << std::endl;
 
     // Every rank checks the same options and sizes, so every rank raises together.
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
@@ -71,7 +71,7 @@ void MTPFit::run() {
             std::default_random_engine generator(options.random_seed >= 0 ? (unsigned) options.random_seed : rand_device());
             std::uniform_real_distribution<> uniform(-1.0, 1.0);
 
-            if (log) *log << "Random initialization of radial coefficients" << std::endl;
+            if (log) *log << "radial coefficients drawn at random" << std::endl;
             const int C = potential.get_species_count();
             const int K = potential.get_radial_func_count();
             const int R = potential.get_radial_basis_size();
@@ -88,27 +88,17 @@ void MTPFit::run() {
 
     // pre-training, for the initial scaling
     if (!potential.is_trained() && options.iteration_limit > 0 && !options.skip_preinit) {
+        if (log) *log << "pre-training, 75 steps at most" << std::endl;
         orthogonalize();
         fit_linear();
+        if (log) *log << "linear fit" << std::endl;
         rescale();
-        if (log) *log << "Pre-training started" << std::endl;
         fit_nonlinear(75);
         rescale();
-        if (log) *log << "Pre-training ended" << std::endl;
     }
 
     if (options.iteration_limit > 0) {
-        if (log) {
-            *log << "Iteration limit is " << options.iteration_limit << std::endl;
-            *log << "Convergence tolerance is " << options.tolerance << std::endl;
-            if (options.energy_weight != 0 || options.force_weight != 0 || options.stress_weight != 0) {
-                *log << "Energy weight: " << options.energy_weight << std::endl;
-                *log << "Force weight: " << options.force_weight << std::endl;
-                *log << "Stress weight: " << options.stress_weight << std::endl;
-            }
-            if (options.balance_species) *log << "Force weights balanced over species" << std::endl;
-        }
-
+        if (log) *log << "main fit" << std::endl;
         if (options.no_orthogonalize) orthogonalizing = false;
         // the main fit's first linear solve rebuilds the regularization, which reg_once then keeps
         if (options.reg_at_main) {
@@ -122,6 +112,7 @@ void MTPFit::run() {
         if (!options.radial_only && !options.bfgs_only) {
             orthogonalize();
             fit_linear();
+            if (log) *log << "linear fit" << std::endl;
             rescale();
         }
     }
@@ -142,7 +133,7 @@ void MTPFit::add_species() {
     const int new_spec = training_species_count();
 
     if (old_spec < new_spec) {
-        log_added_species("MTP", old_spec, new_spec);
+        log_added_species(old_spec, new_spec);
 
         const int K = potential.get_radial_func_count();
         const int R = potential.get_radial_basis_size();
@@ -200,7 +191,7 @@ void MTPFit::update_min_dist() {
     comm.allreduce(&min_dist, &total_min_dist, 1, ReduceOp::min);
 
     if (!options.no_mindist_update) {
-        if (log) *log << "min_dist = " << total_min_dist << ", mindist updated" << std::endl;
+        if (log) *log << "min_dist set to " << total_min_dist << std::endl;
         potential.set_min_cutoff(0.99 * total_min_dist);
     }
 }
@@ -212,12 +203,7 @@ void MTPFit::update_min_dist() {
 void MTPFit::fit_nonlinear(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
-    if (log) {
-        *log << "MTPR training started on " << size << " core(s)" << std::endl;
-        char header[128];
-        std::snprintf(header, sizeof header, "%17s%-15s%-16s%-16s%-16s%s", "", "loss", "energy", "force", "stress", "penalty");
-        *log << header << std::endl;
-    }
+    log_step_header(true);
 
     // BFGS steps the leading n coefficients: all of them, or the radial block
     const int n = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
@@ -249,6 +235,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
             if (!options.radial_only && !options.bfgs_only && !options.varpro && linear_fit_step(num_step)) {
                 orthogonalize();
                 fit_linear();
+                if (log) *log << "linear fit" << std::endl;
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
                 // a new regularization invalidates the inverse Hessian
                 if (reg_init) {
@@ -265,8 +252,10 @@ void MTPFit::fit_nonlinear(int max_iter) {
         bfgs_f = evaluate(bfgs_g, n, true, bfgs_terms);
 
         if (rank == 0) {
-            if (!bfgs.iterate(bfgs_f, bfgs_g))
+            if (!bfgs.iterate(bfgs_f, bfgs_g)) {
                 converge = true;
+                if (log) *log << "stop: BFGS cannot lower the loss" << std::endl;
+            }
             while (std::abs(bfgs.x(0) - coeffs[0]) > 0.5)    // prevents too large steps
                 bfgs.reduce_step(0.25);
 
@@ -274,40 +263,31 @@ void MTPFit::fit_nonlinear(int max_iter) {
             if (linesearch)
                 curr_line_search++;
             else {
-                if (loss_prev < bfgs_f && log) *log << "*" << std::endl;
-
-                if (std::abs(loss_prev - bfgs_f) < 1e-16) {
+                log_step(num_step, bfgs_f, bfgs_terms, true, bfgs.alpha(), curr_line_search + 1);
+                if (std::abs(loss_prev - bfgs_f) < 1e-16 && !converge) {
                     converge = true;
-                    if (log) *log << "BFGS ended due to small decr. for 1 iteration" << std::endl;
+                    if (log) *log << "stop: the last step left the loss unchanged" << std::endl;
                 }
 
                 loss_prev = bfgs_f;
-                if (log) {
-                    // mlp's line in columns, with each term of the loss and its share
-                    char line[160];
-                    int length = std::snprintf(line, sizeof line, "BFGS iter %4d:  %.7e", num_step, bfgs_f);
-                    for (double term : bfgs_terms)
-                        length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", term, 100 * term / bfgs_f);
-                    *log << line << std::endl;
-                }
                 num_step++;
 
                 if (num_step % 50 == 0 && num_step > 100) {
-                    if ((linf - bfgs_f) / bfgs_f < options.tolerance) {
+                    if ((linf - bfgs_f) / bfgs_f < options.tolerance && !converge) {
                         converge = true;
-                        if (log) *log << "BFGS ended due to small decr. in 50 iterations" << std::endl;
+                        if (log) *log << "stop: the last 50 steps lowered the loss by less than tolerance" << std::endl;
                     }
                     linf = bfgs_f;
                 }
 
-                if (num_step >= max_iter) {
+                if (num_step >= max_iter && !converge) {
                     converge = true;
-                    if (log) *log << "step limit reached" << std::endl;
+                    if (log) *log << "stop: iteration limit reached" << std::endl;
                 }
             }
 
-            if (curr_line_search > max_line_search) {
-                if (log) *log << "BFGS has exceeded the linesearch limit. Cannot converge further" << std::endl;
+            if (curr_line_search > max_line_search && !converge) {
+                if (log) *log << "stop: the line search took over " << max_line_search << " evaluations" << std::endl;
                 converge = true;
             }
         }
@@ -325,13 +305,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
     // the next linear fit rebuilds the regularization
     reg_init = true;
 
-    if (log) {
-        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        char line[96];
-        std::snprintf(line, sizeof line, "%d iterations in %.1f s @ %.2g s/iteration", num_step, seconds, seconds / std::max(num_step, 1));
-        *log << line << std::endl;
-        *log << "MTPR training ended" << std::endl;
-    }
+    log_phase_time(num_step, start);
 }
 
 /* ----------------------------------------------------------------------
@@ -346,20 +320,13 @@ void MTPFit::fit_nonlinear(int max_iter) {
 void MTPFit::fit_riemannian(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
-    if (log) {
-        *log << "Riemannian L-BFGS started on " << size << " core(s)" << std::endl;
-        char header[128];
-        std::snprintf(header, sizeof header, "%17s%-15s%-16s%-16s%-16s%-16s%s", "", "loss", "energy", "force", "stress", "penalty", "|WW^T-I|");
-        *log << header << std::endl;
-    }
+    log_step_header(true);
 
     // the coordinates stepped: the radial block, and the linear one without varpro
     const int n = options.varpro ? n_radial : (int) coeffs.size();
-    const int K = potential.get_radial_func_count();
     std::vector<double> g(n), g_new(n), p(n), x0(n);
     std::deque<std::vector<double>> s_memory, y_memory;    // tangent at the current point
     double terms[4] = {};
-    int evaluations = 0;
     auto dot = [n](const std::vector<double>& a, const std::vector<double>& b) {
         double sum = 0.0;
         for (int i = 0; i < n; i++) sum += a[i] * b[i];
@@ -373,7 +340,6 @@ void MTPFit::fit_riemannian(int max_iter) {
         comm.bcast(&loss, 1, 0);
         comm.bcast(out.data(), n, 0);
         project_tangent(coeffs.data(), out.data());
-        evaluations++;
         return loss;
     };
 
@@ -387,9 +353,12 @@ void MTPFit::fit_riemannian(int max_iter) {
 
     int num_step = 0;
     double linf = 9e99;    // the loss 50 steps ago
+    double t = 0.0;        // the step length of the last step, and its evaluations
+    int halvings = 0;
     while (true) {
         if (!options.varpro && linear_fit_step(num_step)) {
             fit_linear();
+            if (log) *log << "linear fit" << std::endl;
             f = evaluate_tangent(g);
             // a new regularization invalidates the memory
             if (reg_init) {
@@ -399,34 +368,25 @@ void MTPFit::fit_riemannian(int max_iter) {
             }
         }
 
-        if (log) {
-            const std::vector<double> gram = radial_overlaps(coeffs.data(), coeffs.data());
-            double violation = 0.0;
-            for (int k1 = 0; k1 < K; k1++)
-                for (int k2 = 0; k2 < K; k2++)
-                    violation += (gram[k1 * K + k2] - (k1 == k2)) * (gram[k1 * K + k2] - (k1 == k2));
-            char line[192];
-            int length = std::snprintf(line, sizeof line, "Riemann iter %4d:  %.7e", num_step, f);
-            for (double term : terms)
-                length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", term, 100 * term / f);
-            std::snprintf(line + length, sizeof line - length, "  %.1e", std::sqrt(violation));
-            *log << line << std::endl;
-        }
+        log_step(num_step, f, terms, true, t, halvings + 1);
         save_checkpoint();
 
         if (num_step >= max_iter) {
-            if (log) *log << "step limit reached" << std::endl;
+            if (log) *log << "stop: iteration limit reached" << std::endl;
             break;
         }
         if (num_step % 50 == 0 && num_step > 100) {
             if ((linf - f) / f < options.tolerance) {
-                if (log) *log << "L-BFGS ended due to small decr. in 50 iterations" << std::endl;
+                if (log) *log << "stop: the last 50 steps lowered the loss by less than tolerance" << std::endl;
                 break;
             }
             linf = f;
         }
         const double g_norm = std::sqrt(dot(g, g));
-        if (g_norm == 0.0) break;
+        if (g_norm == 0.0) {
+            if (log) *log << "stop: the gradient is zero" << std::endl;
+            break;
+        }
 
         // the two-loop recursion, scaled by the newest pair, or a unit step down the gradient
         std::vector<double> alpha(s_memory.size());
@@ -452,8 +412,9 @@ void MTPFit::fit_riemannian(int max_iter) {
 
         // backtracking Armijo along the retraction curve
         std::copy_n(coeffs.begin(), n, x0.begin());
-        double t = 1.0, f_new = f;
-        int halvings = 0;
+        double f_new = f;
+        t = 1.0;
+        halvings = 0;
         for (; halvings <= 40; halvings++, t *= 0.5) {
             for (int j = 0; j < n; j++) coeffs[j] = x0[j] + t * p[j];
             retract(coeffs);
@@ -463,7 +424,7 @@ void MTPFit::fit_riemannian(int max_iter) {
         if (halvings > 40) {
             std::copy(x0.begin(), x0.end(), coeffs.begin());
             f = evaluate_tangent(g);
-            if (log) *log << "L-BFGS line search failed" << std::endl;
+            if (log) *log << "stop: the line search found no decrease in 41 halvings" << std::endl;
             break;
         }
 
@@ -495,13 +456,7 @@ void MTPFit::fit_riemannian(int max_iter) {
     potential.set_trained(true);
     reg_init = true;
 
-    if (log) {
-        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        char line[128];
-        std::snprintf(line, sizeof line, "%d iterations, %d evaluations in %.1f s @ %.2g s/iteration", num_step, evaluations, seconds, seconds / std::max(num_step, 1));
-        *log << line << std::endl;
-        *log << "MTPR training ended" << std::endl;
-    }
+    log_phase_time(num_step, start);
 }
 
 /* ----------------------------------------------------------------------
@@ -608,9 +563,6 @@ void MTPFit::solve_linear() {
     double* b = lin_vector.data();
     double* x = coeffs.data() + n_radial;
 
-    // mlp logs 8 significant digits from its first linear fit on
-    if (log) log->precision(8);
-
     for (int i = 0; i < n; i++)
         for (int j = i + 1; j < n; j++)
             A[j * n + i] = A[i * n + j];
@@ -621,7 +573,7 @@ void MTPFit::solve_linear() {
         for (int i = 0; i < n; i++)
             if (reg_vector[i] < 1e-2 * options.reg_param * std::max(1.0, A[i * n + i]) / structure_count || reg_vector[i] > 1e2 * options.reg_param * std::max(1.0, A[i * n + i]) / structure_count) {
                 reg_init = true;
-                if (log) *log << "Regularization parameters updated. Hessian in BFGS is reset" << std::endl;
+                if (log) *log << "linear regularization rebuilt, inverse Hessian reset" << std::endl;
                 break;
             }
 
@@ -660,6 +612,8 @@ void MTPFit::solve_linear() {
    reassembled only when orthogonalizing moves the radial functions.
 ------------------------------------------------------------------------- */
 void MTPFit::rescale() {
+    const double start_scaling = potential.get_scaling();
+    double chosen_condition_number = 0.0;
     double min_scaling = potential.get_scaling();
     double max_scaling = potential.get_scaling();
     std::vector<double> abs_linear(n_linear);
@@ -710,10 +664,7 @@ void MTPFit::rescale() {
         double condition_number[5];
         const double scaling = potential.get_scaling();
         const double scalings[5] = {scaling / 1.2, scaling / 1.1, scaling, scaling * 1.1, scaling * 1.2};
-        if (log) *log << "Rescaling..." << std::endl;
-
         for (int j = 0; j < 5; j++) {
-            if (log) *log << "   scaling = " << scalings[j] << ", condition number = " << std::flush;
             fit_at(scalings[j]);
 
             double rms = 0;
@@ -724,16 +675,14 @@ void MTPFit::rescale() {
             rms = std::sqrt(rms);
             std::sort(abs_linear.begin(), abs_linear.end());
             condition_number[j] = rms / abs_linear[abs_linear.size() / 2];
-            if (log) *log << condition_number[j] << std::endl;
         }
 
         ind = 2;
         for (int j = 0; j < 5; j++)
             if (condition_number[j] < condition_number[ind]) ind = j;
 
-        if (log) *log << "Rescaling to " << scalings[ind] << "... " << std::flush;
         fit_at(scalings[ind]);
-        if (log) *log << "done" << std::endl;
+        chosen_condition_number = condition_number[ind];
 
         // stop once the choice falls strictly inside the range already visited
         if (min_scaling < scalings[ind] && scalings[ind] < max_scaling)
@@ -743,6 +692,8 @@ void MTPFit::rescale() {
             max_scaling = std::max(max_scaling, scalings[ind]);
         }
     } while (ind != 2);
+
+    if (log) *log << "rescaled: scaling " << start_scaling << " to " << potential.get_scaling() << ", condition number " << chosen_condition_number << std::endl;
 }
 
 double MTPFit::objective(const std::vector<double>& at, std::vector<double>& grad) {

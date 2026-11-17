@@ -23,7 +23,7 @@ class LineSearch {
     // Returns false when the function increases along the ray.
     bool iterate(double curr_f, double curr_g);
 
-    std::ostream* log = nullptr;    // where mlip-3's warnings go, the fit's log
+    std::ostream* log = nullptr;    // where a failed search is noted, the fit's log
 
   private:
     double curr_x;
@@ -48,6 +48,8 @@ class BFGS {
     double x(int i) const { return x_[i]; }
     const std::vector<double>& x() const { return x_; }
     bool in_linesearch() const { return in_linesearch_; }
+    // The step length of the last accepted step along its direction.
+    double alpha() const { return alpha_; }
 
     // Returns false when the loss increases along the direction.
     bool iterate(double f, const std::vector<double>& g);
@@ -65,6 +67,7 @@ class BFGS {
     double f_start = 0.0, p_dot_g_start = 0.0;
     std::vector<double> delta_grad, yC;
     bool in_linesearch_ = false;
+    double alpha_ = 0.0;
     LineSearch linesearch;
 
     const double wolfe_c1 = 0.1;

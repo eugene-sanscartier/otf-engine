@@ -26,7 +26,7 @@ class WolfeLineSearch {
 
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
-    std::ostream* log = nullptr;    // where a failed search is noted, as mlip-4 logs it
+    std::ostream* log = nullptr;    // where a failed search is noted, the fit's log
 
   private:
     double curr_x;
@@ -52,6 +52,8 @@ class WolfeBFGS {
 
     const std::vector<double>& x() const { return x_; }
     bool in_linesearch() const { return in_linesearch_; }
+    // The step length of the last accepted step along its direction, 0 for a stalled search's return to its start.
+    double alpha() const { return alpha_; }
 
     // Returns false when the loss increases along the direction.
     bool iterate(double f, const std::vector<double>& g);
@@ -75,6 +77,7 @@ class WolfeBFGS {
     double f_start = 0.0, p_dot_g_start = 0.0;
     std::vector<double> delta_grad, yC;
     bool in_linesearch_ = false;
+    double alpha_ = 0.0;
     int iters_no_improve = 0;
     int hess_just_diaged = 0;
     WolfeLineSearch linesearch;

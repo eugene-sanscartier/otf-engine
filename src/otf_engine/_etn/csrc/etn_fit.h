@@ -27,17 +27,27 @@ struct ETNFitOptions : FitOptions {
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
     int bfgs_max_iters_no_improve = 10;
+
+    // The options as the log lists them.
+    std::string summary() const {
+        std::ostringstream text;
+        text << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", max_func_eval " << max_func_eval << ", " << FitOptions::summary() << (rescale ? "" : ", no rescale") << (skip_preinit ? ", skip_preinit" : "");
+        return text.str();
+    }
 };
 
 class ETNFit : public Fit<ETN, ETNFitOptions> {
   public:
-    // log receives mlip-4's fit log on the rank given one; checkpoint is called
+    // log receives the fit log on the rank given one; checkpoint is called
     // with the potential holding the coefficients at every step outside a line search.
     ETNFit(ETN& potential, std::vector<FitStructure> structures, const ETNFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
     // Leaves the fitted coefficients in the potential, on every rank, and logs
     // the errors on the training set before and after.
     void run();
+
+    // On rank 0, the loss at each evaluation of each step, over every phase of run.
+    const std::vector<std::vector<double>>& step_losses() const { return step_losses_; }
 
   private:
     // mlip-3's AddSpecies for an ETN: the potential gains the training set's species it lacks. An untrained one
@@ -51,6 +61,8 @@ class ETNFit : public Fit<ETN, ETNFitOptions> {
     // ETN::Rescale: a line search over alpha in coeffs = sign * alpha * coeffs, on the
     // loss summed over the structures.
     void rescale();
-    // Loss and dL/dc over this rank's structures, at coeffs.
+    // Loss and dL/dc over this rank's structures, at coeffs, with its terms in loss_terms.
     double loss_grad(std::vector<double>& grad);
+
+    std::vector<std::vector<double>> step_losses_;
 };

@@ -15,6 +15,7 @@
 #include "fit.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 // `mlp train`'s options, under its names and with its defaults, and the fit's own, whose defaults
@@ -46,11 +47,22 @@ struct MTPFitOptions : FitOptions {
     // on rank 0. Every rank gives n; 0 starts from the identity.
     double* inverse_hessian = nullptr;
     int inverse_hessian_size = 0;
+
+    // The options as the log lists them: the numbers, then the flags set.
+    std::string summary() const {
+        std::ostringstream text;
+        text << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", " << FitOptions::summary() << ", penalty_weight " << penalty_weight << ", reg_param " << reg_param;
+        if (scale_by_force > 0) text << ", scale_by_force " << scale_by_force;
+        const std::pair<const char*, bool> flags[] = {{"varpro", varpro}, {"riemannian", riemannian}, {"reg_once", reg_once}, {"reg_at_main", reg_at_main}, {"no_orthogonalize", no_orthogonalize}, {"init_random", init_random}, {"skip_preinit", skip_preinit}, {"bfgs_only", bfgs_only}, {"radial_only", radial_only}, {"no_mindist_update", no_mindist_update}};
+        for (const auto& [name, set] : flags)
+            if (set) text << ", " << name;
+        return text.str();
+    }
 };
 
 class MTPFit : public Fit<MTP, MTPFitOptions> {
   public:
-    // log receives mlp's fit log on the rank given one; checkpoint is called
+    // log receives the fit log on the rank given one; checkpoint is called
     // on rank 0 wherever mlp saves the potential during the fit.
     MTPFit(MTP& potential, std::vector<FitStructure> structures, const MTPFitOptions& options, Comm& comm, std::ostream* log = nullptr, std::function<void()> checkpoint = nullptr);
 
@@ -104,8 +116,6 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
     // predicted ones in the loss, as mlip-3 takes them.
     double force_weight(const FitStructure& s, int i, const double* forces) const;
     double stress_weight(const FitStructure& s) const;
-
-    double loss_terms[3] = {};    // the energy, force and stress terms of the last loss_grad
 
     int n_radial, n_linear;       // coefficients before the species block, and from it on; coeffs is [n_radial | species | linear]
 

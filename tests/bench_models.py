@@ -49,8 +49,8 @@ LEVELS = range(8, 30, 2)
 ETN_SHAPES = [(1, 3, 3), (1, 3, 4), (1, 4, 4), (1, 4, 5), (1, 5, 6), (2, 3, 3), (2, 4, 3), (2, 3, 4), (2, 4, 4), (2, 5, 4), (2, 5, 5), (3, 3, 3), (3, 4, 3), (3, 3, 4), (3, 4, 4), (3, 3, 5), (3, 4, 5)]
 # The fits' default loss weights, for the timed loss gradient
 LOSS_WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
-# A logged step: mlp's and the MTP fit's "BFGS iter N:" or "Riemann iter N:", or mlip-4's step number and its losses
-STEP_LINE = re.compile(r"^(?:(?:BFGS|Riemann) iter +\d+:|\d+\t)")
+# A step of a fit's log: its number, then its loss
+STEP_LINE = re.compile(r"^ *\d+  \S+  ")
 # A fit failed when its test energy or force error exceeds this many times the best of the benchmark
 FAILED_FACTOR = 10
 BAR = dict(ascii=True, ncols=60, bar_format="{desc:<14}|{bar}| {n_fmt:>2}/{total_fmt:>2}")

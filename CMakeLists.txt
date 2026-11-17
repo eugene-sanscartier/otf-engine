@@ -91,3 +91,11 @@ pybind11_add_module(_etn_ext
 )
 target_link_libraries(_etn_ext PRIVATE etn Eigen3::Eigen)
 install(TARGETS _etn_ext DESTINATION otf_engine/_etn)
+
+# An ETN fit with the loss of each evaluation, for the tests
+pybind11_add_module(_etn_testing
+    ${ETN_CSRC}/etn_fit_bindings.cpp
+    ${ETN_CSRC}/etn_testing_bindings.cpp
+)
+target_link_libraries(_etn_testing PRIVATE etn Eigen3::Eigen)
+install(TARGETS _etn_testing DESTINATION otf_engine/_etn)

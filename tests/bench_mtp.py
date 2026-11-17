@@ -9,7 +9,7 @@ Arms:
   mlp    `mlp train` under `mpirun -np R` (plain `mlp` for R = 1)
   port   `python -m otf_engine.train --ranks=R` under MLP_ALGORITHM, without balance_species
 
-Exits non-zero when a port run's logged losses (`BFGS iter N: f=...`) differ from mlp's on one
+Exits non-zero when a port run's logged losses differ from mlp's (`BFGS iter N: f=...`) on one
 rank by more than --tol, or stop at another line. mlp's result depends on R wherever R does not
 divide N; the port's does not, so mlp at other R is timed but not compared. Keep -i at 30 or
 less: rounding differences grow through the BFGS, and past about 45 steps they separate even
@@ -37,7 +37,8 @@ from otf_engine.io_cfg import read_cfg
 from otf_engine.train import MLP_ALGORITHM
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
-BFGS_LINE = re.compile(r"BFGS iter +(\d+): +(?:f=)?(\S+)")    # mlp's, and the fit's without f=
+STEP_LINE = re.compile(r"(?:BFGS iter +|^ *)(\d+)(?:: +f=|  )(\S+)")    # a step of mlp's log or the fit's: its number and loss
+PHASE_END = re.compile(r"MTPR training ended|^\d+ steps in ")    # the end of a nonlinear fit in mlp's log or the fit's
 
 
 def extract_cfgs(cfg_path, n_structures, out_path):
@@ -71,10 +72,10 @@ def run_logged(cmd, workdir):
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=workdir) as proc:
         for line in proc.stdout:
             now = time.perf_counter() - start
-            match = BFGS_LINE.search(line)
+            match = STEP_LINE.search(line)
             if match:
                 iters += [(now, float(match.group(2)))]
-            elif "MTPR training ended" in line:
+            elif PHASE_END.search(line):
                 train_end = now
     if proc.returncode != 0: raise RuntimeError(f"{cmd[0]} exited with {proc.returncode}")
 

@@ -7,8 +7,6 @@
 
 #include "mtp_fit.h"
 
-#include <sstream>
-
 void add_option_fields(MTPFitOptions& o, OptionFields& fields);    // mtp_fit_bindings.cpp
 
 // An MTPFit on one thread, whose stages the tests call in any order.
@@ -17,7 +15,7 @@ class MTPFitStages {
     MTPFitStages(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options) : potential(filename), process("MTPFitStages", 1, py::none()) {
         std::string log_target;
         const MTPFitOptions o = parse_options<MTPFitOptions>("MTPFitStages", options, log_target);
-        fit = std::make_unique<MTPFit>(potential, std::move(split_structures(structures, 1)[0]), o, process[0], &log);
+        fit = std::make_unique<MTPFit>(potential, std::move(split_structures(structures, 1)[0]), o, process[0]);
     }
 
     void add_species() { fit->add_species(); }
@@ -44,7 +42,6 @@ class MTPFitStages {
     void set_reg_vector(const std::vector<double>& r) { fit->reg_vector = r; }
 
     MTP potential;
-    std::ostringstream log;
 
   private:
     ProcessRanks process;
@@ -130,7 +127,6 @@ PYBIND11_MODULE(_mtp_testing, m) {
         .def_property("reg_vector", &MTPFitStages::get_reg_vector, &MTPFitStages::set_reg_vector)
         .def_property("scaling", [](MTPFitStages& s) { return s.potential.get_scaling(); }, [](MTPFitStages& s, double v) { s.potential.set_scaling(v); })
         .def_property_readonly("min_dist", [](MTPFitStages& s) { return s.potential.get_min_cutoff(); })
-        .def_property_readonly("log", [](MTPFitStages& s) { return s.log.str(); })
         .def_property_readonly("potential", [](MTPFitStages& s) -> MTP& { return s.potential; }, py::return_value_policy::reference_internal);
 
     m.def("bfgs_rosenbrock", &bfgs_rosenbrock, py::arg("n"), py::arg("steps"));

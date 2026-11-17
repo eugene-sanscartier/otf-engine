@@ -12,8 +12,11 @@
 #include "fit_structure.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <functional>
 #include <ostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -25,6 +28,13 @@ struct FitOptions {
     double stress_weight = 0.001;
     bool balance_species = true;         // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
+
+    // The weights and balance_species, as the log lists them.
+    std::string summary() const {
+        std::ostringstream text;
+        text << "weights energy " << energy_weight << ", force " << force_weight << ", stress " << stress_weight << (balance_species ? ", balance_species" : "");
+        return text.str();
+    }
 };
 
 // Potential is MTP or ETN, Options its fit's options.
@@ -56,13 +66,51 @@ class Fit {
         potential.get_coeffs(coeffs.data());
     }
 
-    // Logs the species old_spec .. new_spec - 1 that training adds to the potential of model (MTP, ETN), as mlip-3 logs them.
-    void log_added_species(const std::string& model, int old_spec, int new_spec) {
+    // Logs the fit of model (MTP, ETN): its structures, ranks and options.
+    void log_header(const std::string& model) {
+        if (!log) return;
+        *log << model << " fit of " << structure_count << " structures on " << size << " rank(s)\n";
+        *log << "options: " << options.summary() << std::endl;
+    }
+
+    // Logs the species old_spec .. new_spec - 1 that training adds to the potential.
+    void log_added_species(int old_spec, int new_spec) {
         if (!log || new_spec <= old_spec) return;
-        *log << "Following atomic numbers will be added to the " << model << " potential: ";
+        *log << "species added:";
         for (int t = old_spec; t < new_spec; t++)
-            *log << t << (t != new_spec - 1 ? ", " : "");
+            *log << ' ' << t;
         *log << std::endl;
+    }
+
+    // Logs the column names of log_step, with the penalty's if penalty.
+    void log_step_header(bool penalty) {
+        if (!log) return;
+        char line[160];
+        int length = std::snprintf(line, sizeof line, "%5s  %-13s  %-14s  %-14s  %-14s", "step", "loss", "energy", "force", "stress");
+        if (penalty) length += std::snprintf(line + length, sizeof line - length, "  %-14s", "penalty");
+        std::snprintf(line + length, sizeof line - length, "  %-8s  %6s", "alpha", "nalpha");
+        *log << line << std::endl;
+    }
+
+    // Logs an accepted step: its loss, the energy, force and stress terms (and the penalty's if penalty) of terms with their
+    // share of the loss, its step length alpha and its loss evaluations nalpha.
+    void log_step(int step, double loss, const double* terms, bool penalty, double alpha, int nalpha) {
+        if (!log) return;
+        char line[160];
+        int length = std::snprintf(line, sizeof line, "%5d  %.7e", step, loss);
+        for (int k = 0; k < (penalty ? 4 : 3); k++)
+            length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", terms[k], 100 * terms[k] / loss);
+        std::snprintf(line + length, sizeof line - length, "  %.2e  %6d", alpha, nalpha);
+        *log << line << std::endl;
+    }
+
+    // Logs the steps a phase took since start, and their time.
+    void log_phase_time(int steps, std::chrono::steady_clock::time_point start) {
+        if (!log) return;
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        char line[96];
+        std::snprintf(line, sizeof line, "%d steps in %.1f s, %.2g s per step", steps, seconds, seconds / std::max(steps, 1));
+        *log << line << std::endl;
     }
 
     // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
@@ -118,5 +166,6 @@ class Fit {
     std::function<void()> checkpoint;
 
     std::vector<double> coeffs;           // what potential holds, in its coefficient order
+    double loss_terms[3] = {};            // the energy, force and stress terms of the last loss_grad on this rank
     std::vector<double> dloss_dforces;    // per-structure scratch
 };

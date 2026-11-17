@@ -21,7 +21,7 @@ void ETNFit::add_species() {
     const int new_spec = training_species_count();
     if (old_spec == new_spec) return;
 
-    log_added_species("ETN", old_spec, new_spec);
+    log_added_species(old_spec, new_spec);
     potential.set_species_count(new_spec);
     if (!potential.is_trained())
         potential.fill_initial_coeffs();
@@ -44,21 +44,23 @@ void ETNFit::add_species() {
 void ETNFit::run() {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
+    log_header("ETN");
 
     add_species();
+    if (log) *log << "coefficients: " << coeffs.size() << std::endl;
     log_errors("Training set errors before training:");
 
     // mlip-4's pre-training keeps tolerance and rescale, and takes the other settings' defaults
     if (!options.skip_preinit) {
-        if (log) *log << "Starting pretraining...\n";
+        if (log) *log << "pre-training, 75 steps at most" << std::endl;
         ETNFitOptions pretraining;
         pretraining.iteration_limit = 75;
         pretraining.max_func_eval = 75 * 20;
         pretraining.tolerance = options.tolerance;
         pretraining.rescale = options.rescale;
         fit_nonlinear(pretraining);
-        if (log) *log << "Pretraining completed\n";
     }
+    if (log) *log << "main fit" << std::endl;
     fit_nonlinear(options);
 
     potential.set_coeffs(coeffs.data());
@@ -74,8 +76,9 @@ void ETNFit::run() {
    rescale flags at the top of every loop.
 ------------------------------------------------------------------------- */
 void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
+    const auto start = std::chrono::steady_clock::now();
     const int n = (int) coeffs.size();
-    std::vector<double> loss_data(1 + n);    // [loss | gradient], reduced onto rank 0
+    std::vector<double> loss_data(4 + n);    // [loss | energy, force and stress terms | gradient], reduced onto rank 0
     std::vector<double> grad(n), bfgs_g(n);
 
     std::vector<double> shared(3 + n, 0.0);    // [step | stop | rescale | coefficients], broadcast from rank 0
@@ -95,7 +98,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
 
     int num_func_eval = 0;
     double linf = 9e99;
-    double bfgs_f = 0.0;
+    double bfgs_f = 0.0, bfgs_terms[3] = {};
     bool attempted_rescale = false;
     bool is_new_step = true;
     int convergence_check_delay = 0;
@@ -107,9 +110,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
         if (break_flag) break;
 
         if (o.rescale && rescale_flag) {
-            if (log) *log << "Rescaling potential...\n";
             rescale();
-            if (log) *log << "Potential rescaling completed\n";
             rescale_flag = 0;
             attempted_rescale = true;
             std::copy(coeffs.begin(), coeffs.end(), shared.begin() + 3);
@@ -121,26 +122,23 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             continue;
         }
         if (rank == 0 && is_new_step) {
-            if (log) *log << (int) num_iter;
+            step_losses_.push_back({});
             is_new_step = false;
         }
 
         loss_data[0] = loss_grad(grad);
-        std::copy(grad.begin(), grad.end(), loss_data.begin() + 1);
-        std::vector<double> total(1 + n);
-        comm.reduce(loss_data.data(), total.data(), 1 + n, ReduceOp::sum, 0);
+        std::copy(loss_terms, loss_terms + 3, loss_data.begin() + 1);
+        std::copy(grad.begin(), grad.end(), loss_data.begin() + 4);
+        std::vector<double> total(4 + n);
+        comm.reduce(loss_data.data(), total.data(), 4 + n, ReduceOp::sum, 0);
         num_func_eval++;
         if (rank != 0) continue;
 
         const double inv_cfg_count = 1.0 / structure_count;
-        const double loss = total[0] * inv_cfg_count;
-        for (int i = 0; i < n; i++) bfgs_g[i] = total[1 + i] * inv_cfg_count;
-        bfgs_f = loss;
-        if (log) {
-            char loss_text[32];    // the loss to 17 significant digits
-            std::snprintf(loss_text, sizeof loss_text, "%.17g", loss);
-            *log << '\t' << loss_text;
-        }
+        bfgs_f = total[0] * inv_cfg_count;
+        for (int k = 0; k < 3; k++) bfgs_terms[k] = total[1 + k] * inv_cfg_count;
+        for (int i = 0; i < n; i++) bfgs_g[i] = total[4 + i] * inv_cfg_count;
+        step_losses_.back().push_back(bfgs_f);
 
         bool loss_decrease;
         if (attempted_rescale) {
@@ -150,28 +148,33 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             loss_decrease = bfgs.iterate(bfgs_f, bfgs_g);
         if (!loss_decrease) {
             break_flag = 1;
-            if (log) *log << "\nStepping in accend direction. Stopping the training...\n";
+            if (log) *log << "stop: BFGS cannot lower the loss" << std::endl;
         }
 
         if (!bfgs.in_linesearch() && !break_flag) {
+            if (num_iter == 0) log_step_header(false);    // after the first step's rescaling
+            log_step((int) num_iter, bfgs_f, bfgs_terms, false, bfgs.alpha(), (int) step_losses_.back().size());
             num_iter++;
             is_new_step = true;
             if (o.rescale) rescale_flag = num_iter == 0;
 
             if ((int) num_iter % 1500 == 0) {
-                if (log) *log << "\nDiagonalizing inverted hessian...";
+                if (log) *log << "inverse Hessian made diagonal, as every 1500 steps" << std::endl;
                 bfgs.diag_inv_hess();
                 convergence_check_delay = std::max(convergence_check_delay, 300);
             }
 
             // A normal step unless this step rescales
             if (!o.rescale || !rescale_flag)
-                if (!bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g)) break_flag = 1;
+                if (!bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g)) {
+                    break_flag = 1;
+                    if (log) *log << "stop: BFGS cannot lower the loss" << std::endl;
+                }
 
             if ((int) num_iter % 100 == 0) {
-                if (convergence_check_delay <= 0 && linf > bfgs_f && (linf - bfgs_f) / bfgs_f < o.tolerance) {
+                if (convergence_check_delay <= 0 && linf > bfgs_f && (linf - bfgs_f) / bfgs_f < o.tolerance && !break_flag) {
                     break_flag = 1;
-                    if (log) *log << "\nAchieved requested accuracy. Stopping the training...";
+                    if (log) *log << "stop: the last 100 steps lowered the loss by less than tolerance" << std::endl;
                 }
                 convergence_check_delay -= 100;
                 linf = bfgs_f;
@@ -179,15 +182,13 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
 
             if (num_iter >= o.iteration_limit && !break_flag) {
                 break_flag = 1;
-                if (log) *log << "\nNumber of iterations exceeded the threshold. Stopping the training...";
+                if (log) *log << "stop: iteration limit reached" << std::endl;
             }
             // Checked only between line searches, as mlip-4 checks it
             if (num_func_eval > o.max_func_eval && !break_flag) {
                 break_flag = 1;
-                if (log) *log << "\nNumber of loss function evaluations exceeded the threshold. Stopping the training...";
+                if (log) *log << "stop: evaluation limit (max_func_eval) reached" << std::endl;
             }
-
-            if (log) *log << '\n';
 
             save_checkpoint();
         }
@@ -195,6 +196,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
         // The step that met a stopping rule is dropped
         if (!break_flag) std::copy(bfgs.x().begin(), bfgs.x().end(), shared.begin() + 3);
     }
+    log_phase_time((int) shared[0], start);
 }
 
 /* ----------------------------------------------------------------------
@@ -245,6 +247,7 @@ void ETNFit::rescale() {
 
     for (int i = 0; i < n; i++)
         coeffs[i] = sign * alpha_curr * x0[i];
+    if (log) *log << "rescaled: coefficients times " << sign * alpha_curr << std::endl;
 }
 
 /* ----------------------------------------------------------------------
@@ -256,6 +259,7 @@ double ETNFit::loss_grad(std::vector<double>& grad) {
     static constexpr int STRESS_ORDER[6] = {0, 1, 2, 5, 4, 3};    // mlip-4's stress order, as virial indices
     potential.set_coeffs(coeffs.data());
     std::fill(grad.begin(), grad.end(), 0.0);
+    std::fill(loss_terms, loss_terms + 3, 0.0);
     double loss = 0.0;
 
     for (const FitStructure& s : structures) {
@@ -272,6 +276,7 @@ double ETNFit::loss_grad(std::vector<double>& grad) {
         if (s.has_energy) {
             const double diff = potential.get_energy() - s.energy;
             structure_loss += options.energy_weight * diff * diff;
+            loss_terms[0] += options.energy_weight * diff * diff;
             dloss_denergy = 2 * options.energy_weight * diff;
         }
         if (s.has_virial)
@@ -280,6 +285,7 @@ double ETNFit::loss_grad(std::vector<double>& grad) {
                 const double wgt = (c < 3 ? 1 : 2) * options.stress_weight;
                 const double diff = virial[k] - s.virial[k];
                 structure_loss += wgt * diff * diff;
+                loss_terms[2] += wgt * diff * diff;
                 dloss_dvirial[k] = 2 * wgt * diff;
             }
         if (s.has_forces)
@@ -287,6 +293,7 @@ double ETNFit::loss_grad(std::vector<double>& grad) {
                 const double wgt = options.balance_species ? options.force_weight * s.species_factors[s.types[i / 3]] : options.force_weight;
                 const double diff = forces[i] - s.forces[i];
                 structure_loss += wgt * diff * diff;
+                loss_terms[1] += wgt * diff * diff;
                 dloss_dforces[i] = 2 * wgt * diff;
             }
 

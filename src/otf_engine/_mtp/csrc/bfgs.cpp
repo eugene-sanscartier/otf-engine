@@ -20,7 +20,7 @@ static double dot(const std::vector<double>& a, const std::vector<double>& b) {
 
 // mlip-3 writes its warnings to the terminal; here they go to the fit's log, when it has one.
 static void warning(std::ostream* log, const char* message) {
-    if (log) *log << "WARNING: " << message << std::endl;
+    if (log) *log << message << std::endl;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -43,14 +43,14 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         left_g = prev_g = curr_g;
         curr_x = right_x;
         if (curr_g > 0) {
-            warning(log, "Linesearch with increasing funcion!");
+            warning(log, "line search failed: the loss increases along the direction");
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        warning(log, "prev_x == curr_x");
+        warning(log, "line search failed: the step stopped moving");
         return false;
     }
 
@@ -174,6 +174,7 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
     } else {
         // Toggled rather than cleared, so the caller cannot be caught in an infinite cycle.
         in_linesearch_ = !in_linesearch_;
+        alpha_ = linesearch.x();
 
         update_inv_hess(g);
 
@@ -190,7 +191,7 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
         p_dot_g_start = p_dot_g;
 
         if (p_dot_g > 0)
-            warning(linesearch.log, "BFGS: stepping in accend direction detected.");
+            warning(linesearch.log, "BFGS: the search direction ascends");
 
         loss_decrease = linesearch.iterate(f, p_dot_g);
     }

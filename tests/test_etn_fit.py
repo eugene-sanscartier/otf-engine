@@ -8,11 +8,12 @@ Fits the untrained potentials of test_etn_kernels, whose coefficients start at m
                  from losses near 1e87, rounding moves its line searches
   imaginary      the 5-core potential, whose middle cores have imaginary parts, on both structures
   threads        skip_pretrain on one thread per structure, against mlip-4 on one process
-  mpi            skip_pretrain through train.fit under mpirun, one rank per structure
+  mpi            skip_pretrain under mpirun, one rank per structure
 
-A fit fails when its log, numbers aside, differs from mlip-4's; when a logged loss differs from mlip-4's by more than
-1e-5 relatively, mlip-4's log holding 6 significant digits; or when the trained potential's energy, forces, virial,
-input and bond vectors on structure 1 differ by more than 1e-6 relatively from those of mlip-4's trained coefficients.
+A fit fails when its steps take other numbers of evaluations than mlip-4's; when the loss at an evaluation differs from
+the one mlip-4 logs by more than 1e-5 relatively, mlip-4's log holding 6 significant digits; or when the trained
+potential's energy, forces, virial, input and bond vectors on structure 1 differ by more than 1e-6 relatively from those
+of mlip-4's trained coefficients.
 """
 
 import re
@@ -40,34 +41,21 @@ CASES = {
     "threads": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], "threads", "skip_pretrain", None),
     "mpi": ("etn-3", {"pretrain": False, "max_iter_count": 10}, [0, 1], "mpi", "skip_pretrain", None),
 }
-STEP = re.compile(r"^(\d+)((\t[-+]?(nan|inf)|\t[-+0-9.eE]+)+)")
-NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
-# the fit's lines, not mlip-4's: its error tables and timing; and the probe's params
-FIT_LINE = re.compile(r"^Training set errors|^ +n +MAE |\d\.\d\de[-+]\d\d +\d\.\d\de[-+]\d\d|^max (energy/atom|force) error: |^Trained in |^@ params ")
+STEP = re.compile(r"^(\d+)((\t[-+]?(nan|inf)|\t[-+0-9.eE]+)+)")    # mlip-4's step: its number, then the loss of each evaluation
 
 
-def parse_log(text):
-    """The losses of each logged step, and the other lines of the log mlip-4 writes too."""
-    steps, lines = [], []
-    for line in text.splitlines():
-        line = line.removeprefix("[MLIP] ")
-        if FIT_LINE.search(line):
-            continue
-        match = STEP.match(line)
-        if match:
-            steps += [[float(x) for x in match.group(2).split("\t")[1:]]]
-            line = line[match.end():]
-        if line.strip():
-            lines += [line.strip()]
-    return steps, lines
+def mlip4_steps(text):
+    """The losses of each step mlip-4's log prints."""
+    steps = [[float(x) for x in match.group(2).split("\t")[1:]] for line in text.splitlines() if (match := STEP.match(line.removeprefix("[MLIP] ")))]
+    return steps
 
 
-def fit_options(settings, log):
+def fit_options(settings):
     """mlip-4's *settings* and the weights as fit_etn takes them: strings, under mlp's names where mlp has the
-    setting, pretrain inverted as skip_preinit, and the log target, without balance_species, which mlip-4 lacks."""
+    setting, pretrain inverted as skip_preinit, without a log, and without balance_species, which mlip-4 lacks."""
     options = {MLP_NAMES.get(key, key): str(value) for key, value in dict(settings, **WEIGHTS).items() if key != "pretrain"}
     options["skip_preinit"] = str(not settings["pretrain"])
-    return options | {"log": log, "balance_species": "false"}
+    return options | {"log": "none", "balance_species": "false"}
 
 
 def case_inputs(name, structures, workdir):
@@ -128,10 +116,9 @@ def stored(recapture, mlip4_build, structures, tmp_path_factory):
             training_file = workdir / f"{name}.txt"
             write_training_file(training_file, ETN(str(path)), labelled, settings)
             printed = subprocess.run([str(probe), str(training_file)], check=True, capture_output=True, text=True).stdout
-            steps, lines = parse_log(printed)
+            steps = mlip4_steps(printed)
             outputs[f"{name}/losses"] = numpy.concatenate(steps)
             outputs[f"{name}/counts"] = numpy.array([len(s) for s in steps])
-            outputs[f"{name}/lines"] = numpy.array(lines)
             outputs[f"{name}/params"] = numpy.array([float(x) for x in next(line for line in printed.splitlines() if line.startswith("@ params")).split(" :")[1].split()])
         outputs.save()
     return outputs
@@ -139,24 +126,23 @@ def stored(recapture, mlip4_build, structures, tmp_path_factory):
 
 @pytest.mark.parametrize("name", [pytest.param(name, marks=pytest.mark.mpi) if name == "mpi" else name for name in CASES])
 def test_fit(name, structures, stored, tmp_path):
-    from otf_engine._etn import ETN, fit_etn
+    from otf_engine._etn import ETN
+    from otf_engine._etn._etn_testing import fit_etn_steps
 
     _, _, _, ranks, reference, steps = CASES[name]
     path, settings, labelled = case_inputs(name, structures, tmp_path)
-    log_file = tmp_path / f"{name}.log"
     if ranks == "mpi":
         subprocess.run(["mpirun", "-n", str(len(labelled)), sys.executable, str(TESTS / "etn_mpi_fit.py"), name, str(tmp_path)], check=True, timeout=120)
+        saved = numpy.load(tmp_path / f"{name}-fit.npz")
         trained = ETN(str(path))
-        trained.set_coeffs(numpy.load(tmp_path / f"{name}-coeffs.npy"))
+        trained.set_coeffs(saved["coeffs"])
+        ours_steps = numpy.split(saved["losses"], numpy.cumsum(saved["counts"])[:-1])
     else:
-        trained = fit_etn(str(path), [s for _, s in labelled], fit_options(settings, str(log_file)), len(labelled) if ranks == "threads" else 1)
+        trained, ours_steps = fit_etn_steps(str(path), [s for _, s in labelled], fit_options(settings), len(labelled) if ranks == "threads" else 1)
 
     counts = list(stored[f"{reference}/counts"][:steps])
     b = stored[f"{reference}/losses"][: sum(counts)]
-    ours_steps, ours_lines = parse_log(log_file.read_text())
     ours_steps = ours_steps[:steps]
-    # the fit writes the numbers of its warnings to 17 digits, mlip-4 to 6
-    assert [NUMBER.sub("#", line) for line in ours_lines] == [NUMBER.sub("#", line) for line in stored[f"{reference}/lines"]]
     assert [len(s) for s in ours_steps] == counts
     a = numpy.concatenate(ours_steps)[: len(b)]
     numpy.testing.assert_array_equal(numpy.isfinite(a), numpy.isfinite(b))
