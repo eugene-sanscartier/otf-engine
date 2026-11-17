@@ -47,12 +47,12 @@ void ETNFit::run() {
     log_header("ETN");
 
     add_species();
-    if (log) *log << "coefficients: " << coeffs.size() << std::endl;
-    log_errors("Training set errors before training:");
+    log_event(log, "coefficients", "%zu coefficients", coeffs.size());
+    log_errors("before training");
 
     // mlip-4's pre-training keeps tolerance and rescale, and takes the other settings' defaults
     if (!options.skip_preinit) {
-        if (log) *log << "pre-training, 75 steps at most" << std::endl;
+        log_event(log, "phase", "pre-training, iteration_limit 75");
         ETNFitOptions pretraining;
         pretraining.iteration_limit = 75;
         pretraining.max_func_eval = 75 * 20;
@@ -60,13 +60,13 @@ void ETNFit::run() {
         pretraining.rescale = options.rescale;
         fit_nonlinear(pretraining);
     }
-    if (log) *log << "main fit" << std::endl;
+    log_event(log, "phase", "main, iteration_limit %d", options.iteration_limit);
     fit_nonlinear(options);
 
     potential.set_coeffs(coeffs.data());
     potential.set_trained(true);
-    log_errors("Training set errors:");
-    if (log) *log << "Trained in " << std::round(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 10) / 10 << " s" << std::endl;
+    log_errors("after training");
+    log_fit_time(start);
     comm.barrier();
 }
 
@@ -148,7 +148,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             loss_decrease = bfgs.iterate(bfgs_f, bfgs_g);
         if (!loss_decrease) {
             break_flag = 1;
-            if (log) *log << "stop: BFGS cannot lower the loss" << std::endl;
+            log_event(log, "stop", "bfgs");
         }
 
         if (!bfgs.in_linesearch() && !break_flag) {
@@ -159,7 +159,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             if (o.rescale) rescale_flag = num_iter == 0;
 
             if ((int) num_iter % 1500 == 0) {
-                if (log) *log << "inverse Hessian made diagonal, as every 1500 steps" << std::endl;
+                log_event(log, "bfgs", "step %d, inv_hess = diag(inv_hess)", (int) num_iter);
                 bfgs.diag_inv_hess();
                 convergence_check_delay = std::max(convergence_check_delay, 300);
             }
@@ -168,13 +168,13 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             if (!o.rescale || !rescale_flag)
                 if (!bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g)) {
                     break_flag = 1;
-                    if (log) *log << "stop: BFGS cannot lower the loss" << std::endl;
+                    log_event(log, "stop", "bfgs");
                 }
 
             if ((int) num_iter % 100 == 0) {
                 if (convergence_check_delay <= 0 && linf > bfgs_f && (linf - bfgs_f) / bfgs_f < o.tolerance && !break_flag) {
                     break_flag = 1;
-                    if (log) *log << "stop: the last 100 steps lowered the loss by less than tolerance" << std::endl;
+                    log_event(log, "stop", "(loss[k-100] - loss[k]) / loss[k] = %.1e < tolerance %g", (linf - bfgs_f) / bfgs_f, o.tolerance);
                 }
                 convergence_check_delay -= 100;
                 linf = bfgs_f;
@@ -182,12 +182,12 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
 
             if (num_iter >= o.iteration_limit && !break_flag) {
                 break_flag = 1;
-                if (log) *log << "stop: iteration limit reached" << std::endl;
+                log_event(log, "stop", "iteration_limit %d", o.iteration_limit);
             }
             // Checked only between line searches, as mlip-4 checks it
             if (num_func_eval > o.max_func_eval && !break_flag) {
                 break_flag = 1;
-                if (log) *log << "stop: evaluation limit (max_func_eval) reached" << std::endl;
+                log_event(log, "stop", "max_func_eval %d", o.max_func_eval);
             }
 
             save_checkpoint();
@@ -230,6 +230,7 @@ void ETNFit::rescale() {
     double loss, loss_der;
     std::fill(coeffs.begin(), coeffs.end(), 0.0);
     loss_and_der(loss, loss_der);
+    log_event(log, "rescale", "alpha 0, loss %.7e", loss);
     if (loss_der > 0) {
         sign *= -1;
         loss_der *= -1;
@@ -240,6 +241,7 @@ void ETNFit::rescale() {
         for (int i = 0; i < n; i++)
             coeffs[i] = sign * alpha_curr * x0[i];
         loss_and_der(loss, loss_der);
+        log_event(log, "rescale", "alpha %g, loss %.7e", sign * alpha_curr, loss);
         linesearch.iterate(loss, loss_der);
         alpha_prev = alpha_curr;
         alpha_curr = linesearch.x();
@@ -247,7 +249,7 @@ void ETNFit::rescale() {
 
     for (int i = 0; i < n; i++)
         coeffs[i] = sign * alpha_curr * x0[i];
-    if (log) *log << "rescaled: coefficients times " << sign * alpha_curr << std::endl;
+    log_event(log, "rescale", "chosen alpha %g", sign * alpha_curr);
 }
 
 /* ----------------------------------------------------------------------

@@ -38,7 +38,7 @@ from otf_engine.train import MLP_ALGORITHM
 
 MLP = Path.home() / "Doctorat/code_library/mlip-3/bin/mlp"
 STEP_LINE = re.compile(r"(?:BFGS iter +|^ *)(\d+)(?:: +f=|  )(\S+)")    # a step of mlp's log or the fit's: its number and loss
-PHASE_END = re.compile(r"MTPR training ended|^\d+ steps in ")    # the end of a nonlinear fit in mlp's log or the fit's
+PHASE_END = re.compile(r"MTPR training ended|^time: \d+ steps")    # the end of a nonlinear fit in mlp's log or the fit's
 
 
 def extract_cfgs(cfg_path, n_structures, out_path):

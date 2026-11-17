@@ -31,7 +31,7 @@ struct ETNFitOptions : FitOptions {
     // The options as the log lists them.
     std::string summary() const {
         std::ostringstream text;
-        text << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", max_func_eval " << max_func_eval << ", " << FitOptions::summary() << (rescale ? "" : ", no rescale") << (skip_preinit ? ", skip_preinit" : "");
+        text << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", max_func_eval " << max_func_eval << ", " << FitOptions::summary() << (rescale ? "" : ", rescale false") << (skip_preinit ? ", skip_preinit" : "");
         return text.str();
     }
 };

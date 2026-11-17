@@ -9,6 +9,7 @@
 
 #include "comm.h"
 #include "error_table.h"
+#include "fit_log.h"
 #include "fit_structure.h"
 
 #include <algorithm>
@@ -32,7 +33,7 @@ struct FitOptions {
     // The weights and balance_species, as the log lists them.
     std::string summary() const {
         std::ostringstream text;
-        text << "weights energy " << energy_weight << ", force " << force_weight << ", stress " << stress_weight << (balance_species ? ", balance_species" : "");
+        text << "energy_weight " << energy_weight << ", force_weight " << force_weight << ", stress_weight " << stress_weight << (balance_species ? ", balance_species" : "");
         return text.str();
     }
 };
@@ -67,19 +68,17 @@ class Fit {
     }
 
     // Logs the fit of model (MTP, ETN): its structures, ranks and options.
-    void log_header(const std::string& model) {
-        if (!log) return;
-        *log << model << " fit of " << structure_count << " structures on " << size << " rank(s)\n";
-        *log << "options: " << options.summary() << std::endl;
+    void log_header(const char* model) {
+        log_event(log, "fit", "%s, %d structures, %d ranks", model, structure_count, size);
+        log_event(log, "options", "%s", options.summary().c_str());
     }
 
     // Logs the species old_spec .. new_spec - 1 that training adds to the potential.
     void log_added_species(int old_spec, int new_spec) {
-        if (!log || new_spec <= old_spec) return;
-        *log << "species added:";
+        std::string added;
         for (int t = old_spec; t < new_spec; t++)
-            *log << ' ' << t;
-        *log << std::endl;
+            added += ' ' + std::to_string(t);
+        if (new_spec > old_spec) log_event(log, "species", "added%s", added.c_str());
     }
 
     // Logs the column names of log_step, with the penalty's if penalty.
@@ -106,11 +105,14 @@ class Fit {
 
     // Logs the steps a phase took since start, and their time.
     void log_phase_time(int steps, std::chrono::steady_clock::time_point start) {
-        if (!log) return;
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        char line[96];
-        std::snprintf(line, sizeof line, "%d steps in %.1f s, %.2g s per step", steps, seconds, seconds / std::max(steps, 1));
-        *log << line << std::endl;
+        log_event(log, "time", "%d steps, %.1f s, %.2g s per step", steps, seconds, seconds / std::max(steps, 1));
+    }
+
+    // Logs the time of the whole fit since start.
+    void log_fit_time(std::chrono::steady_clock::time_point start) {
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        log_event(log, "time", "%.1f s for the fit", seconds);
     }
 
     // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
@@ -141,11 +143,11 @@ class Fit {
         return type_count;
     }
 
-    // Logs the errors of the potential at coeffs on the training set under title, unless it is untrained.
-    void log_errors(const std::string& title) {
+    // Logs the errors of the potential at coeffs on the training set, under "errors: when", unless it is untrained.
+    void log_errors(const std::string& when) {
         if (!potential.is_trained()) return;
         potential.set_coeffs(coeffs.data());
-        const std::string table = error_table(potential, structures, options.species, comm, title);
+        const std::string table = error_table(potential, structures, options.species, comm, "errors: " + when);
         if (log) *log << table;
     }
 

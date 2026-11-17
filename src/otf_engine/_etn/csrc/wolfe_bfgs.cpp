@@ -5,6 +5,7 @@
 ------------------------------------------------------------------------- */
 
 #include "wolfe_bfgs.h"
+#include "fit_log.h"
 
 #include <cmath>
 
@@ -34,18 +35,18 @@ bool WolfeLineSearch::iterate(double curr_f, double curr_g) {
         curr_x = right_x;
         // mlip-4 throws here; a failed search ends as the others below do, so that no rank raises alone
         if (curr_g > 0) {
-            if (log) *log << "line search failed: the loss increases along the direction" << std::endl;
+            log_event(log, "linesearch", "f'(0) = %.2e > 0", curr_g);
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        if (log) *log << "line search failed: the step stopped moving" << std::endl;
+        log_event(log, "linesearch", "prev_x == curr_x = %g", curr_x);
         return false;
     }
     if (curr_x <= 1e-30) {
-        if (log) *log << "line search failed: the step fell below 1e-30" << std::endl;
+        log_event(log, "linesearch", "curr_x = %.1e <= 1e-30", curr_x);
         return false;
     }
 
@@ -189,10 +190,10 @@ bool WolfeBFGS::iterate(double f, const std::vector<double>& g) {
                 alpha_ = 0.0;
                 if (hess_just_diaged) {
                     reset_inv_hess();
-                    if (linesearch.log) *linesearch.log << "line search stalled: inverse Hessian reset to its mean diagonal" << std::endl;
+                    log_event(linesearch.log, "bfgs", "iters_no_improve %d, inv_hess = mean(diag) I", iters_no_improve);
                 } else {
                     diag_inv_hess();
-                    if (linesearch.log) *linesearch.log << "line search stalled: inverse Hessian made diagonal" << std::endl;
+                    log_event(linesearch.log, "bfgs", "iters_no_improve %d, inv_hess = diag(inv_hess)", iters_no_improve);
                 }
                 linesearch.reset();
                 x_ = x_start;
@@ -224,7 +225,7 @@ bool WolfeBFGS::make_nonlinesearch_iteration(double f, const std::vector<double>
     set_start(f, g);
 
     if (p_dot_g > 0) {
-        if (linesearch.log) *linesearch.log << "BFGS: the search direction ascends" << std::endl;
+        log_event(linesearch.log, "bfgs", "p.g = %.2e > 0", p_dot_g);
         return false;
     }
 

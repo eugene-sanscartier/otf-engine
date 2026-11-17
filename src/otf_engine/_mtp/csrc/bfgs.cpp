@@ -5,6 +5,7 @@
 ------------------------------------------------------------------------- */
 
 #include "bfgs.h"
+#include "fit_log.h"
 
 #include <cmath>
 #include <ostream>
@@ -16,11 +17,6 @@ static double dot(const std::vector<double>& a, const std::vector<double>& b) {
     for (size_t i = 0; i < a.size(); i++)
         res += a[i] * b[i];
     return res;
-}
-
-// mlip-3 writes its warnings to the terminal; here they go to the fit's log, when it has one.
-static void warning(std::ostream* log, const char* message) {
-    if (log) *log << message << std::endl;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -42,15 +38,16 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         left_f = prev_f = curr_f;
         left_g = prev_g = curr_g;
         curr_x = right_x;
+        // mlip-3 writes its warnings to the terminal; here they go to the fit's log
         if (curr_g > 0) {
-            warning(log, "line search failed: the loss increases along the direction");
+            log_event(log, "linesearch", "f'(0) = %.2e > 0", curr_g);
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        warning(log, "line search failed: the step stopped moving");
+        log_event(log, "linesearch", "prev_x == curr_x = %g", curr_x);
         return false;
     }
 
@@ -191,7 +188,7 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
         p_dot_g_start = p_dot_g;
 
         if (p_dot_g > 0)
-            warning(linesearch.log, "BFGS: the search direction ascends");
+            log_event(linesearch.log, "bfgs", "p.g = %.2e > 0", p_dot_g);
 
         loss_decrease = linesearch.iterate(f, p_dot_g);
     }
