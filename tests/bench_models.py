@@ -206,8 +206,9 @@ def report(out):
                 errorbar = numpy.array([[r[key] - r[key + "_min"] for r in part], [r[key + "_max"] - r[key] for r in part]])
             axes[0, k].errorbar(force, value, yerr=errorbar, fmt="o", label=label_model)
             axes[1, k].errorbar(coefficients, value, yerr=errorbar, fmt="o", label=label_model)
-            for r, x, y in zip(part, force, value):
+            for r, x, n, y in zip(part, force, coefficients, value):
                 axes[0, k].annotate(r["name"][4:], (x, y), fontsize=7)
+                axes[1, k].annotate(r["name"][4:], (n, y), fontsize=7)
             axes[0, k].set(xlabel="test force RMSE, meV/Å", ylabel=label, yscale="log")
             axes[1, k].set(xlabel="coefficients", ylabel=label, xscale="log", yscale="log")
     for ax in axes.flat:
