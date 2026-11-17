@@ -52,7 +52,7 @@ void MTPFit::run() {
     log_header("MTP");
 
     add_species();
-    log_event(log, "coefficients", "%zu coefficients, %d radial, %d linear", coeffs.size(), n_radial, n_linear);
+    log_event(log, "coefficients", "%zu, %d radial, %d linear", coeffs.size(), n_radial, n_linear);
 
     // Every rank checks the same options and sizes, so every rank raises together.
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
@@ -673,7 +673,7 @@ void MTPFit::rescale() {
             rms = std::sqrt(rms);
             std::sort(abs_linear.begin(), abs_linear.end());
             condition_number[j] = rms / abs_linear[abs_linear.size() / 2];
-            log_event(log, "rescale", "scaling %g, condition number %g", scalings[j], condition_number[j]);
+            log_event(log, "rescale", "scaling %.7e  condition number %.7e", scalings[j], condition_number[j]);
         }
 
         ind = 2;
@@ -681,7 +681,7 @@ void MTPFit::rescale() {
             if (condition_number[j] < condition_number[ind]) ind = j;
 
         fit_at(scalings[ind]);
-        log_event(log, "rescale", "chosen scaling %g", scalings[ind]);
+        log_event(log, "rescale", "scaling = %g", scalings[ind]);
 
         // stop once the choice falls strictly inside the range already visited
         if (min_scaling < scalings[ind] && scalings[ind] < max_scaling)

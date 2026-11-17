@@ -106,13 +106,13 @@ class Fit {
     // Logs the steps a phase took since start, and their time.
     void log_phase_time(int steps, std::chrono::steady_clock::time_point start) {
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        log_event(log, "time", "%d steps, %.1f s, %.2g s per step", steps, seconds, seconds / std::max(steps, 1));
+        log_event(log, "time", "%.3g s @ %d steps, %.2g s / step", seconds, steps, seconds / std::max(steps, 1));
     }
 
     // Logs the time of the whole fit since start.
     void log_fit_time(std::chrono::steady_clock::time_point start) {
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        log_event(log, "time", "%.1f s for the fit", seconds);
+        log_event(log, "time", "%.3g s for the fit", seconds);
     }
 
     // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
