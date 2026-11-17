@@ -51,6 +51,8 @@ ETN_SHAPES = [(1, 3, 3), (1, 3, 4), (1, 4, 4), (1, 4, 5), (1, 5, 6), (2, 3, 3), 
 LOSS_WEIGHTS = {"energy_weight": 1.0, "force_weight": 0.01, "stress_weight": 0.001}
 # A logged step: mlp's and the MTP fit's "BFGS iter N:" or "Riemann iter N:", or mlip-4's step number and its losses
 STEP_LINE = re.compile(r"^(?:(?:BFGS|Riemann) iter +\d+:|\d+\t)")
+# A fit failed when its test energy or force error exceeds this many times the best of the benchmark
+FAILED_FACTOR = 10
 BAR = dict(ascii=True, ncols=60, bar_format="{desc:<14}|{bar}| {n_fmt:>2}/{total_fmt:>2}")
 
 
@@ -152,7 +154,7 @@ def run(name, args):
 
 
 def gather(out):
-    """One row per potential of OUT with a fit and errors: its fit, errors, and the median, min and max of its timings."""
+    """One row per potential of OUT with a fit and errors: its fit, errors, the median, min and max of its timings, and whether it failed."""
     rows = []
     for name in FAMILIES:
         workdir = out / name
@@ -164,6 +166,10 @@ def gather(out):
             row |= {key: float(numpy.median(values)), key + "_min": min(values), key + "_max": max(values)}
         row |= dict(atoms=times[0]["atoms"], timings=len(times))
         rows += [row]
+
+    best = {key: min(r[key] for r in rows) for key in ("test_energy", "test_force")}
+    for r in rows:
+        r["failed"] = any(r[key] > FAILED_FACTOR * value for key, value in best.items())
     return rows
 
 
@@ -172,15 +178,15 @@ def report(out):
     import matplotlib.pyplot as plt
 
     rows = gather(out)
-    header = f"{'potential':<16}{'coeffs':>7}{'E test':>9}{'F test':>9}{'F train':>9}{'eval ms':>10}{'µs/atom':>9}{'+ neigh':>9}{'grad ms':>10}{'steps':>7}{'s/step':>9}{'ranks':>6}{'timings':>8}"
-    print("errors in meV/atom and meV/Å; times per structure on one thread, median of the timings; s/step of the fit")
+    header = f"{'potential':<16}{'coeffs':>7}{'E test':>11}{'F test':>10}{'F train':>10}{'eval ms':>10}{'µs/atom':>9}{'+ neigh':>9}{'grad ms':>10}{'steps':>7}{'s/step':>9}{'ranks':>6}{'timings':>8}"
+    print(f"errors in meV/atom and meV/Å; times per structure on one thread, median of the timings; s/step of the fit; failed: an error over {FAILED_FACTOR} times the best")
     print(header)
     for r in rows:
-        print(f"{r['name']:<16}{r['coefficients']:>7d}{r['test_energy'] * 1e3:>9.2f}{r['test_force'] * 1e3:>9.1f}{r['train_force'] * 1e3:>9.1f}{r['eval_ms']:>10.2f}{r['eval_ms'] * 1e3 / r['atoms']:>9.2f}{r['eval_build_ms']:>9.2f}{r['loss_grad_ms']:>10.2f}{r['steps']:>7d}{r['s_per_step']:>9.3f}{r['ranks']:>6d}{r['timings']:>8d}")
+        print(f"{r['name']:<16}{r['coefficients']:>7d}{r['test_energy'] * 1e3:>11.2f}{r['test_force'] * 1e3:>10.1f}{r['train_force'] * 1e3:>10.1f}{r['eval_ms']:>10.2f}{r['eval_ms'] * 1e3 / r['atoms']:>9.2f}{r['eval_build_ms']:>9.2f}{r['loss_grad_ms']:>10.2f}{r['steps']:>7d}{r['s_per_step']:>9.3f}{r['ranks']:>6d}{r['timings']:>8d}{'  failed' if r['failed'] else ''}")
 
-    print("\nequal coefficient count: each MTP and the ETN closest to it")
-    etns = [r for r in rows if r["model"] == "etn"]
-    for m in (r for r in rows if r["model"] == "mtp"):
+    print("\nequal coefficient count: each MTP and the ETN closest to it, failed fits left out")
+    etns = [r for r in rows if r["model"] == "etn" and not r["failed"]]
+    for m in (r for r in rows if r["model"] == "mtp" and not r["failed"]):
         if not etns: break
         e = min(etns, key=lambda r: abs(numpy.log(r["coefficients"] / m["coefficients"])))
         print(f"{m['name']:<8} {m['coefficients']:5d}  {e['name']:<14} {e['coefficients']:5d}   F test {m['test_force'] * 1e3:6.1f} / {e['test_force'] * 1e3:6.1f} meV/Å   eval {m['eval_ms']:7.2f} / {e['eval_ms']:7.2f} ms   grad {m['loss_grad_ms']:7.2f} / {e['loss_grad_ms']:7.2f} ms   s/step {m['s_per_step']:7.3f} / {e['s_per_step']:7.3f}")
@@ -188,7 +194,9 @@ def report(out):
     figure, axes = plt.subplots(2, 3, figsize=(15, 9))
     columns = [("eval_ms", "evaluation, ms per structure"), ("loss_grad_ms", "loss gradient, ms per structure"), ("s_per_step", "fit, s per step")]
     for model in ("mtp", "etn"):
-        part = [r for r in rows if r["model"] == model]
+        part = [r for r in rows if r["model"] == model and not r["failed"]]
+        failed = sum(r["model"] == model and r["failed"] for r in rows)
+        label_model = model.upper() + (f" ({failed} failed)" if failed else "")
         force = numpy.array([r["test_force"] * 1e3 for r in part])
         coefficients = numpy.array([r["coefficients"] for r in part])
         for k, (key, label) in enumerate(columns):
@@ -196,8 +204,8 @@ def report(out):
             errorbar = None
             if key + "_min" in part[0]:
                 errorbar = numpy.array([[r[key] - r[key + "_min"] for r in part], [r[key + "_max"] - r[key] for r in part]])
-            axes[0, k].errorbar(force, value, yerr=errorbar, fmt="o", label=model.upper())
-            axes[1, k].errorbar(coefficients, value, yerr=errorbar, fmt="o", label=model.upper())
+            axes[0, k].errorbar(force, value, yerr=errorbar, fmt="o", label=label_model)
+            axes[1, k].errorbar(coefficients, value, yerr=errorbar, fmt="o", label=label_model)
             for r, x, y in zip(part, force, value):
                 axes[0, k].annotate(r["name"][4:], (x, y), fontsize=7)
             axes[0, k].set(xlabel="test force RMSE, meV/Å", ylabel=label, yscale="log")
