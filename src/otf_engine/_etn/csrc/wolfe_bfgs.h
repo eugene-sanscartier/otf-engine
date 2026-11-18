@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <ostream>
+#include <string>
 #include <vector>
 
 // Minimises f along a ray from 0, given f'(0) < 0, until the Wolfe conditions hold. The
@@ -26,7 +26,7 @@ class WolfeLineSearch {
 
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
-    std::ostream* log = nullptr;    // where a failed search is noted, the fit's log
+    std::string message;    // why the last search failed, for the fit's log
 
   private:
     double curr_x;
@@ -48,12 +48,15 @@ class WolfeBFGS {
     void diag_inv_hess();
     void set_wolfe_c1(double value) { wolfe_c1 = linesearch.wolfe_c1 = value; }
     void set_wolfe_c2(double value) { wolfe_c2 = linesearch.wolfe_c2 = value; }
-    void set_log(std::ostream* log) { linesearch.log = log; }
 
     const std::vector<double>& x() const { return x_; }
     bool in_linesearch() const { return in_linesearch_; }
     // The step length of the last accepted step along its direction, 0 for a stalled search's return to its start.
     double alpha() const { return alpha_; }
+    // What the last accepted step set the inverse Hessian to: "diag", "mean" or "" for its update.
+    const char* inv_hess_set() const { return inv_hess_set_; }
+    // Why iterate or make_nonlinesearch_iteration last returned false.
+    const std::string& message() const { return message_; }
 
     // Returns false when the loss increases along the direction.
     bool iterate(double f, const std::vector<double>& g);
@@ -78,6 +81,8 @@ class WolfeBFGS {
     std::vector<double> delta_grad, yC;
     bool in_linesearch_ = false;
     double alpha_ = 0.0;
+    const char* inv_hess_set_ = "";
+    std::string message_;
     int iters_no_improve = 0;
     int hess_just_diaged = 0;
     WolfeLineSearch linesearch;

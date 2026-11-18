@@ -8,7 +8,6 @@
 #include "fit_log.h"
 
 #include <cmath>
-#include <ostream>
 
 static const double HUGE_DOUBLE = 9.9e99;
 
@@ -38,16 +37,16 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         left_f = prev_f = curr_f;
         left_g = prev_g = curr_g;
         curr_x = right_x;
-        // mlip-3 writes its warnings to the terminal; here they go to the fit's log
+        // mlip-3 writes its warnings to the terminal; here the fit logs message
         if (curr_g > 0) {
-            log_event(log, "linesearch", "f'(0) = %.2e > 0", curr_g);
+            message = format_text("f'(0) = %.2e > 0", curr_g);
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        log_event(log, "linesearch", "prev_x == curr_x = %g", curr_x);
+        message = format_text("prev_x == curr_x = %g", curr_x);
         return false;
     }
 
@@ -186,9 +185,6 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
         g_start = g;
         f_start = f;
         p_dot_g_start = p_dot_g;
-
-        if (p_dot_g > 0)
-            log_event(linesearch.log, "bfgs", "p.g = %.2e > 0", p_dot_g);
 
         loss_decrease = linesearch.iterate(f, p_dot_g);
     }

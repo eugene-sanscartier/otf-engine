@@ -211,7 +211,6 @@ void MTPFit::fit_nonlinear(int max_iter) {
     double bfgs_f = 0.0, bfgs_terms[4] = {};
 
     if (rank == 0) {
-        bfgs.set_log(log);
         bfgs.set_x(coeffs.data(), n);
         if (options.inverse_hessian)
             bfgs.set_inverse_hessian(options.inverse_hessian);
@@ -227,6 +226,9 @@ void MTPFit::fit_nonlinear(int max_iter) {
     bool converge = false;
     bool linesearch = false;
     bool linear_fitted = false;    // the next evaluation is at the coefficients of a linear fit
+    double linear_loss = NAN;      // the loss after this step's linear fit
+    const char* inv_hess = "";     // what this step set the inverse Hessian to
+    std::string stop;              // why the fit stops, logged after its last step
 
     while (!converge) {
         if (!linesearch) {
@@ -241,6 +243,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
                 // a new regularization invalidates the inverse Hessian
                 if (reg_init) {
                     if (rank == 0) bfgs.reset_hessian();
+                    inv_hess = "I";
                     reg_init = false;
                 }
             }
@@ -251,13 +254,13 @@ void MTPFit::fit_nonlinear(int max_iter) {
         if (rank == 0) std::copy(bfgs.x().begin(), bfgs.x().end(), coeffs.begin());
         comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
         bfgs_f = evaluate(bfgs_g, n, true, bfgs_terms);
-        if (linear_fitted) log_event(log, "linear", "fit_linear, loss %.7e", bfgs_f);
+        if (linear_fitted) linear_loss = bfgs_f;
         linear_fitted = false;
 
         if (rank == 0) {
             if (!bfgs.iterate(bfgs_f, bfgs_g)) {
                 converge = true;
-                log_event(log, "stop", "bfgs");
+                stop = "bfgs, " + bfgs.message();
             }
             while (std::abs(bfgs.x(0) - coeffs[0]) > 0.5)    // prevents too large steps
                 bfgs.reduce_step(0.25);
@@ -266,10 +269,12 @@ void MTPFit::fit_nonlinear(int max_iter) {
             if (linesearch)
                 curr_line_search++;
             else {
-                log_step(num_step, bfgs_f, bfgs_terms, true, bfgs.alpha(), curr_line_search + 1);
+                log_step(num_step, bfgs_f, bfgs_terms, true, bfgs.alpha(), curr_line_search + 1, linear_loss, inv_hess);
+                linear_loss = NAN;
+                inv_hess = "";
                 if (std::abs(loss_prev - bfgs_f) < 1e-16 && !converge) {
                     converge = true;
-                    log_event(log, "stop", "|loss[k] - loss[k-1]| < 1e-16");
+                    stop = "|loss[k] - loss[k-1]| < 1e-16";
                 }
 
                 loss_prev = bfgs_f;
@@ -278,21 +283,22 @@ void MTPFit::fit_nonlinear(int max_iter) {
                 if (num_step % 50 == 0 && num_step > 100) {
                     if ((linf - bfgs_f) / bfgs_f < options.tolerance && !converge) {
                         converge = true;
-                        log_event(log, "stop", "(loss[k-50] - loss[k]) / loss[k] = %.1e < tolerance %g", (linf - bfgs_f) / bfgs_f, options.tolerance);
+                        stop = format_text("(loss[k-50] - loss[k]) / loss[k] = %.1e < tolerance %g", (linf - bfgs_f) / bfgs_f, options.tolerance);
                     }
                     linf = bfgs_f;
                 }
 
                 if (num_step >= max_iter && !converge) {
                     converge = true;
-                    log_event(log, "stop", "iteration_limit %d", max_iter);
+                    stop = format_text("iteration_limit %d", max_iter);
                 }
             }
 
             if (curr_line_search > max_line_search && !converge) {
-                log_event(log, "stop", "%d linesearch evaluations", curr_line_search);
+                stop = format_text("%d linesearch evaluations", curr_line_search);
                 converge = true;
             }
+            if (converge) log_event(log, "stop", "%s", stop.c_str());
         }
 
         comm.bcast(&converge, 1, 0);
@@ -358,20 +364,28 @@ void MTPFit::fit_riemannian(int max_iter) {
     double linf = 9e99;    // the loss 50 steps ago
     double t = 0.0;        // the step length of the last step, and its evaluations
     int halvings = 0;
+    const char* inv_hess = "";    // what the last step set the inverse Hessian to
     while (true) {
+        // the step's loss and terms, before a linear fit moves them
+        const double step_f = f;
+        double step_terms[4];
+        std::copy_n(terms, 4, step_terms);
+        double linear_loss = NAN;
         if (!options.varpro && linear_fit_step(num_step)) {
             fit_linear();
             f = evaluate_tangent(g);
-            log_event(log, "linear", "fit_linear, loss %.7e", f);
+            linear_loss = f;
             // a new regularization invalidates the memory
             if (reg_init) {
                 s_memory.clear();
                 y_memory.clear();
+                inv_hess = "I";
                 reg_init = false;
             }
         }
 
-        log_step(num_step, f, terms, true, t, halvings + 1);
+        log_step(num_step, step_f, step_terms, true, t, halvings + 1, linear_loss, inv_hess);
+        inv_hess = "";
         save_checkpoint();
 
         if (num_step >= max_iter) {
@@ -409,6 +423,7 @@ void MTPFit::fit_riemannian(int max_iter) {
         if (!(slope < 0.0)) {
             s_memory.clear();
             y_memory.clear();
+            inv_hess = "I";
             for (int j = 0; j < n; j++) p[j] = -g[j] / g_norm;
             slope = -g_norm;
         }
@@ -576,7 +591,6 @@ void MTPFit::solve_linear() {
         for (int i = 0; i < n; i++)
             if (reg_vector[i] < 1e-2 * options.reg_param * std::max(1.0, A[i * n + i]) / structure_count || reg_vector[i] > 1e2 * options.reg_param * std::max(1.0, A[i * n + i]) / structure_count) {
                 reg_init = true;
-                log_event(log, "linear", "reg_vector rebuilt, inv_hess = I");
                 break;
             }
 

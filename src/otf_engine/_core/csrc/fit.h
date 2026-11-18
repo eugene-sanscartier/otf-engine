@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <ostream>
@@ -81,25 +82,30 @@ class Fit {
         if (new_spec > old_spec) log_event(log, "species", "added%s", added.c_str());
     }
 
-    // Logs the column names of log_step, with the penalty's if penalty.
-    void log_step_header(bool penalty) {
+    // Logs the column names of log_step, with the MTP's penalty and linear if mtp.
+    void log_step_header(bool mtp) {
         if (!log) return;
-        char line[160];
+        char line[200];
         int length = std::snprintf(line, sizeof line, "%5s  %-13s  %-14s  %-14s  %-14s", "step", "loss", "energy", "force", "stress");
-        if (penalty) length += std::snprintf(line + length, sizeof line - length, "  %-14s", "penalty");
-        std::snprintf(line + length, sizeof line - length, "  %-8s  %6s", "alpha", "nalpha");
+        if (mtp) length += std::snprintf(line + length, sizeof line - length, "  %-14s", "penalty");
+        length += std::snprintf(line + length, sizeof line - length, "  %-8s  %6s", "alpha", "nalpha");
+        if (mtp) length += std::snprintf(line + length, sizeof line - length, "  %-13s", "linear");
+        std::snprintf(line + length, sizeof line - length, "  %s", "inv_hess");
         *log << line << std::endl;
     }
 
-    // Logs an accepted step: its loss, the energy, force and stress terms (and the penalty's if penalty) of terms with their
-    // share of the loss, its step length alpha and its loss evaluations nalpha.
-    void log_step(int step, double loss, const double* terms, bool penalty, double alpha, int nalpha) {
+    // Logs an accepted step: its loss, the energy, force and stress terms (and the penalty's if mtp) of terms with their
+    // share of the loss, its step length alpha, its loss evaluations nalpha, the loss after a linear fit at the step if mtp
+    // (- if NaN), and what BFGS set the inverse Hessian to in the step, inv_hess (- if "").
+    void log_step(int step, double loss, const double* terms, bool mtp, double alpha, int nalpha, double linear, const char* inv_hess) {
         if (!log) return;
-        char line[160];
+        char line[200];
         int length = std::snprintf(line, sizeof line, "%5d  %.7e", step, loss);
-        for (int k = 0; k < (penalty ? 4 : 3); k++)
+        for (int k = 0; k < (mtp ? 4 : 3); k++)
             length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", terms[k], 100 * terms[k] / loss);
-        std::snprintf(line + length, sizeof line - length, "  %.2e  %6d", alpha, nalpha);
+        length += std::snprintf(line + length, sizeof line - length, "  %.2e  %6d", alpha, nalpha);
+        if (mtp) length += std::isnan(linear) ? std::snprintf(line + length, sizeof line - length, "  %-13s", "-") : std::snprintf(line + length, sizeof line - length, "  %.7e", linear);
+        std::snprintf(line + length, sizeof line - length, "  %s", *inv_hess ? inv_hess : "-");
         *log << line << std::endl;
     }
 

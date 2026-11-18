@@ -92,7 +92,6 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
         bfgs.set_wolfe_c1(o.wolfe_c1);
         bfgs.set_wolfe_c2(o.wolfe_c2);
         bfgs.max_iters_no_improve = o.bfgs_max_iters_no_improve;
-        bfgs.set_log(log);
         bfgs.set_x(coeffs.data(), n);
     }
 
@@ -100,6 +99,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
     double linf = 9e99;
     double bfgs_f = 0.0, bfgs_terms[3] = {};
     double kept_f = 0.0, kept_terms[3] = {};    // the loss at the point BFGS keeps, which a stalled step returns to
+    const char* inv_hess = "";                  // what the fit set the inverse Hessian to before the next step
     bool attempted_rescale = false;
     bool is_new_step = true;
     int convergence_check_delay = 0;
@@ -153,7 +153,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             loss_decrease = bfgs.iterate(bfgs_f, bfgs_g);
         if (!loss_decrease) {
             break_flag = 1;
-            log_event(log, "stop", "bfgs");
+            log_event(log, "stop", "bfgs, %s", bfgs.message().c_str());
         }
 
         if (!bfgs.in_linesearch() && !break_flag) {
@@ -162,14 +162,15 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
                 kept_f = bfgs_f;
                 std::copy(bfgs_terms, bfgs_terms + 3, kept_terms);
             }
-            log_step((int) num_iter, kept_f, kept_terms, false, bfgs.alpha(), (int) step_losses_.back().size());
+            log_step((int) num_iter, kept_f, kept_terms, false, bfgs.alpha(), (int) step_losses_.back().size(), NAN, *bfgs.inv_hess_set() ? bfgs.inv_hess_set() : inv_hess);
+            inv_hess = "";
             num_iter++;
             is_new_step = true;
             if (o.rescale) rescale_flag = num_iter == 0;
 
             if ((int) num_iter % 1500 == 0) {
-                log_event(log, "bfgs", "step %d, inv_hess = diag(inv_hess)", (int) num_iter);
                 bfgs.diag_inv_hess();
+                inv_hess = "diag";
                 convergence_check_delay = std::max(convergence_check_delay, 300);
             }
 
@@ -177,7 +178,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             if (!o.rescale || !rescale_flag)
                 if (!bfgs.make_nonlinesearch_iteration(bfgs_f, bfgs_g)) {
                     break_flag = 1;
-                    log_event(log, "stop", "bfgs");
+                    log_event(log, "stop", "bfgs, %s", bfgs.message().c_str());
                 }
 
             if ((int) num_iter % 100 == 0) {
@@ -219,7 +220,6 @@ void ETNFit::rescale() {
     std::vector<double> grad(n);
 
     WolfeLineSearch linesearch;
-    if (rank == 0) linesearch.log = log;
     double alpha_prev = 0.0;
     double alpha_curr = 1.0;
     int sign = 1;
@@ -244,14 +244,14 @@ void ETNFit::rescale() {
         sign *= -1;
         loss_der *= -1;
     }
-    linesearch.iterate(loss, loss_der);
+    if (!linesearch.iterate(loss, loss_der)) log_event(log, "rescale", "%s", linesearch.message.c_str());
 
     for (int iter = 0; iter < 20 && std::abs(alpha_curr - alpha_prev) > 1e-5; iter++) {
         for (int i = 0; i < n; i++)
             coeffs[i] = sign * alpha_curr * x0[i];
         loss_and_der(loss, loss_der);
         log_event(log, "rescale", "alpha % .7e  loss %.7e", sign * alpha_curr, loss / structure_count);
-        linesearch.iterate(loss, loss_der);
+        if (!linesearch.iterate(loss, loss_der)) log_event(log, "rescale", "%s", linesearch.message.c_str());
         alpha_prev = alpha_curr;
         alpha_curr = linesearch.x();
     }

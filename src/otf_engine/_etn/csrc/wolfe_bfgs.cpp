@@ -35,18 +35,18 @@ bool WolfeLineSearch::iterate(double curr_f, double curr_g) {
         curr_x = right_x;
         // mlip-4 throws here; a failed search ends as the others below do, so that no rank raises alone
         if (curr_g > 0) {
-            log_event(log, "linesearch", "f'(0) = %.2e > 0", curr_g);
+            message = format_text("f'(0) = %.2e > 0", curr_g);
             return false;
         }
         return true;
     }
 
     if (prev_x == curr_x) {
-        log_event(log, "linesearch", "prev_x == curr_x = %g", curr_x);
+        message = format_text("prev_x == curr_x = %g", curr_x);
         return false;
     }
     if (curr_x <= 1e-30) {
-        log_event(log, "linesearch", "curr_x = %.1e <= 1e-30", curr_x);
+        message = format_text("curr_x = %.1e <= 1e-30", curr_x);
         return false;
     }
 
@@ -190,17 +190,21 @@ bool WolfeBFGS::iterate(double f, const std::vector<double>& g) {
                 alpha_ = 0.0;
                 if (hess_just_diaged) {
                     reset_inv_hess();
-                    log_event(linesearch.log, "bfgs", "iters_no_improve %d, inv_hess = mean(diag) I", iters_no_improve);
+                    inv_hess_set_ = "mean";
                 } else {
                     diag_inv_hess();
-                    log_event(linesearch.log, "bfgs", "iters_no_improve %d, inv_hess = diag(inv_hess)", iters_no_improve);
+                    inv_hess_set_ = "diag";
                 }
                 linesearch.reset();
                 x_ = x_start;
-                if (hess_just_diaged >= 2) return false;
+                if (hess_just_diaged >= 2) {
+                    message_ = format_text("hess_just_diaged %d", hess_just_diaged);
+                    return false;
+                }
                 hess_just_diaged++;
             } else {
                 alpha_ = linesearch.x();
+                inv_hess_set_ = "";
                 update_inv_hess(g);
                 hess_just_diaged = 0;
             }
@@ -225,11 +229,12 @@ bool WolfeBFGS::make_nonlinesearch_iteration(double f, const std::vector<double>
     set_start(f, g);
 
     if (p_dot_g > 0) {
-        log_event(linesearch.log, "bfgs", "p.g = %.2e > 0", p_dot_g);
+        message_ = format_text("p.g = %.2e > 0", p_dot_g);
         return false;
     }
 
     bool loss_decrease = linesearch.iterate(f, p_dot_g);
+    if (!loss_decrease) message_ = linesearch.message;
     for (int i = 0; i < size; i++)
         x_[i] = x_start[i] + linesearch.x() * p[i];
 
