@@ -203,7 +203,9 @@ void MTPFit::update_min_dist() {
 void MTPFit::fit_nonlinear(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
-    log_step_header(true);
+    // linear fits, and the inverse Hessian resets they cause, run only without varpro, radial_only and bfgs_only
+    const bool linear_fits = !options.radial_only && !options.bfgs_only && !options.varpro;
+    log_step_header({true, linear_fits, linear_fits});
 
     // BFGS steps the leading n coefficients: all of them, or the radial block
     const int n = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
@@ -235,7 +237,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
             curr_line_search = 0;
             if (rank == 0) bfgs.set_x(coeffs.data(), n);
 
-            if (!options.radial_only && !options.bfgs_only && !options.varpro && linear_fit_step(num_step)) {
+            if (linear_fits && linear_fit_step(num_step)) {
                 orthogonalize();
                 fit_linear();
                 linear_fitted = true;
@@ -269,7 +271,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
             if (linesearch)
                 curr_line_search++;
             else {
-                log_step(num_step, bfgs_f, bfgs_terms, true, bfgs.alpha(), curr_line_search + 1, linear_loss, inv_hess);
+                log_step(num_step, bfgs_f, bfgs_terms, bfgs.alpha(), curr_line_search + 1, linear_loss, inv_hess);
                 linear_loss = NAN;
                 inv_hess = "";
                 if (std::abs(loss_prev - bfgs_f) < 1e-16 && !converge) {
@@ -329,7 +331,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
 void MTPFit::fit_riemannian(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
     comm.barrier();
-    log_step_header(true);
+    log_step_header({true, !options.varpro, true});
 
     // the coordinates stepped: the radial block, and the linear one without varpro
     const int n = options.varpro ? n_radial : (int) coeffs.size();
@@ -384,7 +386,7 @@ void MTPFit::fit_riemannian(int max_iter) {
             }
         }
 
-        log_step(num_step, step_f, step_terms, true, t, halvings + 1, linear_loss, inv_hess);
+        log_step(num_step, step_f, step_terms, t, halvings + 1, linear_loss, inv_hess);
         inv_hess = "";
         save_checkpoint();
 
@@ -698,7 +700,7 @@ void MTPFit::rescale() {
             if (condition_number[j] < condition_number[ind]) ind = j;
 
         fit_at(scalings[ind]);
-        log_event(log, "rescale", "scaling = %g", scalings[ind]);
+        log_event(log, "rescale", "scaling %.7e", scalings[ind]);
 
         // stop once the choice falls strictly inside the range already visited
         if (min_scaling < scalings[ind] && scalings[ind] < max_scaling)

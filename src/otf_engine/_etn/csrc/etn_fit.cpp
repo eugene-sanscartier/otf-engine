@@ -157,12 +157,12 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
         }
 
         if (!bfgs.in_linesearch() && !break_flag) {
-            if (num_iter == 0) log_step_header(false);    // after the first step's rescaling
+            if (num_iter == 0) log_step_header({false, false, true});    // after the first step's rescaling
             if (bfgs.alpha() != 0.0) {
                 kept_f = bfgs_f;
                 std::copy(bfgs_terms, bfgs_terms + 3, kept_terms);
             }
-            log_step((int) num_iter, kept_f, kept_terms, false, bfgs.alpha(), (int) step_losses_.back().size(), NAN, *bfgs.inv_hess_set() ? bfgs.inv_hess_set() : inv_hess);
+            log_step((int) num_iter, kept_f, kept_terms, bfgs.alpha(), (int) step_losses_.back().size(), NAN, *bfgs.inv_hess_set() ? bfgs.inv_hess_set() : inv_hess);
             inv_hess = "";
             num_iter++;
             is_new_step = true;
@@ -258,7 +258,7 @@ void ETNFit::rescale() {
 
     for (int i = 0; i < n; i++)
         coeffs[i] = sign * alpha_curr * x0[i];
-    log_event(log, "rescale", "coeffs = %g x0", sign * alpha_curr);
+    log_event(log, "rescale", "alpha % .7e", sign * alpha_curr);
 }
 
 /* ----------------------------------------------------------------------

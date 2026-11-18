@@ -31,12 +31,17 @@ struct FitOptions {
     bool balance_species = true;         // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     std::vector<std::string> species;    // the species' names in the error tables
 
-    // The weights and balance_species, as the log lists them.
-    std::string summary() const {
+    // The weights and balance_species, the loss weights' line of the log's options.
+    std::string loss_weights() const {
         std::ostringstream text;
         text << "energy_weight " << energy_weight << ", force_weight " << force_weight << ", stress_weight " << stress_weight << (balance_species ? ", balance_species" : "");
         return text.str();
     }
+};
+
+// The optional columns of a phase's step lines: the MTP's penalty, the loss after a linear fit, the inverse Hessian set.
+struct StepColumns {
+    bool penalty, linear, inv_hess;
 };
 
 // Potential is MTP or ETN, Options its fit's options.
@@ -71,7 +76,8 @@ class Fit {
     // Logs the fit of model (MTP, ETN): its structures, ranks and options.
     void log_header(const char* model) {
         log_event(log, "fit", "%s, %d structures, %d ranks", model, structure_count, size);
-        log_event(log, "options", "%s", options.summary().c_str());
+        for (const std::string& line : options.summary())
+            log_event(log, "options", "%s", line.c_str());
     }
 
     // Logs the species old_spec .. new_spec - 1 that training adds to the potential.
@@ -82,43 +88,44 @@ class Fit {
         if (new_spec > old_spec) log_event(log, "species", "added%s", added.c_str());
     }
 
-    // Logs the column names of log_step, with the MTP's penalty and linear if mtp.
-    void log_step_header(bool mtp) {
+    // Logs the column names of log_step and sets the phase's columns: the optional ones the phase can fill.
+    void log_step_header(StepColumns phase_columns) {
+        columns = phase_columns;
         if (!log) return;
         char line[200];
         int length = std::snprintf(line, sizeof line, "%5s  %-13s  %-14s  %-14s  %-14s", "step", "loss", "energy", "force", "stress");
-        if (mtp) length += std::snprintf(line + length, sizeof line - length, "  %-14s", "penalty");
+        if (columns.penalty) length += std::snprintf(line + length, sizeof line - length, "  %-14s", "penalty");
         length += std::snprintf(line + length, sizeof line - length, "  %-8s  %6s", "alpha", "nalpha");
-        if (mtp) length += std::snprintf(line + length, sizeof line - length, "  %-13s", "linear");
-        std::snprintf(line + length, sizeof line - length, "  %s", "inv_hess");
+        if (columns.linear) length += std::snprintf(line + length, sizeof line - length, "  %-13s", "linear");
+        if (columns.inv_hess) std::snprintf(line + length, sizeof line - length, "  %s", "inv_hess");
         *log << line << std::endl;
     }
 
-    // Logs an accepted step: its loss, the energy, force and stress terms (and the penalty's if mtp) of terms with their
-    // share of the loss, its step length alpha, its loss evaluations nalpha, the loss after a linear fit at the step if mtp
+    // Logs an accepted step in the phase's columns: its loss, the energy, force, stress and penalty terms of terms with their
+    // share of the loss, its step length alpha, its loss evaluations nalpha, the loss after a linear fit at the step
     // (- if NaN), and what BFGS set the inverse Hessian to in the step, inv_hess (- if "").
-    void log_step(int step, double loss, const double* terms, bool mtp, double alpha, int nalpha, double linear, const char* inv_hess) {
+    void log_step(int step, double loss, const double* terms, double alpha, int nalpha, double linear, const char* inv_hess) {
         if (!log) return;
         char line[200];
         int length = std::snprintf(line, sizeof line, "%5d  %.7e", step, loss);
-        for (int k = 0; k < (mtp ? 4 : 3); k++)
+        for (int k = 0; k < (columns.penalty ? 4 : 3); k++)
             length += std::snprintf(line + length, sizeof line - length, "  %.1e (%3.0f%%)", terms[k], 100 * terms[k] / loss);
         length += std::snprintf(line + length, sizeof line - length, "  %.2e  %6d", alpha, nalpha);
-        if (mtp) length += std::isnan(linear) ? std::snprintf(line + length, sizeof line - length, "  %-13s", "-") : std::snprintf(line + length, sizeof line - length, "  %.7e", linear);
-        std::snprintf(line + length, sizeof line - length, "  %s", *inv_hess ? inv_hess : "-");
+        if (columns.linear) length += std::isnan(linear) ? std::snprintf(line + length, sizeof line - length, "  %-13s", "-") : std::snprintf(line + length, sizeof line - length, "  %.7e", linear);
+        if (columns.inv_hess) std::snprintf(line + length, sizeof line - length, "  %s", *inv_hess ? inv_hess : "-");
         *log << line << std::endl;
     }
 
     // Logs the steps a phase took since start, and their time.
     void log_phase_time(int steps, std::chrono::steady_clock::time_point start) {
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        log_event(log, "time", "%.3g s @ %d steps, %.2g s / step", seconds, steps, seconds / std::max(steps, 1));
+        log_event(log, "timing", "%.3g s @ %d steps, %.2g s / step", seconds, steps, seconds / std::max(steps, 1));
     }
 
     // Logs the time of the whole fit since start.
     void log_fit_time(std::chrono::steady_clock::time_point start) {
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        log_event(log, "time", "%.3g s for the fit", seconds);
+        log_event(log, "timing", "%.3g s for the fit", seconds);
     }
 
     // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
@@ -174,6 +181,7 @@ class Fit {
     std::function<void()> checkpoint;
 
     std::vector<double> coeffs;           // what potential holds, in its coefficient order
+    StepColumns columns;                  // the optional columns of the current phase's step lines
     double loss_terms[3] = {};            // the energy, force and stress terms of the last loss_grad on this rank
     std::vector<double> dloss_dforces;    // per-structure scratch
 };

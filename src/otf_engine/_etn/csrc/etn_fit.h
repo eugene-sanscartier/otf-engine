@@ -28,11 +28,16 @@ struct ETNFitOptions : FitOptions {
     double wolfe_c2 = 0.5;
     int bfgs_max_iters_no_improve = 10;
 
-    // The options as the log lists them.
-    std::string summary() const {
-        std::ostringstream text;
-        text << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", max_func_eval " << max_func_eval << ", " << FitOptions::summary() << (rescale ? "" : ", rescale false") << (skip_preinit ? ", skip_preinit" : "");
-        return text.str();
+    // The options as the log lists them, one line per group: stopping, loss weights, the algorithm's flags set.
+    std::vector<std::string> summary() const {
+        std::ostringstream stopping, algorithm;
+        stopping << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", max_func_eval " << max_func_eval;
+        if (!rescale) algorithm << "rescale false";
+        if (skip_preinit) algorithm << (algorithm.tellp() > 0 ? ", " : "") << "skip_preinit";
+
+        std::vector<std::string> lines = {stopping.str(), loss_weights()};
+        if (algorithm.tellp() > 0) lines.push_back(algorithm.str());
+        return lines;
     }
 };
 

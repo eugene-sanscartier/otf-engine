@@ -48,15 +48,20 @@ struct MTPFitOptions : FitOptions {
     double* inverse_hessian = nullptr;
     int inverse_hessian_size = 0;
 
-    // The options as the log lists them: the numbers, then the flags set.
-    std::string summary() const {
-        std::ostringstream text;
-        text << "iteration_limit " << iteration_limit << ", tolerance " << tolerance << ", " << FitOptions::summary() << ", penalty_weight " << penalty_weight << ", reg_param " << reg_param;
-        if (scale_by_force > 0) text << ", scale_by_force " << scale_by_force;
+    // The options as the log lists them, one line per group: stopping, loss weights, regularization, the algorithm's flags set.
+    std::vector<std::string> summary() const {
+        std::ostringstream stopping, weights, regularization, algorithm;
+        stopping << "iteration_limit " << iteration_limit << ", tolerance " << tolerance;
+        weights << loss_weights();
+        if (scale_by_force > 0) weights << ", scale_by_force " << scale_by_force;
+        regularization << "penalty_weight " << penalty_weight << ", reg_param " << reg_param;
         const std::pair<const char*, bool> flags[] = {{"varpro", varpro}, {"riemannian", riemannian}, {"reg_once", reg_once}, {"reg_at_main", reg_at_main}, {"no_orthogonalize", no_orthogonalize}, {"init_random", init_random}, {"skip_preinit", skip_preinit}, {"bfgs_only", bfgs_only}, {"radial_only", radial_only}, {"no_mindist_update", no_mindist_update}};
         for (const auto& [name, set] : flags)
-            if (set) text << ", " << name;
-        return text.str();
+            if (set) algorithm << (algorithm.tellp() > 0 ? ", " : "") << name;
+
+        std::vector<std::string> lines = {stopping.str(), weights.str(), regularization.str()};
+        if (algorithm.tellp() > 0) lines.push_back(algorithm.str());
+        return lines;
     }
 };
 
