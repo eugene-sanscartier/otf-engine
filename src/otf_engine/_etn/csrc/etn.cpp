@@ -358,6 +358,8 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
     bond_adjoints.resize(bonds_size);
     core_product_tangents.resize(core_products.size());
     core_product_adjoints.resize(core_product_ders.size());
+    radial_mixing_grad.resize(l_count);
+    for (int l = 0; l < l_count; l++) radial_mixing_grad[l].assign(radial_mixing[l].size(), 0.0);
 
     int nbr_offset = 0;
 
@@ -562,7 +564,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         // ---- Species coefficients ----
         loss_grad[species_columns + itype] += a;
 
-        // ---- Radial and species-pair coefficients ----
+        // ---- The radial mixing of each species pair ----
         for (int jj = 0; jj < valid_count; jj++) {
             const int pair = itype * species_count + list.types[cached_j[jj]];
             const double* ylm = neighbor_harmonics.data() + (size_t) jj * harmonic_count;
@@ -571,12 +573,9 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
             const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
             for (int l = 0; l < l_count; l++) {
-                const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
+                const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
                 const int shift = l == 0 ? 1 : 0;
-                const double* pair_coeffs = species_pair_coeffs[l].data() + pair * rank_s;
-                const double* radial = radial_basis_coeffs[l].data();
-                double* pair_grad = loss_grad + species_pair_columns[l] + pair * rank_s;
-                double* radial_grad = loss_grad + radial_columns[l];
+                double* mixing_grad = radial_mixing_grad[l].data() + (size_t) pair * n_rad * rank_r;
                 for (int n = 0; n < rank_r; n++) {
                     // adjoints of the channel's value and derivative
                     double value_adjoint = 0.0, der_adjoint = 0.0;
@@ -587,17 +586,31 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                         der_adjoint += ylm[index] * input_energy_ders[k];
                     }
                     der_adjoint *= dist_tangent;
-                    for (int np = 0; np < n_rad; np++) {
-                        const double s = value_adjoint * basis_vals[np] + der_adjoint * basis_ders[np];
-                        if (s == 0.0) continue;
-                        for (int k = 0; k < rank_s; k++) {
-                            const int index = k + rank_s * (np + n_rad * n);
-                            pair_grad[k] += s * radial[index];
-                            radial_grad[index] += s * pair_coeffs[k];
-                        }
-                    }
+                    for (int np = 0; np < n_rad; np++) mixing_grad[np * rank_r + n] += value_adjoint * basis_vals[np] + der_adjoint * basis_ders[np];
                 }
             }
+        }
+    }
+
+    // ---- Radial and species-pair coefficients, from S_l = A_l B_l ----
+    for (int l = 0; l < l_count; l++) {
+        const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
+        const double* radial = radial_basis_coeffs[l].data();
+        double* radial_grad = loss_grad + radial_columns[l];
+        for (int pair = 0; pair < species_count * species_count; pair++) {
+            const double* pair_coeffs = species_pair_coeffs[l].data() + pair * rank_s;
+            const double* mixing_grad = radial_mixing_grad[l].data() + (size_t) pair * n_rad * rank_r;
+            double* pair_grad = loss_grad + species_pair_columns[l] + pair * rank_s;
+            for (int n = 0; n < rank_r; n++)
+                for (int np = 0; np < n_rad; np++) {
+                    const double s = mixing_grad[np * rank_r + n];
+                    if (s == 0.0) continue;
+                    for (int k = 0; k < rank_s; k++) {
+                        const int index = k + rank_s * (np + n_rad * n);
+                        pair_grad[k] += s * radial[index];
+                        radial_grad[index] += s * pair_coeffs[k];
+                    }
+                }
         }
     }
 }

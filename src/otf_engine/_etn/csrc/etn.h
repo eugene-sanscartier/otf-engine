@@ -45,4 +45,6 @@ class ETN : public PairETN {
     std::vector<double> bond_adjoints;    // [bonds_size]
     std::vector<double> core_product_tangents;  // laid out as core_products
     std::vector<double> core_product_adjoints;  // laid out as core_product_ders
+    // dL/dS_l of each species pair's radial mixing over the structure: [l], laid out as radial_mixing
+    std::vector<std::vector<double>> radial_mixing_grad;
 };
