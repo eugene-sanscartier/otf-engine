@@ -71,7 +71,7 @@ def grade_dump(dump, potential_path, species=None):
 def grade_extrapolative_dumps(potential_path, extrapolative_dumps, species=None):
     """Grade every extrapolative dump on a process pool, one dump per task and one worker per core.
 
-    Returns the graded structures by dump, in the order the dumps finished. Workers never log.
+    Returns the graded structures by dump, in the order the dumps finished.
     """
     n_workers = min(os.process_cpu_count(), len(extrapolative_dumps))
     logger.info(f"Grading {len(extrapolative_dumps)} dumps on {n_workers} workers")
