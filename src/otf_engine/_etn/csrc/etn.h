@@ -1,19 +1,20 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Derivatives of an ETN's site energies, and of a loss built on its energy,
-   forces and virial, with respect to its coefficients.
+   Input and bond vectors of an ETN, and derivatives of its site energies,
+   and of a loss built on its energy, forces and virial, with respect to
+   its coefficients.
 ------------------------------------------------------------------------- */
 
 #pragma once
 
 #include "pair_etn.h"
 
-#include <utility>
-
 class ETN : public PairETN {
   public:
-    // PairETN's constructors: from a file or from a shape.
-    template <class... Args>
-    explicit ETN(Args&&... args) : PairETN(std::forward<Args>(args)...) { prepare_buffers(); }
+    using PairETN::PairETN;
+
+    // Per central atom, its input vector [inum * input_shape.size] and its bond vectors [inum * bonds_size];
+    // row ii for atom ilist[ii], laid out as get_input_shape() and get_bond_offset() give.
+    void eval_bonds(const NeighList& list, double* inputs_out, double* bonds_out);
 
     // dE_i/dc per central atom: [inum * coeff_count]; row ii for atom ilist[ii]. Throws when
     // given force_grad, since the ETN has no force gradients here.
@@ -24,20 +25,22 @@ class ETN : public PairETN {
     // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
-
   private:
-    // The working buffers of the derivatives, for the shape.
-    void prepare_buffers();
-    // Adds to grad the derivative of energy_weight * E_i, plus that of E_i's derivative along the
-    // neighbor displacements dloss_dforces and dloss_dvirial give, for central atom ii.
-    void accumulate_site_grad(const NeighList& list, int ii, int nbr_offset, double energy_weight, const double* dloss_dforces, const double* dloss_dvirial, double* grad);
-    // Adds mixing_adj, the adjoint of the radial mixing, into the radial and species-pair columns of grad.
-    void scatter_mixing_adj(double* grad) const;
+    // Grows the neighbor rows to jnum neighbors.
+    void grow_neighbor_rows(int jnum);
 
-    // Per central atom: v, its tangent along the neighbor displacements, and their adjoints;
-    // the bond vectors' tangents and adjoints; each neighbor's displacement
-    std::vector<double> site_input_vals, input_tangent, input_tangent_adj;
-    std::vector<double> site_bonds, bond_tangent, bond_tangent_adj;
-    std::vector<double> neighbor_displacements;  // [cache_size * 3]
-    std::vector<std::vector<double>> mixing_adj;  // [l] laid out as radial_mixing, zeroed by each derivative
+    // The neighbors of the current atom, each array in rows over the neighbors: the harmonics, the radial basis'
+    // values and derivatives; and eval_loss_grad's tangents of the harmonics and of the distance along the loss weight
+    int rows_size = 0;
+    std::vector<double> neighbor_harmonics;          // [rows_size * l_count^2]
+    std::vector<double> neighbor_radial_vals;        // [rows_size * radial_basis_size]
+    std::vector<double> neighbor_radial_ders;        // [rows_size * radial_basis_size]
+    std::vector<double> neighbor_harmonic_tangents;  // [rows_size * l_count^2]
+    std::vector<double> neighbor_dist_tangents;      // [rows_size]
+
+    // eval_loss_grad: per entry of the input and bond vectors, the tangent and the adjoint of the value.
+    std::vector<double> input_tangents;   // [input_shape.size]
+    std::vector<double> bond_tangents;    // [bonds_size]
+    std::vector<double> input_adjoints;   // [input_shape.size]
+    std::vector<double> bond_adjoints;    // [bonds_size]
 };

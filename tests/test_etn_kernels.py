@@ -80,8 +80,9 @@ def outputs(potentials, cells):
             prefix = f"{name}/s{s}/"
             for key in ("energy", "eatom", "forces", "virial"):
                 out[prefix + key] = numpy.asarray(result[key], dtype=numpy.float64)
-            out[prefix + "inputs"] = numpy.asarray(result["inputs"])
-            for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
+            bonds = potential.eval_bonds(nl)
+            out[prefix + "inputs"] = numpy.asarray(bonds["inputs"])
+            for b, (re_part, im_part) in enumerate(zip(bonds["bonds"], bonds["bonds_im"])):
                 out[prefix + f"bonds/{b}"] = numpy.asarray(re_part)
                 out[prefix + f"bonds_im/{b}"] = numpy.asarray(im_part)
             dloss_denergy, dloss_dvirial, dloss_dforces = loss_seeds(s, len(atoms))

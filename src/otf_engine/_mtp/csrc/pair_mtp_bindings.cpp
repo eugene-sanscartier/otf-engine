@@ -35,8 +35,6 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
         .def("get_alpha_moment_count", &PairMTP::get_alpha_moment_count)
         .def("get_alpha_index_basic_count", &PairMTP::get_alpha_index_basic_count)
         .def("get_alpha_index_times_count", &PairMTP::get_alpha_index_times_count)
-        .def("set_min_cutoff", &PairMTP::set_min_cutoff, py::arg("d"),
-             "Set the radial basis's minimum distance.")
 
         .def("get_radial_basis_coeffs",
              [](const PairMTP& self) {
@@ -58,15 +56,13 @@ Returns a dict with "energy", "eatom" (n_atoms), "forces" (n_atoms, 3) and
 
         .def("set_linear_coeffs",
              [](PairMTP& self, DoubleArray arr) {
-                 if (arr.size() != self.get_alpha_scalar_count())
-                     throw std::runtime_error("set_linear_coeffs: expected length " + std::to_string(self.get_alpha_scalar_count()));
+                 check_length(arr, self.get_alpha_scalar_count(), "set_linear_coeffs");
                  self.set_linear_coeffs(arr.data());
              },
              py::arg("coeffs"), "Set linear (moment tensor) coefficients. Shape: (alpha_scalar_count,)")
         .def("set_radial_basis_coeffs",
              [](PairMTP& self, DoubleArray arr) {
-                 if (arr.size() != self.get_radial_coeff_count())
-                     throw std::runtime_error("set_radial_basis_coeffs: expected length " + std::to_string(self.get_radial_coeff_count()));
+                 check_length(arr, self.get_radial_coeff_count(), "set_radial_basis_coeffs");
                  self.set_radial_basis_coeffs(arr.data());
              },
              py::arg("coeffs"), "Set radial basis coefficients. Shape: (species^2, radial_func_count, radial_basis_size) or flat.");

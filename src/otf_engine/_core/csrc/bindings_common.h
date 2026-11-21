@@ -85,6 +85,12 @@ py::array_t<T> to_array(const std::vector<T>& values, std::vector<py::ssize_t> s
     return py::array_t<T>(shape, values.data());
 }
 
+// Raises unless arr holds length values; what, the setter's name, prefixes the error.
+inline void check_length(const DoubleArray& arr, py::ssize_t length, const char* what) {
+    if (arr.size() != length)
+        throw std::runtime_error(std::string(what) + ": expected length " + std::to_string(length));
+}
+
 inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
     DoubleArray a(shape);
     std::fill(a.mutable_data(), a.mutable_data() + a.size(), 0.0);

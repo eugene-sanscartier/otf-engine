@@ -62,6 +62,8 @@ class Pair {
 
     void set_species_coeffs(const double* c) { std::copy(c, c + species_count, species_coeffs.begin()); }
     void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
+    // Sets the minimum distance of the radial basis.
+    void set_min_cutoff(double d) { min_cutoff = d; radial_basis->min_cutoff = d; }
     void set_trained(bool t) { trained = t; }
 
   protected:

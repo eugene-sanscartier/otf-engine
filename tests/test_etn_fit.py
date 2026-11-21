@@ -95,9 +95,11 @@ def write_training_file(path, potential, labelled, settings):
 def tensors(potential, coeffs, atoms):
     """Energy, forces, virial, input and bond vectors of potential at coeffs on atoms."""
     potential.set_coeffs(coeffs)
-    result = potential.compute(neighbors(atoms, potential.get_max_cutoff()))
-    out = {key: numpy.asarray(result[key]) for key in ("energy", "forces", "virial", "inputs")}
-    for b, (re_part, im_part) in enumerate(zip(result["bonds"], result["bonds_im"])):
+    nl = neighbors(atoms, potential.get_max_cutoff())
+    result, bonds = potential.compute(nl), potential.eval_bonds(nl)
+    out = {key: numpy.asarray(result[key]) for key in ("energy", "forces", "virial")}
+    out["inputs"] = numpy.asarray(bonds["inputs"])
+    for b, (re_part, im_part) in enumerate(zip(bonds["bonds"], bonds["bonds_im"])):
         out[f"bonds/{b}"], out[f"bonds_im/{b}"] = numpy.asarray(re_part), numpy.asarray(im_part)
     return out
 

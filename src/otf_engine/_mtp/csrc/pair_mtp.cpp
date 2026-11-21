@@ -34,6 +34,18 @@ void PairMTP::set_coeffs(const double* c) {
     set_linear_coeffs(c + radial_coeff_count + species_count);
 }
 
+void PairMTP::set_species_count(int n) {
+    const int kept = std::min(n, species_count);
+    std::vector<double> sized((size_t) n * n * radial_coeff_count_per_pair, 0.0);
+    for (int si = 0; si < kept; si++)
+        for (int sj = 0; sj < kept; sj++)
+            std::copy_n(radial_basis_coeffs.begin() + (si * species_count + sj) * radial_coeff_count_per_pair, radial_coeff_count_per_pair, sized.begin() + (si * n + sj) * radial_coeff_count_per_pair);
+    radial_basis_coeffs = std::move(sized);
+    species_coeffs.resize(n, 0.0);
+    species_count = n;
+    radial_coeff_count = n * n * radial_coeff_count_per_pair;
+}
+
 /* ----------------------------------------------------------------------
    Main Computation Function
    ---------------------------------------------------------------------- */

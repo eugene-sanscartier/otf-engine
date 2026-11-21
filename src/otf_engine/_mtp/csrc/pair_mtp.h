@@ -51,23 +51,19 @@ class PairMTP : public Pair {
 
     void set_linear_coeffs(const double* c) { std::copy(c, c + alpha_scalar_count, linear_coeffs.begin()); }
     void set_radial_basis_coeffs(const double* c) { std::copy(c, c + radial_coeff_count, radial_basis_coeffs.begin()); }
-    // Mirrors mlip-3 AddSpecies(): min_val = 0.99 * min(training distances).
-    void set_min_cutoff(double d) { min_cutoff = d; radial_basis->min_cutoff = d; }
-    // Sizes the coefficients for n species; set them afterwards.
-    void set_species_count(int n) {
-        species_count = n;
-        radial_coeff_count = n * n * radial_coeff_count_per_pair;
-        radial_basis_coeffs.resize(radial_coeff_count);
-        species_coeffs.resize(n);
-    }
+    // Sizes the coefficients for n species, keeping each kept pair's radial coefficients and each kept species'
+    // site energy; the new entries are zero. Set them afterwards.
+    void set_species_count(int n);
 
   protected:
     void read_file(std::istream& is);
+    
     // Sizes the coefficients and working buffers for the basis members, and checks the contractions.
     void prepare_basis();
-    // mlip-3's MLMTPR::Load defaults, an untrained potential's coefficients.
-    void reset_coeffs();
     void prepare_angular();
+
+    void reset_coeffs();    // mlip-3's MLMTPR::Load defaults, an untrained potential's coefficients.
+
 
     std::string potential_tag;
 

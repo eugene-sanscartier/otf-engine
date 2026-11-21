@@ -49,32 +49,152 @@ void PairETN::compute(const NeighList& list) {
     eatom.assign(list.n_atoms, 0.0);
     forces.assign((size_t) list.n_atoms * 3, 0.0);
     virial.fill(0.0);
-    inputs.assign((size_t) list.inum * input_shape.size, 0.0);
-    bonds.assign((size_t) list.inum * bonds_size, 0.0);
 
     // Loop over all provided neighbourhoods
     for (int ii = 0; ii < list.inum; ii++) {
+        int valid_count = 0;
         const int i = list.ilist[ii];
         const int itype = list.types[i];
-        double* v = inputs.data() + (size_t) ii * input_shape.size;
-        const int valid_count = site_input(list, ii, nbr_offset, v);
-        nbr_offset += list.numneigh[ii];
+        const int jnum = list.numneigh[ii];
+        const int* nbrs = list.firstneigh + nbr_offset;
+        const double* dr = list.displacements + nbr_offset * 3;
+        nbr_offset += jnum;
+
+        grow_cache(jnum);
+
+        // Clear the input and bond vectors and their derivatives
+        std::fill(input_vals.begin(), input_vals.end(), 0.0);
+        std::fill(bond_vals.begin(), bond_vals.end(), 0.0);
+        std::fill(input_energy_ders.begin(), input_energy_ders.end(), 0.0);
+        std::fill(bond_energy_ders.begin(), bond_energy_ders.end(), 0.0);
+        input_vals[0] = 1.0;
+        bond_vals[bond_offsets[0]] = 1.0;
+
+        // ------------ Calculate the Input Vector ------------
+        for (int jj = 0; jj < jnum; jj++) {
+            const int j = nbrs[jj];
+            const int jtype = list.types[j];
+            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
+            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+
+            if (rsq > max_cutoff_sq) continue;
+            cached_j[valid_count] = j;
+            valid_dr[valid_count] = {r[0], r[1], r[2]};
+
+            const double dist = std::sqrt(rsq);
+            const double inv_dist = 1.0 / dist;
+            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+            double* cache = neighbor_cache.data() + (size_t) valid_count * cache_stride;
+            cache[0] = inv_dist;
+            double* ylm = cache + 1;
+            double* ylm_grads = ylm + harmonic_count;
+            double* mixed = ylm_grads + 3 * harmonic_count;
+            double* mixed_ders = mixed + mixed_size;
+            radial_basis->calc_radial_basis_ders(dist);
+            const double* basis_vals = radial_basis->radial_basis_vals.data();
+            const double* basis_ders = radial_basis->radial_basis_ders.data();
+            harmonics.compute(u);
+            std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
+            std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
+
+            // The radial channels of the species pair, and their products with the harmonics
+            for (int l = 0; l < l_count; l++) {
+                const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
+                const double* s = radial_mixing[l].data() + (size_t) (itype * species_count + jtype) * n_rad * rank_r;
+                double* b = mixed + mixed_offsets[l];
+                double* db = mixed_ders + mixed_offsets[l];
+                for (int n = 0; n < rank_r; n++) {
+                    double val = 0, der = 0;
+                    for (int np = 0; np < n_rad; np++) {
+                        val += basis_vals[np] * s[np * rank_r + n];
+                        der += basis_ders[np] * s[np * rank_r + n];
+                    }
+                    b[n] = val;
+                    db[n] = der;
+                }
+                const int shift = l == 0 ? 1 : 0;
+                for (int m = -l; m <= l; m++) {
+                    const double y = ylm[l * l + l + m];
+                    double* pv = input_vals.data() + input_shape.index(l, m) + shift;
+                    for (int n = 0; n < rank_r; n++) pv[n] += y * b[n];
+                }
+            }
+            valid_count++;
+        }
 
         // ------------ Tensor Train, Forwards ------------
-        double* bond = bonds.data() + (size_t) ii * bonds_size;
-        train_forward(v, bond);
+        for (int c = 0; c < core_count; c++) {
+            const CovariantShape& left = bond_shapes[c];
+            const CovariantShape& right = bond_shapes[c + 1];
+            for (const CoreTerm& t : core_terms[c]) {
+                const Core& core = t.imaginary ? cores_im[c] : cores[c];
+                const double* u = bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
+                double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
+                for (const CoreBlock& block : core.blocks) {
+                    const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    for (int e = block.w_begin; e < block.w_end; e++) {
+                        const WignerEntry& w = wigner[e];
+                        const double* pu = u + left.index(block.l1, w.m1);
+                        const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
+                        double* po = out + right.index(block.l3, w.m3);
+                        for (int n3 = 0; n3 < n3_count; n3++) {
+                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
+                            double sum = 0;
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double* c2 = c3 + n2 * block.stride2;
+                                double prod = 0;
+                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
+                                sum += prod * pv[n2];
+                            }
+                            po[n3] += w.w * sum;
+                        }
+                    }
+                }
+            }
+        }
 
-        const double nbh_energy = bond[bond_offsets[core_count]] + species_coeffs[itype];
-        eatom[i] += nbh_energy;
+        const double nbh_energy = bond_vals[bond_offsets[core_count]] + species_coeffs[itype];
+        eatom[i] = nbh_energy;
         energy += nbh_energy;
 
-        // ------------ Tensor Train, Backwards ------------
-        std::fill(bond_adj.begin(), bond_adj.end(), 0.0);
-        std::fill(input_adj.begin(), input_adj.end(), 0.0);
-        bond_adj[bond_offsets[core_count]] = 1.0;
-        train_backward(v, bond, bond_adj.data(), input_adj.data(), nullptr, nullptr);
+        // =========== Begin Backpropagation ===========
+        bond_energy_ders[bond_offsets[core_count]] = 1.0;
+        for (int c = core_count - 1; c >= 0; c--) {
+            const CovariantShape& left = bond_shapes[c];
+            const CovariantShape& right = bond_shapes[c + 1];
+            for (const CoreTerm& t : core_terms[c]) {
+                const Core& core = t.imaginary ? cores_im[c] : cores[c];
+                const int in = bond_offsets[c] + t.in_part * left.size;
+                const int out = bond_offsets[c + 1] + t.out_part * right.size;
+                const double* u = bond_vals.data() + in;
+                double* u_ders = bond_energy_ders.data() + in;
+                for (const CoreBlock& block : core.blocks) {
+                    const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    for (int e = block.w_begin; e < block.w_end; e++) {
+                        const WignerEntry& w = wigner[e];
+                        const int iu = left.index(block.l1, w.m1), iv = input_shape.index(block.l2, w.m2);
+                        const double* po = bond_energy_ders.data() + out + right.index(block.l3, w.m3);
+                        for (int n3 = 0; n3 < n3_count; n3++) {
+                            const double g = w.w * po[n3];
+                            if (g == 0.0) continue;
+                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double* c2 = c3 + n2 * block.stride2;
+                                const double gv = g * input_vals[iv + n2];
+                                double prod = 0;
+                                for (int n1 = 0; n1 < n1_count; n1++) {
+                                    prod += c2[n1] * u[iu + n1];
+                                    u_ders[iu + n1] += gv * c2[n1];
+                                }
+                                input_energy_ders[iv + n2] += g * prod;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        // ------------ Forces Through the Input Vector ------------
+        //------------ Compute forces from the input vector's derivatives ------------
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const double* r = valid_dr[jj].data();
@@ -94,14 +214,14 @@ void PairETN::compute(const NeighList& list) {
                 const int shift = l == 0 ? 1 : 0;
                 for (int m = -l; m <= l; m++) {
                     const int index = l * l + l + m;
-                    const double* adj = input_adj.data() + input_shape.index(l, m) + shift;
-                    double ylm_adj = 0, mixed_adj = 0;
+                    const double* ders = input_energy_ders.data() + input_shape.index(l, m) + shift;
+                    double ylm_der = 0, mixed_der = 0;
                     for (int n = 0; n < rank_r; n++) {
-                        ylm_adj += b[n] * adj[n];
-                        mixed_adj += db[n] * adj[n];
+                        ylm_der += b[n] * ders[n];
+                        mixed_der += db[n] * ders[n];
                     }
-                    for (int a = 0; a < 3; a++) angular[a] += ylm_adj * ylm_grads[index * 3 + a];
-                    radial_force += ylm[index] * mixed_adj;
+                    for (int a = 0; a < 3; a++) angular[a] += ylm_der * ylm_grads[index * 3 + a];
+                    radial_force += ylm[index] * mixed_der;
                 }
             }
 
@@ -124,159 +244,6 @@ void PairETN::compute(const NeighList& list) {
             virial[3] -= r[0] * temp_force[1];    //xy
             virial[4] -= r[0] * temp_force[2];    //xz
             virial[5] -= r[1] * temp_force[2];    //yz
-        }
-    }
-}
-
-/* ----------------------------------------------------------------------
-   The input vector of one central atom, and the tensor train each way.
-------------------------------------------------------------------------- */
-int PairETN::site_input(const NeighList& list, int ii, int nbr_offset, double* v) {
-    const int l_count = (int) species_ranks.size();
-    const int harmonic_count = l_count * l_count;
-    const int mixed_size = mixed_offsets[l_count];
-    const int i = list.ilist[ii];
-    const int itype = list.types[i];
-    const int jnum = list.numneigh[ii];
-    const int* nbrs = list.firstneigh + nbr_offset;
-    const double* dr = list.displacements + nbr_offset * 3;
-    int valid_count = 0;
-
-    grow_cache(jnum);
-
-    std::fill(v, v + input_shape.size, 0.0);
-    v[0] = 1.0;
-    for (int jj = 0; jj < jnum; jj++) {
-        const int j = nbrs[jj];
-        const int jtype = list.types[j];
-        const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
-        const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
-
-        if (rsq >= max_cutoff_sq) continue;
-        cached_j[valid_count] = j;
-        valid_dr[valid_count] = {r[0], r[1], r[2]};
-
-        const double dist = std::sqrt(rsq);
-        const double inv_dist = 1.0 / dist;
-        const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-        double* cache = neighbor_cache.data() + (size_t) valid_count * cache_stride;
-        cache[0] = inv_dist;
-        double* ylm = cache + 1;
-        double* ylm_grads = ylm + harmonic_count;
-        double* mixed = ylm_grads + 3 * harmonic_count;
-        double* mixed_ders = mixed + mixed_size;
-        valid_count++;
-
-        radial_basis->calc_radial_basis_ders(dist);
-        const double* basis_vals = radial_basis->radial_basis_vals.data();
-        const double* basis_ders = radial_basis->radial_basis_ders.data();
-        harmonics.compute(u);
-        std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
-        std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
-
-        for (int l = 0; l < l_count; l++) {
-            const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
-            const double* s = radial_mixing[l].data() + (size_t) (itype * species_count + jtype) * n_rad * rank_r;
-            double* b = mixed + mixed_offsets[l];
-            double* db = mixed_ders + mixed_offsets[l];
-            for (int n = 0; n < rank_r; n++) {
-                double val = 0, der = 0;
-                for (int np = 0; np < n_rad; np++) {
-                    val += basis_vals[np] * s[np * rank_r + n];
-                    der += basis_ders[np] * s[np * rank_r + n];
-                }
-                b[n] = val;
-                db[n] = der;
-            }
-            const int shift = l == 0 ? 1 : 0;
-            for (int m = -l; m <= l; m++) {
-                const double y = ylm[l * l + l + m];
-                double* pv = v + input_shape.index(l, m) + shift;
-                for (int n = 0; n < rank_r; n++) pv[n] += y * b[n];
-            }
-        }
-    }
-    return valid_count;
-}
-
-void PairETN::train_forward(const double* v, double* bond) const {
-    std::fill(bond, bond + bonds_size, 0.0);
-    bond[bond_offsets[0]] = 1.0;
-    for (int c = 0; c < get_core_count(); c++) {
-        const CovariantShape& left = bond_shapes[c];
-        const CovariantShape& right = bond_shapes[c + 1];
-        for (const CoreTerm& t : core_terms[c]) {
-            const Core& core = t.imaginary ? cores_im[c] : cores[c];
-            contract(core, left, right, bond + bond_offsets[c] + t.in_part * left.size, v, bond + bond_offsets[c + 1] + t.out_part * right.size);
-        }
-    }
-}
-
-void PairETN::train_backward(const double* v, const double* bond, double* bond_adj, double* v_adj, double* const* core_adj, double* const* core_im_adj) const {
-    for (int c = get_core_count() - 1; c >= 0; c--) {
-        const CovariantShape& left = bond_shapes[c];
-        const CovariantShape& right = bond_shapes[c + 1];
-        for (const CoreTerm& t : core_terms[c]) {
-            const Core& core = t.imaginary ? cores_im[c] : cores[c];
-            double* c_adj = core_adj ? (t.imaginary ? core_im_adj[c] : core_adj[c]) : nullptr;
-            const int in = bond_offsets[c] + t.in_part * left.size;
-            const int out = bond_offsets[c + 1] + t.out_part * right.size;
-            contract_adjoint(core, left, right, bond + in, v, bond_adj + out, bond_adj + in, v_adj, c_adj);
-        }
-    }
-}
-
-void PairETN::contract(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const {
-    const double* c = core.coeffs.data();
-    for (const CoreBlock& block : core.blocks) {
-        const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
-        for (int e = block.w_begin; e < block.w_end; e++) {
-            const WignerEntry& w = wigner[e];
-            const double* pu = u + left.index(block.l1, w.m1);
-            const double* pv = v + input_shape.index(block.l2, w.m2);
-            double* po = out + right.index(block.l3, w.m3);
-            for (int n3 = 0; n3 < n3_count; n3++) {
-                const double* c3 = c + block.base + n3 * block.stride3;
-                double sum = 0;
-                for (int n2 = 0; n2 < n2_count; n2++) {
-                    const double* c2 = c3 + n2 * block.stride2;
-                    double t = 0;
-                    for (int n1 = 0; n1 < n1_count; n1++) t += c2[n1] * pu[n1];
-                    sum += t * pv[n2];
-                }
-                po[n3] += w.w * sum;
-            }
-        }
-    }
-}
-
-void PairETN::contract_adjoint(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const {
-    const double* c = core.coeffs.data();
-    for (const CoreBlock& block : core.blocks) {
-        const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
-        for (int e = block.w_begin; e < block.w_end; e++) {
-            const WignerEntry& w = wigner[e];
-            const int iu = left.index(block.l1, w.m1), iv = input_shape.index(block.l2, w.m2);
-            const double* po = out_adj + right.index(block.l3, w.m3);
-            for (int n3 = 0; n3 < n3_count; n3++) {
-                const double g = w.w * po[n3];
-                if (g == 0.0) continue;
-                const int c3 = block.base + n3 * block.stride3;
-                for (int n2 = 0; n2 < n2_count; n2++) {
-                    const double* c2 = c + c3 + n2 * block.stride2;
-                    const double gv = g * v[iv + n2];
-                    double t = 0;
-                    for (int n1 = 0; n1 < n1_count; n1++) {
-                        t += c2[n1] * u[iu + n1];
-                        u_adj[iu + n1] += gv * c2[n1];
-                    }
-                    v_adj[iv + n2] += g * t;
-                    if (c_adj) {
-                        double* a2 = c_adj + c3 + n2 * block.stride2;
-                        for (int n1 = 0; n1 < n1_count; n1++) a2[n1] += gv * u[iu + n1];
-                    }
-                }
-            }
         }
     }
 }
@@ -495,8 +462,10 @@ void PairETN::prepare_cores() {
     prepare_columns();
 
     cache_stride = 1 + 4 * l_count * l_count + 2 * mixed_offsets[l_count];
-    input_adj.resize(input_shape.size);
-    bond_adj.resize(bonds_size);
+    input_vals.resize(input_shape.size);
+    bond_vals.resize(bonds_size);
+    input_energy_ders.resize(input_shape.size);
+    bond_energy_ders.resize(bonds_size);
 }
 
 // The first column of each coefficient block in get_coeffs' order, for the current shape and species count.

@@ -109,6 +109,7 @@ number    : the number the error tables name it by
         .def("get_max_cutoff", &Pair::get_max_cutoff)
         .def("get_scaling", &Pair::get_scaling)
         .def("set_scaling", &Pair::set_scaling, py::arg("scaling"), "Set the global scaling parameter.")
+        .def("set_min_cutoff", &Pair::set_min_cutoff, py::arg("d"), "Set the radial basis's minimum distance.")
         .def("is_trained", &Pair::is_trained, "False for a file without coefficients, which holds the reference code's initial values.")
         .def("set_trained", &Pair::set_trained, py::arg("trained"))
         .def("get_potential_name", &Pair::get_potential_name)
@@ -118,8 +119,7 @@ number    : the number the error tables name it by
              "ndarray float64 (species_count)  — per-species reference energies")
         .def("set_species_coeffs",
              [](Pair& self, DoubleArray arr) {
-                 if (arr.size() != self.get_species_count())
-                     throw std::runtime_error("set_species_coeffs: expected length " + std::to_string(self.get_species_count()));
+                 check_length(arr, self.get_species_count(), "set_species_coeffs");
                  self.set_species_coeffs(arr.data());
              },
              py::arg("coeffs"), "Set per-species reference energies. Shape: (species_count,)")
@@ -132,8 +132,7 @@ number    : the number the error tables name it by
              "Every coefficient as one vector, in the order of the potential's kind.")
         .def("set_coeffs",
              [](Pair& self, DoubleArray arr) {
-                 if (arr.size() != self.coeff_count())
-                     throw std::runtime_error("set_coeffs: expected length " + std::to_string(self.coeff_count()));
+                 check_length(arr, self.coeff_count(), "set_coeffs");
                  self.set_coeffs(arr.data());
              },
              py::arg("coeffs"))

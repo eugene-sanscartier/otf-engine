@@ -3,8 +3,9 @@
 The binary implementation lives in otf_engine._etn._etn_ext, whose classes derive
 from _core_ext's Pair.
 
-    PairETN          energy, forces, virial, and each atom's input and bond vectors (a Pair)
-    ETN              + derivatives of site energies and of a loss w.r.t. the coefficients
+    PairETN          energy, forces, virial (a Pair)
+    ETN              + each atom's input and bond vectors, and derivatives of site energies
+                       and of a loss w.r.t. the coefficients
     fit_etn          fits an ETN with ETNFit
     real_harmonics   the real spherical harmonics the input vector is built on
     wigner_3j        3-j symbols of complex harmonics

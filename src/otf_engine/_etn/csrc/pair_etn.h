@@ -59,14 +59,11 @@ class PairETN : public Pair {
     PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size);
 
     // Energy, per-atom energies, forces and virial of the central atoms in list,
-    // and each central atom's input and bond vectors, left in the members below.
+    // left in the members below.
     void compute(const NeighList& list) override;
 
-    const std::vector<double>& get_inputs() const { return inputs; }    // [inum * input_shape.size]
-    const std::vector<double>& get_bonds() const { return bonds; }      // [inum * bonds_size]
-
     // Bond b of the tensor train: its layout, and the offset of its real part within one atom's
-    // block of get_bonds(); the imaginary part follows it, and is zero outside bonds 2 .. d-2.
+    // bond vectors (ETN::eval_bonds); the imaginary part follows it, and is zero outside bonds 2 .. d-2.
     const CovariantShape& get_bond_shape(int b) const { return bond_shapes[b]; }
     int get_bond_offset(int b) const { return bond_offsets[b]; }
     int get_bonds_size() const { return bonds_size; }
@@ -107,19 +104,6 @@ class PairETN : public Pair {
     void prepare_columns();
     void prepare_radial_mixing();
 
-    // The input vector v of central atom ii, whose neighbors start at nbr_offset in list; fills
-    // cached_j, valid_dr and neighbor_cache, and returns the count of neighbors within the cutoff.
-    int site_input(const NeighList& list, int ii, int nbr_offset, double* v);
-    // The bond vectors of v, into bond [bonds_size], from bond 0 = 1.
-    void train_forward(const double* v, double* bond) const;
-    // From bond_adj, the adjoint of bond, adds the adjoints of v into v_adj and, when core_adj and
-    // core_im_adj are given ([core] pointers to each part's coefficient adjoints), of the cores.
-    void train_backward(const double* v, const double* bond, double* bond_adj, double* v_adj, double* const* core_adj, double* const* core_im_adj) const;
-
-    // One core part applied to (u, v), added into out, and its adjoint; c_adj may be null.
-    void contract(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, double* out) const;
-    void contract_adjoint(const Core& core, const CovariantShape& left, const CovariantShape& right, const double* u, const double* v, const double* out_adj, double* u_adj, double* v_adj, double* c_adj) const;
-
     // Shape: per l of the input, the species rank, radial functions and radial rank;
     // per bond, its rank per l, {1} at both ends
     std::vector<int> species_ranks;
@@ -154,13 +138,11 @@ class PairETN : public Pair {
 
     RealHarmonics harmonics{1};
 
-    // Results of compute beside Pair's
-    std::vector<double> inputs;  // [inum * input_shape.size]
-    std::vector<double> bonds;   // [inum * bonds_size]
-
-    // Adjoints of the backwards pass
-    std::vector<double> input_adj;  // [input_shape.size]
-    std::vector<double> bond_adj;   // [bonds_size]
+    // Tensor train, forwards and backwards pass, for the current atom
+    std::vector<double> input_vals;         // [input_shape.size] the input vector v, the constant 1 first
+    std::vector<double> bond_vals;          // [bonds_size] the bond vectors, bond 0 = 1
+    std::vector<double> input_energy_ders;  // [input_shape.size] dE_i/dv
+    std::vector<double> bond_energy_ders;   // [bonds_size] dE_i/dbond
 
     // neighbor_cache holds per neighbor 1/dist, Y, grad Y, the radial channels and their ders:
     // cache_stride is 1 + 4 * l_count^2 + 2 * radial-rank channels
