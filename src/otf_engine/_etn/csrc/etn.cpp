@@ -69,20 +69,30 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
                 double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    const int m1_stride = n3_count * n2_count;
+                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+
+                    // The block contracted with the left bond, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const double* pu = u + left.index(block.l1, m1);
+                        double* products = block_products + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
+                                double prod = 0;
+                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
+                                products[n3 * n2_count + n2] = prod;
+                            }
+                    }
+
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const double* pu = u + left.index(block.l1, w.m1);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
                         const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
                         double* po = out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
-                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
                             double sum = 0;
-                            for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = c3 + n2 * block.stride2;
-                                double prod = 0;
-                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
-                                sum += prod * pv[n2];
-                            }
+                            for (int n2 = 0; n2 < n2_count; n2++) sum += products[n3 * n2_count + n2] * pv[n2];
                             po[n3] += w.w * sum;
                         }
                     }
@@ -191,20 +201,30 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    const int m1_stride = n3_count * n2_count;
+                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+
+                    // The block contracted with the left bond, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const double* pu = u + left.index(block.l1, m1);
+                        double* products = block_products + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
+                                double prod = 0;
+                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
+                                products[n3 * n2_count + n2] = prod;
+                            }
+                    }
+
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const double* pu = u + left.index(block.l1, w.m1);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
                         const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
                         double* po = out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
-                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
                             double sum = 0;
-                            for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = c3 + n2 * block.stride2;
-                                double prod = 0;
-                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
-                                sum += prod * pv[n2];
-                            }
+                            for (int n2 = 0; n2 < n2_count; n2++) sum += products[n3 * n2_count + n2] * pv[n2];
                             po[n3] += w.w * sum;
                         }
                     }
@@ -227,27 +247,44 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 double* core_ders = row + (t.imaginary ? core_im_columns[c] : core_columns[c]);
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    const int m1_stride = n3_count * n2_count;
+                    const int m1_count = 2 * block.l1 + 1;
+                    const double* block_products = core_products.data() + t.products_offset + block.products_offset;
+
+                    // The input's derivatives, and the products' summed per m1
+                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, 0.0);
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const int iu = left.index(block.l1, w.m1), iv = input_shape.index(block.l2, w.m2);
+                        const int iv = input_shape.index(block.l2, w.m2);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
+                        double* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
                         const double* po = bond_energy_ders.data() + out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             const double g = w.w * po[n3];
                             if (g == 0.0) continue;
-                            const int c3 = block.base + n3 * block.stride3;
                             for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = core.coeffs.data() + c3 + n2 * block.stride2;
-                                double* c2_ders = core_ders + c3 + n2 * block.stride2;
-                                const double gv = g * input_vals[iv + n2];
-                                double prod = 0;
-                                for (int n1 = 0; n1 < n1_count; n1++) {
-                                    prod += c2[n1] * u[iu + n1];
-                                    u_ders[iu + n1] += gv * c2[n1];
-                                    c2_ders[n1] += gv * u[iu + n1];
-                                }
-                                input_energy_ders[iv + n2] += g * prod;
+                                input_energy_ders[iv + n2] += g * products[n3 * n2_count + n2];
+                                product_ders[n3 * n2_count + n2] += g * input_vals[iv + n2];
                             }
                         }
+                    }
+
+                    // The left bond's and the core's derivatives, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const int iu = left.index(block.l1, m1);
+                        const double* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double d = product_ders[n3 * n2_count + n2];
+                                if (d == 0.0) continue;
+                                const int c2_offset = block.base + n3 * block.stride3 + n2 * block.stride2;
+                                const double* c2 = core.coeffs.data() + c2_offset;
+                                double* c2_ders = core_ders + c2_offset;
+                                for (int n1 = 0; n1 < n1_count; n1++) {
+                                    u_ders[iu + n1] += d * c2[n1];
+                                    c2_ders[n1] += d * u[iu + n1];
+                                }
+                            }
                     }
                 }
             }
@@ -319,6 +356,8 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
     bond_tangents.resize(bonds_size);
     input_adjoints.resize(input_shape.size);
     bond_adjoints.resize(bonds_size);
+    core_product_tangents.resize(core_products.size());
+    core_product_adjoints.resize(core_product_ders.size());
 
     int nbr_offset = 0;
 
@@ -413,19 +452,37 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 const int out = bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
-                    for (int e = block.w_begin; e < block.w_end; e++) {
-                        const WignerEntry& w = wigner[e];
-                        const int iu = in + left.index(block.l1, w.m1), iv = input_shape.index(block.l2, w.m2), io = out + right.index(block.l3, w.m3);
-                        for (int n3 = 0; n3 < n3_count; n3++) {
-                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
-                            double sum = 0, sum_tangent = 0;
+                    const int m1_stride = n3_count * n2_count;
+                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    double* block_product_tangents = core_product_tangents.data() + t.products_offset + block.products_offset;
+
+                    // The block contracted with the left bond and its tangent, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const int iu = in + left.index(block.l1, m1);
+                        double* products = block_products + (m1 + block.l1) * m1_stride;
+                        double* product_tangents = block_product_tangents + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
                             for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = c3 + n2 * block.stride2;
+                                const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
                                 double prod = 0, prod_tangent = 0;
                                 for (int n1 = 0; n1 < n1_count; n1++) {
                                     prod += c2[n1] * bond_vals[iu + n1];
                                     prod_tangent += c2[n1] * bond_tangents[iu + n1];
                                 }
+                                products[n3 * n2_count + n2] = prod;
+                                product_tangents[n3 * n2_count + n2] = prod_tangent;
+                            }
+                    }
+
+                    for (int e = block.w_begin; e < block.w_end; e++) {
+                        const WignerEntry& w = wigner[e];
+                        const int iv = input_shape.index(block.l2, w.m2), io = out + right.index(block.l3, w.m3);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
+                        const double* product_tangents = block_product_tangents + (w.m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++) {
+                            double sum = 0, sum_tangent = 0;
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double prod = products[n3 * n2_count + n2], prod_tangent = product_tangents[n3 * n2_count + n2];
                                 sum += prod * input_vals[iv + n2];
                                 sum_tangent += prod_tangent * input_vals[iv + n2] + prod * input_tangents[iv + n2];
                             }
@@ -450,31 +507,53 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 double* core_grad = loss_grad + (t.imaginary ? core_im_columns[c] : core_columns[c]);
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    const int m1_stride = n3_count * n2_count;
+                    const int m1_count = 2 * block.l1 + 1;
+                    const double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    const double* block_product_tangents = core_product_tangents.data() + t.products_offset + block.products_offset;
+
+                    // The input's derivatives and adjoints, and the products' summed per m1
+                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, 0.0);
+                    std::fill(core_product_adjoints.begin(), core_product_adjoints.begin() + m1_count * m1_stride, 0.0);
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const int iu = in + left.index(block.l1, w.m1), iv = input_shape.index(block.l2, w.m2), io = out + right.index(block.l3, w.m3);
+                        const int iv = input_shape.index(block.l2, w.m2), io = out + right.index(block.l3, w.m3);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
+                        const double* product_tangents = block_product_tangents + (w.m1 + block.l1) * m1_stride;
+                        double* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
+                        double* product_adjoints = core_product_adjoints.data() + (w.m1 + block.l1) * m1_stride;
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             const double G = w.w * bond_energy_ders[io + n3];
                             const double A = w.w * bond_adjoints[io + n3];
                             if (G == 0.0 && A == 0.0) continue;
-                            const int c3 = block.base + n3 * block.stride3;
                             for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = core.coeffs.data() + c3 + n2 * block.stride2;
-                                double* c2_grad = core_grad + c3 + n2 * block.stride2;
-                                const double Gv = G * input_vals[iv + n2];
-                                const double Av = A * input_vals[iv + n2] + G * input_tangents[iv + n2];
-                                double prod = 0, prod_tangent = 0;
+                                const int k = n3 * n2_count + n2;
+                                input_energy_ders[iv + n2] += G * products[k];
+                                input_adjoints[iv + n2] += A * products[k] + G * product_tangents[k];
+                                product_ders[k] += G * input_vals[iv + n2];
+                                product_adjoints[k] += A * input_vals[iv + n2] + G * input_tangents[iv + n2];
+                            }
+                        }
+                    }
+
+                    // The left bond's derivatives and adjoints, and the core's gradient, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const int iu = in + left.index(block.l1, m1);
+                        const double* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
+                        const double* product_adjoints = core_product_adjoints.data() + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double Gv = product_ders[n3 * n2_count + n2], Av = product_adjoints[n3 * n2_count + n2];
+                                if (Gv == 0.0 && Av == 0.0) continue;
+                                const int c2_offset = block.base + n3 * block.stride3 + n2 * block.stride2;
+                                const double* c2 = core.coeffs.data() + c2_offset;
+                                double* c2_grad = core_grad + c2_offset;
                                 for (int n1 = 0; n1 < n1_count; n1++) {
-                                    prod += c2[n1] * bond_vals[iu + n1];
-                                    prod_tangent += c2[n1] * bond_tangents[iu + n1];
                                     bond_energy_ders[iu + n1] += Gv * c2[n1];
                                     bond_adjoints[iu + n1] += Av * c2[n1];
                                     c2_grad[n1] += Av * bond_vals[iu + n1] + Gv * bond_tangents[iu + n1];
                                 }
-                                input_energy_ders[iv + n2] += G * prod;
-                                input_adjoints[iv + n2] += A * prod + G * prod_tangent;
                             }
-                        }
                     }
                 }
             }

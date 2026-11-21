@@ -28,25 +28,29 @@ struct CovariantShape {
 };
 
 // One (l1, l2, l3) block of a tensor-train core: coefficient (n1, n2, n3) sits at
-// base + n3 * stride3 + n2 * stride2 + n1, and wigner[w_begin, w_end) holds its 3-j symbols.
+// base + n3 * stride3 + n2 * stride2 + n1, wigner[w_begin, w_end) holds its 3-j symbols,
+// and its products start at products_offset within its core's.
 struct CoreBlock {
     int l1, l2, l3;
     int base, stride2, stride3;
     int w_begin, w_end;
+    int products_offset;
 };
 
-// The real or the imaginary part of one core, between bond i, the input and bond i + 1: its blocks and its
-// coefficients, ordered l3, n3, l2, n2, l1, n1.
+// The real or the imaginary part of one core, between bond i, the input and bond i + 1: its blocks, its
+// coefficients, ordered l3, n3, l2, n2, l1, n1, and the size of its blocks' products.
 struct Core {
     std::vector<CoreBlock> blocks;
     std::vector<double> coeffs;
+    int products_size = 0;
 };
 
 // One term of a core: its real or imaginary part applied to one part (0 real, 1 imaginary) of
-// bond i, added into one part of bond i + 1.
+// bond i, added into one part of bond i + 1; its products start at products_offset in core_products.
 struct CoreTerm {
     bool imaginary;
     int in_part, out_part;
+    int products_offset;
 };
 
 // The members PairETN shares with PairMTP are Pair's.
@@ -143,6 +147,12 @@ class PairETN : public Pair {
     std::vector<double> bond_vals;          // [bonds_size] the bond vectors, bond 0 = 1
     std::vector<double> input_energy_ders;  // [input_shape.size] dE_i/dv
     std::vector<double> bond_energy_ders;   // [bonds_size] dE_i/dbond
+
+    // Each block of each core term contracted with the left bond, sum_n1 c[n3, n2, n1] u[m1, n1], for the current atom:
+    // at products_offset of the term and of the block, [(m1 + l1) * n3_count * n2_count + n3 * n2_count + n2]
+    std::vector<double> core_products;
+    // The derivative of one block's products, laid out as one block's, sized for the largest
+    std::vector<double> core_product_ders;
 
     // neighbor_cache holds per neighbor 1/dist, Y, grad Y, the radial channels and their ders:
     // cache_stride is 1 + 4 * l_count^2 + 2 * radial-rank channels

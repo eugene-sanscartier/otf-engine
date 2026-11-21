@@ -132,20 +132,30 @@ void PairETN::compute(const NeighList& list) {
                 double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    const int m1_stride = n3_count * n2_count;
+                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+
+                    // The block contracted with the left bond, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const double* pu = u + left.index(block.l1, m1);
+                        double* products = block_products + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
+                                double prod = 0;
+                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
+                                products[n3 * n2_count + n2] = prod;
+                            }
+                    }
+
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const double* pu = u + left.index(block.l1, w.m1);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
                         const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
                         double* po = out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
-                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
                             double sum = 0;
-                            for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = c3 + n2 * block.stride2;
-                                double prod = 0;
-                                for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
-                                sum += prod * pv[n2];
-                            }
+                            for (int n2 = 0; n2 < n2_count; n2++) sum += products[n3 * n2_count + n2] * pv[n2];
                             po[n3] += w.w * sum;
                         }
                     }
@@ -166,29 +176,42 @@ void PairETN::compute(const NeighList& list) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
                 const int in = bond_offsets[c] + t.in_part * left.size;
                 const int out = bond_offsets[c + 1] + t.out_part * right.size;
-                const double* u = bond_vals.data() + in;
                 double* u_ders = bond_energy_ders.data() + in;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
+                    const int m1_stride = n3_count * n2_count;
+                    const int m1_count = 2 * block.l1 + 1;
+                    const double* block_products = core_products.data() + t.products_offset + block.products_offset;
+
+                    // The input's derivatives, and the products' summed per m1
+                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, 0.0);
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const int iu = left.index(block.l1, w.m1), iv = input_shape.index(block.l2, w.m2);
+                        const int iv = input_shape.index(block.l2, w.m2);
+                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
+                        double* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
                         const double* po = bond_energy_ders.data() + out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             const double g = w.w * po[n3];
                             if (g == 0.0) continue;
-                            const double* c3 = core.coeffs.data() + block.base + n3 * block.stride3;
                             for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double* c2 = c3 + n2 * block.stride2;
-                                const double gv = g * input_vals[iv + n2];
-                                double prod = 0;
-                                for (int n1 = 0; n1 < n1_count; n1++) {
-                                    prod += c2[n1] * u[iu + n1];
-                                    u_ders[iu + n1] += gv * c2[n1];
-                                }
-                                input_energy_ders[iv + n2] += g * prod;
+                                input_energy_ders[iv + n2] += g * products[n3 * n2_count + n2];
+                                product_ders[n3 * n2_count + n2] += g * input_vals[iv + n2];
                             }
                         }
+                    }
+
+                    // The left bond's derivatives, once per m1
+                    for (int m1 = -block.l1; m1 <= block.l1; m1++) {
+                        const int iu = left.index(block.l1, m1);
+                        const double* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
+                        for (int n3 = 0; n3 < n3_count; n3++)
+                            for (int n2 = 0; n2 < n2_count; n2++) {
+                                const double d = product_ders[n3 * n2_count + n2];
+                                if (d == 0.0) continue;
+                                const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
+                                for (int n1 = 0; n1 < n1_count; n1++) u_ders[iu + n1] += d * c2[n1];
+                            }
                     }
                 }
             }
@@ -451,11 +474,16 @@ void PairETN::prepare_cores() {
     auto bond_has_im = [&](int b) { return has_imaginary_cores() && b >= 2 && b <= core_count - 2; };
     auto core_has_im = [&](int c) { return has_imaginary_cores() && c >= 1 && c <= core_count - 2; };
     core_terms.assign(core_count, {});
+    int products_size = 0;
     for (int c = 0; c < core_count; c++) {
-        core_terms[c].push_back({false, 0, 0});
-        if (bond_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({false, 1, 1});
-        if (core_has_im(c) && bond_has_im(c)) core_terms[c].push_back({true, 1, 0});
-        if (core_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({true, 0, 1});
+        core_terms[c].push_back({false, 0, 0, 0});
+        if (bond_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({false, 1, 1, 0});
+        if (core_has_im(c) && bond_has_im(c)) core_terms[c].push_back({true, 1, 0, 0});
+        if (core_has_im(c) && bond_has_im(c + 1)) core_terms[c].push_back({true, 0, 1, 0});
+        for (CoreTerm& t : core_terms[c]) {
+            t.products_offset = products_size;
+            products_size += (t.imaginary ? cores_im[c] : cores[c]).products_size;
+        }
     }
 
     species_coeffs.resize(species_count);
@@ -466,6 +494,14 @@ void PairETN::prepare_cores() {
     bond_vals.resize(bonds_size);
     input_energy_ders.resize(input_shape.size);
     bond_energy_ders.resize(bonds_size);
+
+    size_t block_products_size = 0;
+    for (int c = 0; c < core_count; c++)
+        for (const Core* core : {&cores[c], &cores_im[c]})
+            for (const CoreBlock& block : core->blocks)
+                block_products_size = std::max(block_products_size, (size_t) (2 * block.l1 + 1) * bond_shapes[c + 1].ranks[block.l3] * input_shape.ranks[block.l2]);
+    core_products.resize(products_size);
+    core_product_ders.resize(block_products_size);
 }
 
 // The first column of each coefficient block in get_coeffs' order, for the current shape and species count.
@@ -518,7 +554,8 @@ Core PairETN::prepare_core(int i, bool imaginary) {
                     const std::vector<WignerEntry> entries = real_wigner_entries(l1, l2, l3);
                     const int w_begin = (int) wigner.size();
                     wigner.insert(wigner.end(), entries.begin(), entries.end());
-                    core.blocks.push_back({l1, l2, l3, base3 + base2 + base1, stride2, stride3, w_begin, (int) wigner.size()});
+                    core.blocks.push_back({l1, l2, l3, base3 + base2 + base1, stride2, stride3, w_begin, (int) wigner.size(), core.products_size});
+                    core.products_size += (2 * l1 + 1) * right[l3] * middle[l2];
                 }
                 base1 += left[l1];
             }

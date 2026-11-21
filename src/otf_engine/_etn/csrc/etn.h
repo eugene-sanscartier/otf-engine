@@ -43,4 +43,6 @@ class ETN : public PairETN {
     std::vector<double> bond_tangents;    // [bonds_size]
     std::vector<double> input_adjoints;   // [input_shape.size]
     std::vector<double> bond_adjoints;    // [bonds_size]
+    std::vector<double> core_product_tangents;  // laid out as core_products
+    std::vector<double> core_product_adjoints;  // laid out as core_product_ders
 };
