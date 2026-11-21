@@ -98,7 +98,7 @@ class PairETN : public Pair {
     // site energy; the new entries are zero. Set them afterwards.
     void set_species_count(int n);
     // mlip-4's initial values, ETN::PostConstruct's: sin(10 + k^2) for the k-th of the params.
-    void fill_initial_coeffs();
+    void reset_coeffs();
 
   protected:
     void read_file(std::istream& is);

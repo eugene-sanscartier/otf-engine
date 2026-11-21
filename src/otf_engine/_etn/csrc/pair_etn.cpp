@@ -32,7 +32,7 @@ PairETN::PairETN(const std::string& filename) {
 PairETN::PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_counts, std::vector<int> radial_ranks, std::vector<std::vector<int>> bond_ranks, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size) : Pair(species_count, radial_basis_type, min_dist, max_dist, radial_basis_size), species_ranks(std::move(species_ranks)), radial_func_counts(std::move(radial_func_counts)), radial_ranks(std::move(radial_ranks)), bond_ranks(std::move(bond_ranks)) {
     prepare_cores();
     trained = false;
-    fill_initial_coeffs();
+    reset_coeffs();
 }
 
 /* ----------------------------------------------------------------------
@@ -329,7 +329,7 @@ void PairETN::set_species_count(int n) {
     prepare_radial_mixing();
 }
 
-void PairETN::fill_initial_coeffs() {
+void PairETN::reset_coeffs() {
     std::vector<double> c(coeff_count());
     for (int k = 0; k < (int) c.size(); k++) c[k] = std::sin(10 + k * k);
     set_coeffs(c.data());
@@ -384,10 +384,10 @@ void PairETN::read_file(std::istream& is) {
 
     prepare_cores();
 
-    // An untrained potential may omit every coefficient, and takes fill_initial_coeffs' values
+    // An untrained potential may omit every coefficient, and takes reset_coeffs' values
     if (!tfr.next_line() || tfr.keyword() != "radial_coeffs") {
         trained = false;
-        fill_initial_coeffs();
+        reset_coeffs();
         return;
     }
     if (species_count == 0)

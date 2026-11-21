@@ -24,7 +24,7 @@ void ETNFit::add_species() {
     log_added_species(old_spec, new_spec);
     potential.set_species_count(new_spec);
     if (!potential.is_trained())
-        potential.fill_initial_coeffs();
+        potential.reset_coeffs();
     else
         for (int l = 0; l < (int) potential.get_species_ranks().size(); l++) {
             const int rank = potential.get_species_ranks()[l];

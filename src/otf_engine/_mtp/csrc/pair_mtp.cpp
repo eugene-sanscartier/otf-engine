@@ -347,7 +347,7 @@ void PairMTP::read_file(std::istream& is) {
 
     // mlip-3's MLMTPR::Load fills in what the file omits
     trained = has_radial_coeffs && has_species_coeffs;
-    if (!trained) fill_initial_coeffs();
+    if (!trained) reset_coeffs();
     if (has_radial_coeffs) radial_basis_coeffs = radial_coeffs_read;
     if (has_species_coeffs) {
         species_coeffs = species_coeffs_read;
@@ -368,10 +368,10 @@ PairMTP::PairMTP(const std::vector<std::vector<int>>& basis_functions, int speci
 
     prepare_basis();
     trained = false;
-    fill_initial_coeffs();
+    reset_coeffs();
 }
 
-void PairMTP::fill_initial_coeffs() {
+void PairMTP::reset_coeffs() {
     for (int p = 0; p < species_count * species_count; p++)
         for (int i = 0; i < radial_func_count; i++) {
             double* c = radial_basis_coeffs.data() + p * radial_coeff_count_per_pair + i * radial_basis_size;

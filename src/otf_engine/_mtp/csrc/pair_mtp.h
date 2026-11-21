@@ -66,7 +66,7 @@ class PairMTP : public Pair {
     // Sizes the coefficients and working buffers for the basis members, and checks the contractions.
     void prepare_basis();
     // mlip-3's MLMTPR::Load defaults, an untrained potential's coefficients.
-    void fill_initial_coeffs();
+    void reset_coeffs();
     void prepare_angular();
 
     std::string potential_tag;
