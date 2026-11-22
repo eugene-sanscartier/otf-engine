@@ -51,6 +51,9 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
         .def_property_readonly("n_atoms", &PyNeighbors::n_atoms)
         .def_property_readonly("inum", &PyNeighbors::inum)
         .def_property_readonly("types", &PyNeighbors::types)
+        .def_property_readonly("ilist", &PyNeighbors::ilist)
+        .def_property_readonly("numneigh", &PyNeighbors::numneigh)
+        .def_property_readonly("firstneigh", &PyNeighbors::firstneigh)
         .def_property_readonly("displacements", &PyNeighbors::displacements);
 
     py::class_<FitStructure>(m, "FitStructure", "A structure to fit: its neighbor list at the potential's cutoff and its reference values, which the fits and error_table take.")

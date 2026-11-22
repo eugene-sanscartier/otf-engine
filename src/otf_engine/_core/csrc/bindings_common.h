@@ -70,6 +70,9 @@ class PyNeighbors {
     int n_atoms() const { return list_.n_atoms; }
     int inum() const { return list_.inum; }
     IntArray types() const { return types_; }
+    IntArray ilist() const { return ilist_; }
+    IntArray numneigh() const { return numneigh_; }
+    IntArray firstneigh() const { return firstneigh_; }
     DoubleArray displacements() const { return displacements_; }
 
   private:
