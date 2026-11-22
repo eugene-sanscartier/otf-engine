@@ -84,7 +84,7 @@ void PairETN::compute(const NeighList& list) {
             const double dist = std::sqrt(rsq);
             const double inv_dist = 1.0 / dist;
             const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            double* cache = neighbor_cache.data() + (size_t) valid_count * cache_stride;
+            double* cache = neighbor_cache + (size_t) valid_count * cache_stride;
             cache[0] = inv_dist;
             double* ylm = cache + 1;
             double* ylm_grads = ylm + harmonic_count;
@@ -221,7 +221,7 @@ void PairETN::compute(const NeighList& list) {
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const double* r = valid_dr[jj].data();
-            const double* cache = neighbor_cache.data() + (size_t) jj * cache_stride;
+            const double* cache = neighbor_cache + (size_t) jj * cache_stride;
             const double inv_dist = cache[0];
             const double* ylm = cache + 1;
             const double* ylm_grads = ylm + harmonic_count;

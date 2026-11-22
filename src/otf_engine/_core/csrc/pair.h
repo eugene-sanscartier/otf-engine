@@ -15,6 +15,73 @@
 
 class TextFileReader;
 
+// Central atoms per chunk: 8 vectors of the widest SIMD registers the build targets.
+#if defined(__AVX512F__)
+constexpr int chunk_size = 64;
+#elif defined(__AVX__)
+constexpr int chunk_size = 32;
+#else
+constexpr int chunk_size = 16;
+#endif
+
+// One value per central atom of a chunk, with the arithmetic of a double applied atom by atom. An operation that
+// combines products, as x += s * y * z, runs as one loop over the atoms, as the expression for one atom would.
+struct ScaledLanes;
+struct alignas(64) Lanes {
+    double v[chunk_size] = {};
+
+    Lanes() = default;
+    Lanes(const ScaledLanes& e);    // w = s * x
+
+    double& operator[](int a) { return v[a]; }
+    double operator[](int a) const { return v[a]; }
+    Lanes& operator=(double s) {
+        std::fill(v, v + chunk_size, s);
+        return *this;
+    }
+};
+
+// The products a Lanes expression is made of, evaluated when added
+struct ScaledLanes {
+    double s;
+    const Lanes& x;
+};
+struct LanesProduct {
+    const Lanes& x;
+    const Lanes& y;
+};
+struct ScaledLanesProduct {
+    double s;
+    const Lanes& x;
+    const Lanes& y;
+};
+
+inline Lanes::Lanes(const ScaledLanes& e) {
+    for (int a = 0; a < chunk_size; a++) v[a] = e.s * e.x.v[a];
+}
+
+inline ScaledLanes operator*(double s, const Lanes& x) { return {s, x}; }
+inline ScaledLanes operator*(const Lanes& x, double s) { return {s, x}; }
+inline LanesProduct operator*(const Lanes& x, const Lanes& y) { return {x, y}; }
+inline ScaledLanesProduct operator*(const ScaledLanes& sx, const Lanes& y) { return {sx.s, sx.x, y}; }
+
+inline Lanes& operator+=(Lanes& out, const Lanes& x) {
+    for (int a = 0; a < chunk_size; a++) out.v[a] += x.v[a];
+    return out;
+}
+inline Lanes& operator+=(Lanes& out, const ScaledLanes& e) {
+    for (int a = 0; a < chunk_size; a++) out.v[a] += e.s * e.x.v[a];
+    return out;
+}
+inline Lanes& operator+=(Lanes& out, const LanesProduct& e) {
+    for (int a = 0; a < chunk_size; a++) out.v[a] += e.x.v[a] * e.y.v[a];
+    return out;
+}
+inline Lanes& operator+=(Lanes& out, const ScaledLanesProduct& e) {
+    for (int a = 0; a < chunk_size; a++) out.v[a] += e.s * e.x.v[a] * e.y.v[a];
+    return out;
+}
+
 class Pair {
   public:
     virtual ~Pair() { delete radial_basis; }
@@ -105,19 +172,41 @@ class Pair {
     std::vector<double> forces;  // [n_atoms * 3]
     std::array<double, 6> virial{};    // xx,yy,zz,xy,xz,yz
 
-    // Grows cached_j, valid_dr and neighbor_cache to hold jnum neighbors.
+    // Grows the neighbor cache to hold jnum neighbors, and points cached_j, valid_dr and neighbor_cache at its start.
     void grow_cache(int jnum) {
-        if (cache_size >= jnum) return;
-        neighbor_cache.resize((size_t) jnum * cache_stride);
-        cached_j.resize(jnum);
-        valid_dr.resize(jnum);
-        cache_size = jnum;
+        if (cache_size < jnum) {
+            cached_j_storage.resize(jnum);
+            valid_dr_storage.resize(jnum);
+            neighbor_cache_storage.resize((size_t) jnum * cache_stride);
+            cache_size = jnum;
+        }
+        select_atom_cache(0);
     }
 
-    // Cache values between forwards and backwards pass
+    // Grows the neighbor cache to a block for each atom of a chunk, each as large as list's largest neighbor count.
+    void grow_chunk_cache(const NeighList& list) {
+        atom_cache_size = 0;
+        for (int ii = 0; ii < list.inum; ii++) atom_cache_size = std::max(atom_cache_size, list.numneigh[ii]);
+        grow_cache(chunk_size * atom_cache_size);
+    }
+
+    // Points cached_j, valid_dr and neighbor_cache at the block of the chunk's atom a.
+    void select_atom_cache(int a) {
+        const size_t first = (size_t) a * atom_cache_size;
+        cached_j = cached_j_storage.data() + first;
+        valid_dr = valid_dr_storage.data() + first;
+        neighbor_cache = neighbor_cache_storage.data() + first * cache_stride;
+    }
+
+    // Cache values between forwards and backwards pass, in storage that cached_j, valid_dr and neighbor_cache point into
     int cache_size = 0;
-    std::vector<int> cached_j;                    // [cache_size]
-    std::vector<std::array<double, 3>> valid_dr;  // [cache_size] displacement of each cached neighbor
-    int cache_stride = 0;                         // values per cached neighbor
-    std::vector<double> neighbor_cache;           // [cache_size * cache_stride] 1/dist, then the potential's per-neighbor values
+    int atom_cache_size = 0;                              // neighbors per atom block, for compute's chunk
+    std::vector<int> cached_j_storage;                    // [cache_size]
+    std::vector<std::array<double, 3>> valid_dr_storage;  // [cache_size]
+    std::vector<double> neighbor_cache_storage;           // [cache_size * cache_stride]
+    int* cached_j = nullptr;                    // the current atom's cached neighbors
+    std::array<double, 3>* valid_dr = nullptr;  // displacement of each cached neighbor
+    int cache_stride = 0;                       // values per cached neighbor
+    double* neighbor_cache = nullptr;           // [cache_stride] per neighbor: 1/dist, then the potential's per-neighbor values
+    std::array<int, chunk_size> cached_counts{};  // compute's chunk: the neighbors each atom has cached
 };
