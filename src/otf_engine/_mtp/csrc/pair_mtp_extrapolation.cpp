@@ -59,8 +59,8 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
         }
 
         // Reset the working arrays
-        std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
-        std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
+        std::fill(atom_moment_vals.begin(), atom_moment_vals.end(), 0.0);
+        std::fill(atom_energy_ders_wrt_moments.begin(), atom_energy_ders_wrt_moments.end(), 0.0);
 
         if (!configuration_mode)
             std::fill(energy_ders_wrt_coeffs.begin(), energy_ders_wrt_coeffs.end(), 0.0);
@@ -110,7 +110,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                 for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
                     const int k = basic_by_mu[t];
                     const double ang = angular_vals[angular_by_mu[t]];
-                    moment_tensor_vals[k] += val * ang;
+                    atom_moment_vals[k] += val * ang;
                 }
             }
             valid_count++;
@@ -119,15 +119,15 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
         // ------------ Construct Composite Moment Values  ------------
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
-            moment_tensor_vals[term[3]] +=
-                term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
+            atom_moment_vals[term[3]] +=
+                term[2] * atom_moment_vals[term[0]] * atom_moment_vals[term[1]];
         }
 
         // ------------ Compute Basis Set From Alpha Map ------------
         const int linear_basis_offset = radial_coeff_count + species_count;
         nbh_energy = species_coeffs[itype];    // Essentially the reference point energy per species
         for (int k = 0; k < alpha_scalar_count; k++) {
-            double basis_member = moment_tensor_vals[alpha_moment_mapping[k]];
+            double basis_member = atom_moment_vals[alpha_moment_mapping[k]];
             energy_ders_wrt_coeffs[linear_basis_offset + k] += basis_member;
             nbh_energy += linear_coeffs[k] * basis_member;
         }
@@ -139,7 +139,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
         // =========== Begin Backpropagation ===========
         //------------ NBH energy derivative is the corresponding linear combination------------
         for (int k = 0; k < alpha_scalar_count; k++)
-            nbh_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
+            atom_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
 
         //------------ Propagate chain rule through the composite moment elements times to the basics ------------
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
@@ -147,14 +147,14 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             const int a0 = term[0];
             const int a1 = term[1];
 
-            const double w = term[2] * nbh_energy_ders_wrt_moments[term[3]];
+            const double w = term[2] * atom_energy_ders_wrt_moments[term[3]];
 
-            nbh_energy_ders_wrt_moments[a1] += w * moment_tensor_vals[a0];
-            nbh_energy_ders_wrt_moments[a0] += w * moment_tensor_vals[a1];
+            atom_energy_ders_wrt_moments[a1] += w * atom_moment_vals[a0];
+            atom_energy_ders_wrt_moments[a0] += w * atom_moment_vals[a1];
         }
 
         for (int t = 0; t < alpha_index_basic_count; t++)
-            basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]];
+            basic_ders_by_mu[t] = atom_energy_ders_wrt_moments[basic_by_mu[t]];
 
         //------------ Compute forces from basic moment derivatives ------------
         for (int jj = 0; jj < valid_count; jj++) {

@@ -96,8 +96,13 @@ class PairMTP : public Pair {
     std::vector<double> angular_ders;        // [angular_count] their adjoints
     std::vector<double> basic_ders_by_mu;    // [alpha_index_basic_count] energy ders wrt basic moments, grouped
 
-    // Graph traversal, forwards and backwards pass
-    std::vector<double> moment_tensor_vals;          // the moments
-    std::vector<double> nbh_energy_ders_wrt_moments; // same, for ders
+    // Graph traversal, forwards and backwards pass, for compute's chunk of central atoms, a value per atom
+    std::vector<Lanes> moment_tensor_vals;          // the moments
+    std::vector<Lanes> nbh_energy_ders_wrt_moments; // same, for ders
+
+    // The same for the kernels that take one atom at a time
+    std::vector<double> atom_moment_vals;              // [alpha_moment_count]
+    std::vector<double> atom_energy_ders_wrt_moments;  // [alpha_moment_count]
+
     // neighbor_cache holds per neighbor 1/dist, the radial vals and the radial ders: cache_stride is 1 + 2 * radial_func_count
 };

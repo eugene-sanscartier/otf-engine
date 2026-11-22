@@ -50,6 +50,38 @@ def two_species(structures):
     return out
 
 
+def several_chunks(atoms):
+    """atoms repeated into a cell of at least 130 atoms, more than two chunks of central atoms of any build."""
+    repeats = int(numpy.ceil((130 / len(atoms)) ** (1 / 3)))
+    return atoms.repeat((repeats, repeats, repeats))
+
+
+def compute_by_atom(potential, nl):
+    """compute's energy, per-atom energies, forces and virial summed over one call per central atom of nl."""
+    from otf_engine._core import NeighList
+
+    numneigh = numpy.asarray(nl.numneigh)
+    starts = numpy.concatenate([[0], numpy.cumsum(numneigh)])
+    firstneigh, displacements = numpy.asarray(nl.firstneigh), numpy.asarray(nl.displacements)
+    total = {"energy": 0.0, "eatom": 0.0, "forces": 0.0, "virial": 0.0}
+    for ii, i in enumerate(numpy.asarray(nl.ilist)):
+        begin, end = starts[ii], starts[ii + 1]
+        single = NeighList(nl.types, numpy.array([i], dtype=numpy.int32), numneigh[ii : ii + 1], firstneigh[begin:end], displacements[begin:end])
+        result = potential.compute(single)
+        for key in total:
+            total[key] = total[key] + numpy.asarray(result[key])
+    return total
+
+
+def assert_compute_by_atom(potential, nl):
+    """compute over every central atom of nl at once, in chunks, gives the sum of compute over each atom alone."""
+    whole = {key: numpy.asarray(value) for key, value in potential.compute(nl).items() if key in ("energy", "eatom", "forces", "virial")}
+    by_atom = compute_by_atom(potential, nl)
+    for key, value in whole.items():
+        scale = numpy.max(numpy.abs(value))
+        assert numpy.max(numpy.abs(by_atom[key] - value)) <= 1e-12 * scale, key
+
+
 @pytest.fixture(scope="session")
 def recapture(request):
     return request.config.getoption("--recapture")

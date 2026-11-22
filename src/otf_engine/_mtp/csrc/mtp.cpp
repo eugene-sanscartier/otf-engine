@@ -33,7 +33,7 @@ void MTP::eval_basis(const NeighList& list, double* basis_out) {
         const double* dr = list.displacements + nbr_offset * 3;
         nbr_offset += jnum;
 
-        std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
+        std::fill(atom_moment_vals.begin(), atom_moment_vals.end(), 0.0);
 
         // ------------ Calculate Basic Moments ------------
         for (int jj = 0; jj < jnum; jj++) {
@@ -62,20 +62,20 @@ void MTP::eval_basis(const NeighList& list, double* basis_out) {
                     val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
 
                 for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++)
-                    moment_tensor_vals[basic_by_mu[t]] += val * angular_vals[angular_by_mu[t]];
+                    atom_moment_vals[basic_by_mu[t]] += val * angular_vals[angular_by_mu[t]];
             }
         }
 
         // ------------ Construct Composite Moment Values  ------------
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
-            moment_tensor_vals[term[3]] +=
-                term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
+            atom_moment_vals[term[3]] +=
+                term[2] * atom_moment_vals[term[0]] * atom_moment_vals[term[1]];
         }
 
         double* row = basis_out + (size_t) ii * alpha_scalar_count;
         for (int k = 0; k < alpha_scalar_count; k++)
-            row[k] = moment_tensor_vals[alpha_moment_mapping[k]];
+            row[k] = atom_moment_vals[alpha_moment_mapping[k]];
     }
 }
 
@@ -153,8 +153,8 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         const int ders_stride = 3 * jac_size;    // a row of moment_ders
         const int N = jnum;                      // a row of the neighbor arrays
 
-        std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
-        std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
+        std::fill(atom_moment_vals.begin(), atom_moment_vals.end(), 0.0);
+        std::fill(atom_energy_ders_wrt_moments.begin(), atom_energy_ders_wrt_moments.end(), 0.0);
         if (need_radial_jacobian)
             std::fill(radial_jacobian.begin(), radial_jacobian.end(), 0.0);
 
@@ -232,9 +232,9 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 const int k = basic_by_mu[t];
                 const int angular = angular_by_mu[t];
                 const double* ang_k = ang + (size_t) angular * N;
-                double moment = moment_tensor_vals[k];
+                double moment = atom_moment_vals[k];
                 for (int jj = 0; jj < V; jj++) moment += val[jj] * ang_k[jj];
-                moment_tensor_vals[k] = moment;
+                atom_moment_vals[k] = moment;
 
                 if (force_grad)
                     for (int a = 0; a < 3; a++) {
@@ -255,35 +255,35 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         // ------------ Construct Composite Moment Values  ------------
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
-            moment_tensor_vals[term[3]] +=
-                term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
+            atom_moment_vals[term[3]] +=
+                term[2] * atom_moment_vals[term[0]] * atom_moment_vals[term[1]];
         }
 
         // =========== Begin Backpropagation, for the radial columns ===========
         if (radial) {
             for (int k = 0; k < alpha_scalar_count; k++)
-                nbh_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
+                atom_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
 
             for (int k = alpha_index_times_count - 1; k >= 0; k--) {
                 const int* term = alpha_index_times[k].data();
                 const int a0 = term[0];
                 const int a1 = term[1];
 
-                const double w = term[2] * nbh_energy_ders_wrt_moments[term[3]];
+                const double w = term[2] * atom_energy_ders_wrt_moments[term[3]];
 
-                nbh_energy_ders_wrt_moments[a1] += w * moment_tensor_vals[a0];
-                nbh_energy_ders_wrt_moments[a0] += w * moment_tensor_vals[a1];
+                atom_energy_ders_wrt_moments[a1] += w * atom_moment_vals[a0];
+                atom_energy_ders_wrt_moments[a0] += w * atom_moment_vals[a1];
             }
 
             for (int t = 0; t < alpha_index_basic_count; t++)
-                basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]];
+                basic_ders_by_mu[t] = atom_energy_ders_wrt_moments[basic_by_mu[t]];
         }
 
         // ---- Per-atom site energy gradient ----
         if (site_e_grad) {
             double* row = site_e_grad + (size_t) ii * width;
             for (int s = 0; s < n_linear; s++)
-                row[lin_off + s] = moment_tensor_vals[alpha_moment_mapping[s]];
+                row[lin_off + s] = atom_moment_vals[alpha_moment_mapping[s]];
             row[sp_off + itype] = 1.0;
 
             for (int jj = 0; radial && jj < valid_count; jj++) {
@@ -315,7 +315,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const double mul = alpha_index_times[k][2];
             const int a3 = alpha_index_times[k][3];
-            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            const double M_a0 = atom_moment_vals[a0], M_a1 = atom_moment_vals[a1];
             const double* D_a0 = moment_ders.data() + (size_t) a0 * ders_stride;
             const double* D_a1 = moment_ders.data() + (size_t) a1 * ders_stride;
             double* D_a3 = moment_ders.data() + (size_t) a3 * ders_stride;
@@ -373,7 +373,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int i0 = alpha_index_times[k][0], i1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], i3 = alpha_index_times[k][3];
-            const double M_i0 = moment_tensor_vals[i0], M_i1 = moment_tensor_vals[i1];
+            const double M_i0 = atom_moment_vals[i0], M_i1 = atom_moment_vals[i1];
             const double* dM_i0 = dM_dc.data() + (size_t) i0 * n_radial;
             const double* dM_i1 = dM_dc.data() + (size_t) i1 * n_radial;
             double* dM_i3 = dM_dc.data() + (size_t) i3 * n_radial;
@@ -386,8 +386,8 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-            const double G_a3 = nbh_energy_ders_wrt_moments[a3];
-            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            const double G_a3 = atom_energy_ders_wrt_moments[a3];
+            const double M_a0 = atom_moment_vals[a0], M_a1 = atom_moment_vals[a1];
             const double* dM_a0 = dM_dc.data() + (size_t) a0 * n_radial;
             const double* dM_a1 = dM_dc.data() + (size_t) a1 * n_radial;
             const double* dG_a3 = dG.data() + (size_t) a3 * n_radial;
@@ -409,7 +409,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             const int pair_off = itype * species_count + jtype;
 
             for (int k = 0; k < alpha_index_basic_count; k++) {
-                const double G_k = nbh_energy_ders_wrt_moments[k];
+                const double G_k = atom_energy_ders_wrt_moments[k];
                 if (G_k == 0.0) continue;
                 const int mu = alpha_index_basic[k][0];
                 const double angular_factor = ang[(size_t) basic_to_angular[k] * N + jj];
@@ -457,7 +457,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
    w_j = dL/dF_i - dL/dF_j - S r_ij, where S[b][a] = dL/dvirial_ab, since
    virial_ab sums -r_a f_b over the pairs. The forward pass carries each
    moment's derivative along w (its tangent) beside its value. Backward, the
-   tangents' adjoints are nbh_energy_ders_wrt_moments, and the values'
+   tangents' adjoints are atom_energy_ders_wrt_moments, and the values'
    adjoints pick up the tangents through the products. The angular factors
    are the monomials of the unit displacement u, built through PairMTP's
    shared tree, and their tangents follow the same tree along
@@ -500,9 +500,9 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         grow_neighbor_rows(jnum);
         const int N = jnum;    // a row of the neighbor arrays
 
-        std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), 0.0);
+        std::fill(atom_moment_vals.begin(), atom_moment_vals.end(), 0.0);
         std::fill(moment_tangents.begin(), moment_tangents.end(), 0.0);
-        std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), 0.0);
+        std::fill(atom_energy_ders_wrt_moments.begin(), atom_energy_ders_wrt_moments.end(), 0.0);
         std::fill(moment_adjoints.begin(), moment_adjoints.end(), 0.0);
 
         // ------------ The neighbors within the cutoff: unit displacement, its tangent and radial basis ------------
@@ -584,12 +584,12 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 const int k = basic_by_mu[t];
                 const double* ang_k = ang + (size_t) angular_by_mu[t] * N;
                 const double* tangent_k = tangents + (size_t) angular_by_mu[t] * N;
-                double moment = moment_tensor_vals[k], tangent = moment_tangents[k];
+                double moment = atom_moment_vals[k], tangent = moment_tangents[k];
                 for (int jj = 0; jj < V; jj++) {
                     moment += val[jj] * ang_k[jj];
                     tangent += der[jj] * w_dot_unit_r[jj] * ang_k[jj] + val[jj] * tangent_k[jj];
                 }
-                moment_tensor_vals[k] = moment;
+                atom_moment_vals[k] = moment;
                 moment_tangents[k] = tangent;
             }
         }
@@ -598,37 +598,37 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
+            const double M_a0 = atom_moment_vals[a0], M_a1 = atom_moment_vals[a1];
             moment_tangents[a3] += mul * (moment_tangents[a0] * M_a1 + M_a0 * moment_tangents[a1]);
-            moment_tensor_vals[a3] += mul * M_a0 * M_a1;
+            atom_moment_vals[a3] += mul * M_a0 * M_a1;
         }
 
         // =========== Backpropagation of values and tangents ===========
         for (int s = 0; s < alpha_scalar_count; s++) {
-            nbh_energy_ders_wrt_moments[alpha_moment_mapping[s]] = linear_coeffs[s];
+            atom_energy_ders_wrt_moments[alpha_moment_mapping[s]] = linear_coeffs[s];
             moment_adjoints[alpha_moment_mapping[s]] = a * linear_coeffs[s];
         }
 
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-            const double M_a0 = moment_tensor_vals[a0], M_a1 = moment_tensor_vals[a1];
-            const double G_a3 = nbh_energy_ders_wrt_moments[a3];
+            const double M_a0 = atom_moment_vals[a0], M_a1 = atom_moment_vals[a1];
+            const double G_a3 = atom_energy_ders_wrt_moments[a3];
             const double A_a3 = moment_adjoints[a3];
             moment_adjoints[a0] += mul * (A_a3 * M_a1 + G_a3 * moment_tangents[a1]);
             moment_adjoints[a1] += mul * (A_a3 * M_a0 + G_a3 * moment_tangents[a0]);
-            nbh_energy_ders_wrt_moments[a1] += G_a3 * mul * M_a0;
-            nbh_energy_ders_wrt_moments[a0] += G_a3 * mul * M_a1;
+            atom_energy_ders_wrt_moments[a1] += G_a3 * mul * M_a0;
+            atom_energy_ders_wrt_moments[a0] += G_a3 * mul * M_a1;
         }
 
         // ---- Species and linear coefficients ----
         loss_grad[sp_off + itype] += a;
         for (int s = 0; s < alpha_scalar_count; s++)
-            loss_grad[lin_off + s] += a * moment_tensor_vals[alpha_moment_mapping[s]] + moment_tangents[alpha_moment_mapping[s]];
+            loss_grad[lin_off + s] += a * atom_moment_vals[alpha_moment_mapping[s]] + moment_tangents[alpha_moment_mapping[s]];
 
         // ---- Radial coefficients ----
         for (int t = 0; t < alpha_index_basic_count; t++) {
-            basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]];
+            basic_ders_by_mu[t] = atom_energy_ders_wrt_moments[basic_by_mu[t]];
             basic_adjoints_by_mu[t] = moment_adjoints[basic_by_mu[t]];
         }
 
