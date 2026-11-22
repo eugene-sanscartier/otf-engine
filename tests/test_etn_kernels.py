@@ -14,7 +14,7 @@ import numpy
 import pytest
 from ase import Atoms
 
-from conftest import ETN_REFERENCE, StoredOutputs
+from conftest import ETN_REFERENCE, StoredOutputs, assert_compute_by_atom, several_chunks
 from etn_potentials import MAX_DIST, MIN_DIST, POTENTIALS, RADIAL_BASIS_SIZE, coeff_blocks, compile_probe, get_block, params, parse_tensors, reference_potential, set_params, species_of, untrained_etn
 from otf_engine._core import neighbors
 from otf_engine._core.derivative_checks import check_forces, check_invariance, check_virial
@@ -175,6 +175,17 @@ def test_derivatives(name, potentials, cells):
     assert check_forces(potential, atoms) < 1e-6
     assert check_virial(potential, atoms) < 1e-6
     assert check_invariance(potential, atoms) < 1e-12
+
+
+@pytest.mark.parametrize("name", ["etn-3", "etn-5"])
+def test_compute_in_chunks(name, potentials, cells):
+    """compute over a cell of several chunks of central atoms gives what it gives one central atom at a time."""
+    atoms, types = cells[0]
+    atoms = atoms.copy()
+    potential = potentials[name]
+    atoms.arrays["type_index"] = species_of(potential, types)
+    atoms = several_chunks(atoms)
+    assert_compute_by_atom(potential, neighbors(atoms, MAX_DIST, types=atoms.arrays["type_index"].astype(numpy.int32)))
 
 
 def test_loss_grad(potentials, cells, step=1e-5):

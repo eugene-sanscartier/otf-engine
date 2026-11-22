@@ -142,17 +142,25 @@ class PairETN : public Pair {
 
     RealHarmonics harmonics{1};
 
-    // Tensor train, forwards and backwards pass, for the current atom
-    std::vector<double> input_vals;         // [input_shape.size] the input vector v, the constant 1 first
-    std::vector<double> bond_vals;          // [bonds_size] the bond vectors, bond 0 = 1
-    std::vector<double> input_energy_ders;  // [input_shape.size] dE_i/dv
-    std::vector<double> bond_energy_ders;   // [bonds_size] dE_i/dbond
+    // Tensor train, forwards and backwards pass, for compute's chunk of central atoms, a value per atom
+    std::vector<Lanes> input_vals;         // [input_shape.size] the input vector v, the constant 1 first
+    std::vector<Lanes> bond_vals;          // [bonds_size] the bond vectors, bond 0 = 1
+    std::vector<Lanes> input_energy_ders;  // [input_shape.size] dE_i/dv
+    std::vector<Lanes> bond_energy_ders;   // [bonds_size] dE_i/dbond
 
-    // Each block of each core term contracted with the left bond, sum_n1 c[n3, n2, n1] u[m1, n1], for the current atom:
+    // Each block of each core term contracted with the left bond, sum_n1 c[n3, n2, n1] u[m1, n1]:
     // at products_offset of the term and of the block, [(m1 + l1) * n3_count * n2_count + n3 * n2_count + n2]
-    std::vector<double> core_products;
+    std::vector<Lanes> core_products;
     // The derivative of one block's products, laid out as one block's, sized for the largest
-    std::vector<double> core_product_ders;
+    std::vector<Lanes> core_product_ders;
+
+    // The same for the kernels that take one atom at a time
+    std::vector<double> atom_input_vals;
+    std::vector<double> atom_bond_vals;
+    std::vector<double> atom_input_energy_ders;
+    std::vector<double> atom_bond_energy_ders;
+    std::vector<double> atom_core_products;
+    std::vector<double> atom_core_product_ders;
 
     // neighbor_cache holds per neighbor 1/dist, Y, grad Y, the radial channels and their ders:
     // cache_stride is 1 + 4 * l_count^2 + 2 * radial-rank channels

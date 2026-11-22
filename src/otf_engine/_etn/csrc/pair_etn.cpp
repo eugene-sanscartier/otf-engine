@@ -50,76 +50,83 @@ void PairETN::compute(const NeighList& list) {
     forces.assign((size_t) list.n_atoms * 3, 0.0);
     virial.fill(0.0);
 
-    // Loop over all provided neighbourhoods
-    for (int ii = 0; ii < list.inum; ii++) {
-        int valid_count = 0;
-        const int i = list.ilist[ii];
-        const int itype = list.types[i];
-        const int jnum = list.numneigh[ii];
-        const int* nbrs = list.firstneigh + nbr_offset;
-        const double* dr = list.displacements + nbr_offset * 3;
-        nbr_offset += jnum;
+    grow_chunk_cache(list);
 
-        grow_cache(jnum);
+    // Loop over all provided neighbourhoods, a chunk of them at a time
+    for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
+        const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
         // Clear the input and bond vectors and their derivatives
-        std::fill(input_vals.begin(), input_vals.end(), 0.0);
-        std::fill(bond_vals.begin(), bond_vals.end(), 0.0);
-        std::fill(input_energy_ders.begin(), input_energy_ders.end(), 0.0);
-        std::fill(bond_energy_ders.begin(), bond_energy_ders.end(), 0.0);
+        std::fill(input_vals.begin(), input_vals.end(), Lanes());
+        std::fill(bond_vals.begin(), bond_vals.end(), Lanes());
+        std::fill(input_energy_ders.begin(), input_energy_ders.end(), Lanes());
+        std::fill(bond_energy_ders.begin(), bond_energy_ders.end(), Lanes());
         input_vals[0] = 1.0;
         bond_vals[bond_offsets[0]] = 1.0;
 
-        // ------------ Calculate the Input Vector ------------
-        for (int jj = 0; jj < jnum; jj++) {
-            const int j = nbrs[jj];
-            const int jtype = list.types[j];
-            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
-            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+        for (int ii = ii_begin; ii < ii_end; ii++) {
+            int valid_count = 0;
+            const int i = list.ilist[ii];
+            const int itype = list.types[i];
+            const int jnum = list.numneigh[ii];
+            const int* nbrs = list.firstneigh + nbr_offset;
+            const double* dr = list.displacements + nbr_offset * 3;
+            nbr_offset += jnum;
 
-            if (rsq > max_cutoff_sq) continue;
-            cached_j[valid_count] = j;
-            valid_dr[valid_count] = {r[0], r[1], r[2]};
+            select_atom_cache(ii - ii_begin);
 
-            const double dist = std::sqrt(rsq);
-            const double inv_dist = 1.0 / dist;
-            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            double* cache = neighbor_cache + (size_t) valid_count * cache_stride;
-            cache[0] = inv_dist;
-            double* ylm = cache + 1;
-            double* ylm_grads = ylm + harmonic_count;
-            double* mixed = ylm_grads + 3 * harmonic_count;
-            double* mixed_ders = mixed + mixed_size;
-            radial_basis->calc_radial_basis_ders(dist);
-            const double* basis_vals = radial_basis->radial_basis_vals.data();
-            const double* basis_ders = radial_basis->radial_basis_ders.data();
-            harmonics.compute(u);
-            std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
-            std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
+            // ------------ Calculate the Input Vector ------------
+            for (int jj = 0; jj < jnum; jj++) {
+                const int j = nbrs[jj];
+                const int jtype = list.types[j];
+                const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
+                const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
-            // The radial channels of the species pair, and their products with the harmonics
-            for (int l = 0; l < l_count; l++) {
-                const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
-                const double* s = radial_mixing[l].data() + (size_t) (itype * species_count + jtype) * n_rad * rank_r;
-                double* b = mixed + mixed_offsets[l];
-                double* db = mixed_ders + mixed_offsets[l];
-                for (int n = 0; n < rank_r; n++) {
-                    double val = 0, der = 0;
-                    for (int np = 0; np < n_rad; np++) {
-                        val += basis_vals[np] * s[np * rank_r + n];
-                        der += basis_ders[np] * s[np * rank_r + n];
+                if (rsq > max_cutoff_sq) continue;
+                cached_j[valid_count] = j;
+                valid_dr[valid_count] = {r[0], r[1], r[2]};
+
+                const double dist = std::sqrt(rsq);
+                const double inv_dist = 1.0 / dist;
+                const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
+                double* cache = neighbor_cache + (size_t) valid_count * cache_stride;
+                cache[0] = inv_dist;
+                double* ylm = cache + 1;
+                double* ylm_grads = ylm + harmonic_count;
+                double* mixed = ylm_grads + 3 * harmonic_count;
+                double* mixed_ders = mixed + mixed_size;
+                radial_basis->calc_radial_basis_ders(dist);
+                const double* basis_vals = radial_basis->radial_basis_vals.data();
+                const double* basis_ders = radial_basis->radial_basis_ders.data();
+                harmonics.compute(u);
+                std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
+                std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
+
+                // The radial channels of the species pair, and their products with the harmonics
+                for (int l = 0; l < l_count; l++) {
+                    const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
+                    const double* s = radial_mixing[l].data() + (size_t) (itype * species_count + jtype) * n_rad * rank_r;
+                    double* b = mixed + mixed_offsets[l];
+                    double* db = mixed_ders + mixed_offsets[l];
+                    for (int n = 0; n < rank_r; n++) {
+                        double val = 0, der = 0;
+                        for (int np = 0; np < n_rad; np++) {
+                            val += basis_vals[np] * s[np * rank_r + n];
+                            der += basis_ders[np] * s[np * rank_r + n];
+                        }
+                        b[n] = val;
+                        db[n] = der;
                     }
-                    b[n] = val;
-                    db[n] = der;
+                    const int shift = l == 0 ? 1 : 0;
+                    for (int m = -l; m <= l; m++) {
+                        const double y = ylm[l * l + l + m];
+                        Lanes* pv = input_vals.data() + input_shape.index(l, m) + shift;
+                        for (int n = 0; n < rank_r; n++) pv[n][ii - ii_begin] += y * b[n];
+                    }
                 }
-                const int shift = l == 0 ? 1 : 0;
-                for (int m = -l; m <= l; m++) {
-                    const double y = ylm[l * l + l + m];
-                    double* pv = input_vals.data() + input_shape.index(l, m) + shift;
-                    for (int n = 0; n < rank_r; n++) pv[n] += y * b[n];
-                }
+                valid_count++;
             }
-            valid_count++;
+            cached_counts[ii - ii_begin] = valid_count;
         }
 
         // ------------ Tensor Train, Forwards ------------
@@ -128,21 +135,21 @@ void PairETN::compute(const NeighList& list) {
             const CovariantShape& right = bond_shapes[c + 1];
             for (const CoreTerm& t : core_terms[c]) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
-                const double* u = bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
-                double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
+                const Lanes* u = bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
+                Lanes* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
-                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    Lanes* block_products = core_products.data() + t.products_offset + block.products_offset;
 
                     // The block contracted with the left bond, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
-                        const double* pu = u + left.index(block.l1, m1);
-                        double* products = block_products + (m1 + block.l1) * m1_stride;
+                        const Lanes* pu = u + left.index(block.l1, m1);
+                        Lanes* products = block_products + (m1 + block.l1) * m1_stride;
                         for (int n3 = 0; n3 < n3_count; n3++)
                             for (int n2 = 0; n2 < n2_count; n2++) {
                                 const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
-                                double prod = 0;
+                                Lanes prod;
                                 for (int n1 = 0; n1 < n1_count; n1++) prod += c2[n1] * pu[n1];
                                 products[n3 * n2_count + n2] = prod;
                             }
@@ -150,11 +157,11 @@ void PairETN::compute(const NeighList& list) {
 
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
-                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
-                        const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
-                        double* po = out + right.index(block.l3, w.m3);
+                        const Lanes* products = block_products + (w.m1 + block.l1) * m1_stride;
+                        const Lanes* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
+                        Lanes* po = out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
-                            double sum = 0;
+                            Lanes sum;
                             for (int n2 = 0; n2 < n2_count; n2++) sum += products[n3 * n2_count + n2] * pv[n2];
                             po[n3] += w.w * sum;
                         }
@@ -163,9 +170,11 @@ void PairETN::compute(const NeighList& list) {
             }
         }
 
-        const double nbh_energy = bond_vals[bond_offsets[core_count]] + species_coeffs[itype];
-        eatom[i] = nbh_energy;
-        energy += nbh_energy;
+        for (int ii = ii_begin; ii < ii_end; ii++) {
+            const double nbh_energy = bond_vals[bond_offsets[core_count]][ii - ii_begin] + species_coeffs[list.types[list.ilist[ii]]];
+            eatom[list.ilist[ii]] = nbh_energy;
+            energy += nbh_energy;
+        }
 
         // =========== Begin Backpropagation ===========
         bond_energy_ders[bond_offsets[core_count]] = 1.0;
@@ -176,24 +185,23 @@ void PairETN::compute(const NeighList& list) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
                 const int in = bond_offsets[c] + t.in_part * left.size;
                 const int out = bond_offsets[c + 1] + t.out_part * right.size;
-                double* u_ders = bond_energy_ders.data() + in;
+                Lanes* u_ders = bond_energy_ders.data() + in;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
                     const int m1_count = 2 * block.l1 + 1;
-                    const double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    const Lanes* block_products = core_products.data() + t.products_offset + block.products_offset;
 
                     // The input's derivatives, and the products' summed per m1
-                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, 0.0);
+                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, Lanes());
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
                         const int iv = input_shape.index(block.l2, w.m2);
-                        const double* products = block_products + (w.m1 + block.l1) * m1_stride;
-                        double* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
-                        const double* po = bond_energy_ders.data() + out + right.index(block.l3, w.m3);
+                        const Lanes* products = block_products + (w.m1 + block.l1) * m1_stride;
+                        Lanes* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
+                        const Lanes* po = bond_energy_ders.data() + out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
-                            const double g = w.w * po[n3];
-                            if (g == 0.0) continue;
+                            const Lanes g = w.w * po[n3];
                             for (int n2 = 0; n2 < n2_count; n2++) {
                                 input_energy_ders[iv + n2] += g * products[n3 * n2_count + n2];
                                 product_ders[n3 * n2_count + n2] += g * input_vals[iv + n2];
@@ -204,11 +212,10 @@ void PairETN::compute(const NeighList& list) {
                     // The left bond's derivatives, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                         const int iu = left.index(block.l1, m1);
-                        const double* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
+                        const Lanes* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
                         for (int n3 = 0; n3 < n3_count; n3++)
                             for (int n2 = 0; n2 < n2_count; n2++) {
-                                const double d = product_ders[n3 * n2_count + n2];
-                                if (d == 0.0) continue;
+                                const Lanes& d = product_ders[n3 * n2_count + n2];
                                 const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
                                 for (int n1 = 0; n1 < n1_count; n1++) u_ders[iu + n1] += d * c2[n1];
                             }
@@ -217,56 +224,63 @@ void PairETN::compute(const NeighList& list) {
             }
         }
 
-        //------------ Compute forces from the input vector's derivatives ------------
-        for (int jj = 0; jj < valid_count; jj++) {
-            const int j = cached_j[jj];
-            const double* r = valid_dr[jj].data();
-            const double* cache = neighbor_cache + (size_t) jj * cache_stride;
-            const double inv_dist = cache[0];
-            const double* ylm = cache + 1;
-            const double* ylm_grads = ylm + harmonic_count;
-            const double* mixed = ylm_grads + 3 * harmonic_count;
-            const double* mixed_ders = mixed + mixed_size;
+        for (int ii = ii_begin; ii < ii_end; ii++) {
+            const int i = list.ilist[ii];
+            const int valid_count = cached_counts[ii - ii_begin];
 
-            double angular[3] = {0, 0, 0};
-            double radial_force = 0;
-            for (int l = 0; l < l_count; l++) {
-                const int rank_r = radial_ranks[l];
-                const double* b = mixed + mixed_offsets[l];
-                const double* db = mixed_ders + mixed_offsets[l];
-                const int shift = l == 0 ? 1 : 0;
-                for (int m = -l; m <= l; m++) {
-                    const int index = l * l + l + m;
-                    const double* ders = input_energy_ders.data() + input_shape.index(l, m) + shift;
-                    double ylm_der = 0, mixed_der = 0;
-                    for (int n = 0; n < rank_r; n++) {
-                        ylm_der += b[n] * ders[n];
-                        mixed_der += db[n] * ders[n];
+            select_atom_cache(ii - ii_begin);
+
+            //------------ Compute forces from the input vector's derivatives ------------
+            for (int jj = 0; jj < valid_count; jj++) {
+                const int j = cached_j[jj];
+                const double* r = valid_dr[jj].data();
+                const double* cache = neighbor_cache + (size_t) jj * cache_stride;
+                const double inv_dist = cache[0];
+                const double* ylm = cache + 1;
+                const double* ylm_grads = ylm + harmonic_count;
+                const double* mixed = ylm_grads + 3 * harmonic_count;
+                const double* mixed_ders = mixed + mixed_size;
+
+                double angular[3] = {0, 0, 0};
+                double radial_force = 0;
+                for (int l = 0; l < l_count; l++) {
+                    const int rank_r = radial_ranks[l];
+                    const double* b = mixed + mixed_offsets[l];
+                    const double* db = mixed_ders + mixed_offsets[l];
+                    const int shift = l == 0 ? 1 : 0;
+                    for (int m = -l; m <= l; m++) {
+                        const int index = l * l + l + m;
+                        const Lanes* ders = input_energy_ders.data() + input_shape.index(l, m) + shift;
+                        double ylm_der = 0, mixed_der = 0;
+                        for (int n = 0; n < rank_r; n++) {
+                            ylm_der += b[n] * ders[n][ii - ii_begin];
+                            mixed_der += db[n] * ders[n][ii - ii_begin];
+                        }
+                        for (int a = 0; a < 3; a++) angular[a] += ylm_der * ylm_grads[index * 3 + a];
+                        radial_force += ylm[index] * mixed_der;
                     }
-                    for (int a = 0; a < 3; a++) angular[a] += ylm_der * ylm_grads[index * 3 + a];
-                    radial_force += ylm[index] * mixed_der;
                 }
+
+                // dE_i / dr_ij, with r_ij = r_j - r_i
+                double temp_force[3];
+                for (int a = 0; a < 3; a++) temp_force[a] = inv_dist * (angular[a] + radial_force * r[a]);
+
+                forces[i * 3 + 0] += temp_force[0];
+                forces[i * 3 + 1] += temp_force[1];
+                forces[i * 3 + 2] += temp_force[2];
+
+                forces[j * 3 + 0] -= temp_force[0];
+                forces[j * 3 + 1] -= temp_force[1];
+                forces[j * 3 + 2] -= temp_force[2];
+
+                // Accumulate virial stress as PairMTP does
+                virial[0] -= r[0] * temp_force[0];    //xx
+                virial[1] -= r[1] * temp_force[1];    //yy
+                virial[2] -= r[2] * temp_force[2];    //zz
+                virial[3] -= r[0] * temp_force[1];    //xy
+                virial[4] -= r[0] * temp_force[2];    //xz
+                virial[5] -= r[1] * temp_force[2];    //yz
             }
-
-            // dE_i / dr_ij, with r_ij = r_j - r_i
-            double temp_force[3];
-            for (int a = 0; a < 3; a++) temp_force[a] = inv_dist * (angular[a] + radial_force * r[a]);
-
-            forces[i * 3 + 0] += temp_force[0];
-            forces[i * 3 + 1] += temp_force[1];
-            forces[i * 3 + 2] += temp_force[2];
-
-            forces[j * 3 + 0] -= temp_force[0];
-            forces[j * 3 + 1] -= temp_force[1];
-            forces[j * 3 + 2] -= temp_force[2];
-
-            // Accumulate virial stress as PairMTP does
-            virial[0] -= r[0] * temp_force[0];    //xx
-            virial[1] -= r[1] * temp_force[1];    //yy
-            virial[2] -= r[2] * temp_force[2];    //zz
-            virial[3] -= r[0] * temp_force[1];    //xy
-            virial[4] -= r[0] * temp_force[2];    //xz
-            virial[5] -= r[1] * temp_force[2];    //yz
         }
     }
 }
@@ -490,18 +504,25 @@ void PairETN::prepare_cores() {
     prepare_columns();
 
     cache_stride = 1 + 4 * l_count * l_count + 2 * mixed_offsets[l_count];
-    input_vals.resize(input_shape.size);
-    bond_vals.resize(bonds_size);
-    input_energy_ders.resize(input_shape.size);
-    bond_energy_ders.resize(bonds_size);
-
     size_t block_products_size = 0;
     for (int c = 0; c < core_count; c++)
         for (const Core* core : {&cores[c], &cores_im[c]})
             for (const CoreBlock& block : core->blocks)
                 block_products_size = std::max(block_products_size, (size_t) (2 * block.l1 + 1) * bond_shapes[c + 1].ranks[block.l3] * input_shape.ranks[block.l2]);
+
+    input_vals.resize(input_shape.size);
+    bond_vals.resize(bonds_size);
+    input_energy_ders.resize(input_shape.size);
+    bond_energy_ders.resize(bonds_size);
     core_products.resize(products_size);
     core_product_ders.resize(block_products_size);
+
+    atom_input_vals.resize(input_shape.size);
+    atom_bond_vals.resize(bonds_size);
+    atom_input_energy_ders.resize(input_shape.size);
+    atom_bond_energy_ders.resize(bonds_size);
+    atom_core_products.resize(products_size);
+    atom_core_product_ders.resize(block_products_size);
 }
 
 // The first column of each coefficient block in get_coeffs' order, for the current shape and species count.

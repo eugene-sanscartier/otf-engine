@@ -25,10 +25,10 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
         const double* dr = list.displacements + nbr_offset * 3;
         nbr_offset += jnum;
 
-        std::fill(input_vals.begin(), input_vals.end(), 0.0);
-        std::fill(bond_vals.begin(), bond_vals.end(), 0.0);
-        input_vals[0] = 1.0;
-        bond_vals[bond_offsets[0]] = 1.0;
+        std::fill(atom_input_vals.begin(), atom_input_vals.end(), 0.0);
+        std::fill(atom_bond_vals.begin(), atom_bond_vals.end(), 0.0);
+        atom_input_vals[0] = 1.0;
+        atom_bond_vals[bond_offsets[0]] = 1.0;
 
         // ------------ Calculate the Input Vector ------------
         for (int jj = 0; jj < jnum; jj++) {
@@ -54,7 +54,7 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
                 for (int n = 0; n < rank_r; n++) {
                     double val = 0;
                     for (int np = 0; np < n_rad; np++) val += basis_vals[np] * s[np * rank_r + n];
-                    for (int m = -l; m <= l; m++) input_vals[input_shape.index(l, m) + shift + n] += ylm[l * l + l + m] * val;
+                    for (int m = -l; m <= l; m++) atom_input_vals[input_shape.index(l, m) + shift + n] += ylm[l * l + l + m] * val;
                 }
             }
         }
@@ -65,12 +65,12 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
             const CovariantShape& right = bond_shapes[c + 1];
             for (const CoreTerm& t : core_terms[c]) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
-                const double* u = bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
-                double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
+                const double* u = atom_bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
+                double* out = atom_bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
-                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    double* block_products = atom_core_products.data() + t.products_offset + block.products_offset;
 
                     // The block contracted with the left bond, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
@@ -88,7 +88,7 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
                         const double* products = block_products + (w.m1 + block.l1) * m1_stride;
-                        const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
+                        const double* pv = atom_input_vals.data() + input_shape.index(block.l2, w.m2);
                         double* po = out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             double sum = 0;
@@ -100,8 +100,8 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
             }
         }
 
-        std::copy(input_vals.begin(), input_vals.end(), inputs_out + (size_t) ii * input_shape.size);
-        std::copy(bond_vals.begin(), bond_vals.end(), bonds_out + (size_t) ii * bonds_size);
+        std::copy(atom_input_vals.begin(), atom_input_vals.end(), inputs_out + (size_t) ii * input_shape.size);
+        std::copy(atom_bond_vals.begin(), atom_bond_vals.end(), bonds_out + (size_t) ii * bonds_size);
     }
 }
 
@@ -149,12 +149,12 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         grow_cache(jnum);
         grow_neighbor_rows(jnum);
 
-        std::fill(input_vals.begin(), input_vals.end(), 0.0);
-        std::fill(bond_vals.begin(), bond_vals.end(), 0.0);
-        std::fill(input_energy_ders.begin(), input_energy_ders.end(), 0.0);
-        std::fill(bond_energy_ders.begin(), bond_energy_ders.end(), 0.0);
-        input_vals[0] = 1.0;
-        bond_vals[bond_offsets[0]] = 1.0;
+        std::fill(atom_input_vals.begin(), atom_input_vals.end(), 0.0);
+        std::fill(atom_bond_vals.begin(), atom_bond_vals.end(), 0.0);
+        std::fill(atom_input_energy_ders.begin(), atom_input_energy_ders.end(), 0.0);
+        std::fill(atom_bond_energy_ders.begin(), atom_bond_energy_ders.end(), 0.0);
+        atom_input_vals[0] = 1.0;
+        atom_bond_vals[bond_offsets[0]] = 1.0;
 
         // ------------ The neighbors within the cutoff: harmonics, radial basis and the input vector ------------
         for (int jj = 0; jj < jnum; jj++) {
@@ -185,7 +185,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 for (int n = 0; n < rank_r; n++) {
                     double val = 0;
                     for (int np = 0; np < n_rad; np++) val += basis_vals[np] * s[np * rank_r + n];
-                    for (int m = -l; m <= l; m++) input_vals[input_shape.index(l, m) + shift + n] += ylm[l * l + l + m] * val;
+                    for (int m = -l; m <= l; m++) atom_input_vals[input_shape.index(l, m) + shift + n] += ylm[l * l + l + m] * val;
                 }
             }
             valid_count++;
@@ -197,12 +197,12 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             const CovariantShape& right = bond_shapes[c + 1];
             for (const CoreTerm& t : core_terms[c]) {
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
-                const double* u = bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
-                double* out = bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
+                const double* u = atom_bond_vals.data() + bond_offsets[c] + t.in_part * left.size;
+                double* out = atom_bond_vals.data() + bond_offsets[c + 1] + t.out_part * right.size;
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
-                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    double* block_products = atom_core_products.data() + t.products_offset + block.products_offset;
 
                     // The block contracted with the left bond, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
@@ -220,7 +220,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
                         const double* products = block_products + (w.m1 + block.l1) * m1_stride;
-                        const double* pv = input_vals.data() + input_shape.index(block.l2, w.m2);
+                        const double* pv = atom_input_vals.data() + input_shape.index(block.l2, w.m2);
                         double* po = out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             double sum = 0;
@@ -234,7 +234,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 
         // =========== Begin Backpropagation, with the cores' columns ===========
         double* row = site_e_grad + (size_t) ii * width;
-        bond_energy_ders[bond_offsets[core_count]] = 1.0;
+        atom_bond_energy_ders[bond_offsets[core_count]] = 1.0;
         for (int c = core_count - 1; c >= 0; c--) {
             const CovariantShape& left = bond_shapes[c];
             const CovariantShape& right = bond_shapes[c + 1];
@@ -242,29 +242,29 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 const Core& core = t.imaginary ? cores_im[c] : cores[c];
                 const int in = bond_offsets[c] + t.in_part * left.size;
                 const int out = bond_offsets[c + 1] + t.out_part * right.size;
-                const double* u = bond_vals.data() + in;
-                double* u_ders = bond_energy_ders.data() + in;
+                const double* u = atom_bond_vals.data() + in;
+                double* u_ders = atom_bond_energy_ders.data() + in;
                 double* core_ders = row + (t.imaginary ? core_im_columns[c] : core_columns[c]);
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
                     const int m1_count = 2 * block.l1 + 1;
-                    const double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    const double* block_products = atom_core_products.data() + t.products_offset + block.products_offset;
 
                     // The input's derivatives, and the products' summed per m1
-                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, 0.0);
+                    std::fill(atom_core_product_ders.begin(), atom_core_product_ders.begin() + m1_count * m1_stride, 0.0);
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
                         const int iv = input_shape.index(block.l2, w.m2);
                         const double* products = block_products + (w.m1 + block.l1) * m1_stride;
-                        double* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
-                        const double* po = bond_energy_ders.data() + out + right.index(block.l3, w.m3);
+                        double* product_ders = atom_core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
+                        const double* po = atom_bond_energy_ders.data() + out + right.index(block.l3, w.m3);
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             const double g = w.w * po[n3];
                             if (g == 0.0) continue;
                             for (int n2 = 0; n2 < n2_count; n2++) {
-                                input_energy_ders[iv + n2] += g * products[n3 * n2_count + n2];
-                                product_ders[n3 * n2_count + n2] += g * input_vals[iv + n2];
+                                atom_input_energy_ders[iv + n2] += g * products[n3 * n2_count + n2];
+                                product_ders[n3 * n2_count + n2] += g * atom_input_vals[iv + n2];
                             }
                         }
                     }
@@ -272,7 +272,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                     // The left bond's and the core's derivatives, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                         const int iu = left.index(block.l1, m1);
-                        const double* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
+                        const double* product_ders = atom_core_product_ders.data() + (m1 + block.l1) * m1_stride;
                         for (int n3 = 0; n3 < n3_count; n3++)
                             for (int n2 = 0; n2 < n2_count; n2++) {
                                 const double d = product_ders[n3 * n2_count + n2];
@@ -309,7 +309,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                     // dE_i/db_n, the derivative of the channel's value
                     double value_der = 0;
                     for (int m = -l; m <= l; m++)
-                        value_der += ylm[l * l + l + m] * input_energy_ders[input_shape.index(l, m) + shift + n];
+                        value_der += ylm[l * l + l + m] * atom_input_energy_ders[input_shape.index(l, m) + shift + n];
                     for (int np = 0; np < n_rad; np++) {
                         const double s = value_der * basis_vals[np];
                         if (s == 0.0) continue;
@@ -331,7 +331,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
    virial_ab sums -r_a f_b over the pairs. The forward pass carries each
    entry of the input and bond vectors' derivative along w (its tangent)
    beside its value. Backward, the tangents' adjoints are the energy
-   derivatives input_energy_ders and bond_energy_ders, and the values'
+   derivatives atom_input_energy_ders and atom_bond_energy_ders, and the values'
    adjoints pick up the tangents through the cores. A harmonic's tangent is
    grad Y . w / |r|, the distance's w . r / |r|.
 ------------------------------------------------------------------------- */
@@ -356,8 +356,8 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
     bond_tangents.resize(bonds_size);
     input_adjoints.resize(input_shape.size);
     bond_adjoints.resize(bonds_size);
-    core_product_tangents.resize(core_products.size());
-    core_product_adjoints.resize(core_product_ders.size());
+    core_product_tangents.resize(atom_core_products.size());
+    core_product_adjoints.resize(atom_core_product_ders.size());
     radial_mixing_grad.resize(l_count);
     for (int l = 0; l < l_count; l++) radial_mixing_grad[l].assign(radial_mixing[l].size(), 0.0);
 
@@ -376,16 +376,16 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         grow_cache(jnum);
         grow_neighbor_rows(jnum);
 
-        std::fill(input_vals.begin(), input_vals.end(), 0.0);
+        std::fill(atom_input_vals.begin(), atom_input_vals.end(), 0.0);
         std::fill(input_tangents.begin(), input_tangents.end(), 0.0);
-        std::fill(bond_vals.begin(), bond_vals.end(), 0.0);
+        std::fill(atom_bond_vals.begin(), atom_bond_vals.end(), 0.0);
         std::fill(bond_tangents.begin(), bond_tangents.end(), 0.0);
-        std::fill(input_energy_ders.begin(), input_energy_ders.end(), 0.0);
+        std::fill(atom_input_energy_ders.begin(), atom_input_energy_ders.end(), 0.0);
         std::fill(input_adjoints.begin(), input_adjoints.end(), 0.0);
-        std::fill(bond_energy_ders.begin(), bond_energy_ders.end(), 0.0);
+        std::fill(atom_bond_energy_ders.begin(), atom_bond_energy_ders.end(), 0.0);
         std::fill(bond_adjoints.begin(), bond_adjoints.end(), 0.0);
-        input_vals[0] = 1.0;
-        bond_vals[bond_offsets[0]] = 1.0;
+        atom_input_vals[0] = 1.0;
+        atom_bond_vals[bond_offsets[0]] = 1.0;
 
         // ------------ The neighbors within the cutoff: the input vector, its tangent and the radial basis ------------
         for (int jj = 0; jj < jnum; jj++) {
@@ -436,7 +436,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                     for (int m = -l; m <= l; m++) {
                         const int index = l * l + l + m;
                         const int k = input_shape.index(l, m) + shift + n;
-                        input_vals[k] += ylm[index] * val;
+                        atom_input_vals[k] += ylm[index] * val;
                         input_tangents[k] += ylm_tangents[index] * val + ylm[index] * dist_tangent * der;
                     }
                 }
@@ -455,7 +455,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 for (const CoreBlock& block : core.blocks) {
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
-                    double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    double* block_products = atom_core_products.data() + t.products_offset + block.products_offset;
                     double* block_product_tangents = core_product_tangents.data() + t.products_offset + block.products_offset;
 
                     // The block contracted with the left bond and its tangent, once per m1
@@ -468,7 +468,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                                 const double* c2 = core.coeffs.data() + block.base + n3 * block.stride3 + n2 * block.stride2;
                                 double prod = 0, prod_tangent = 0;
                                 for (int n1 = 0; n1 < n1_count; n1++) {
-                                    prod += c2[n1] * bond_vals[iu + n1];
+                                    prod += c2[n1] * atom_bond_vals[iu + n1];
                                     prod_tangent += c2[n1] * bond_tangents[iu + n1];
                                 }
                                 products[n3 * n2_count + n2] = prod;
@@ -485,10 +485,10 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                             double sum = 0, sum_tangent = 0;
                             for (int n2 = 0; n2 < n2_count; n2++) {
                                 const double prod = products[n3 * n2_count + n2], prod_tangent = product_tangents[n3 * n2_count + n2];
-                                sum += prod * input_vals[iv + n2];
-                                sum_tangent += prod_tangent * input_vals[iv + n2] + prod * input_tangents[iv + n2];
+                                sum += prod * atom_input_vals[iv + n2];
+                                sum_tangent += prod_tangent * atom_input_vals[iv + n2] + prod * input_tangents[iv + n2];
                             }
-                            bond_vals[io + n3] += w.w * sum;
+                            atom_bond_vals[io + n3] += w.w * sum;
                             bond_tangents[io + n3] += w.w * sum_tangent;
                         }
                     }
@@ -497,7 +497,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         }
 
         // =========== Backpropagation of values and tangents ===========
-        bond_energy_ders[bond_offsets[core_count]] = 1.0;
+        atom_bond_energy_ders[bond_offsets[core_count]] = 1.0;
         bond_adjoints[bond_offsets[core_count]] = a;
         for (int c = core_count - 1; c >= 0; c--) {
             const CovariantShape& left = bond_shapes[c];
@@ -511,29 +511,29 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                     const int n1_count = left.ranks[block.l1], n2_count = input_shape.ranks[block.l2], n3_count = right.ranks[block.l3];
                     const int m1_stride = n3_count * n2_count;
                     const int m1_count = 2 * block.l1 + 1;
-                    const double* block_products = core_products.data() + t.products_offset + block.products_offset;
+                    const double* block_products = atom_core_products.data() + t.products_offset + block.products_offset;
                     const double* block_product_tangents = core_product_tangents.data() + t.products_offset + block.products_offset;
 
                     // The input's derivatives and adjoints, and the products' summed per m1
-                    std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, 0.0);
+                    std::fill(atom_core_product_ders.begin(), atom_core_product_ders.begin() + m1_count * m1_stride, 0.0);
                     std::fill(core_product_adjoints.begin(), core_product_adjoints.begin() + m1_count * m1_stride, 0.0);
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
                         const int iv = input_shape.index(block.l2, w.m2), io = out + right.index(block.l3, w.m3);
                         const double* products = block_products + (w.m1 + block.l1) * m1_stride;
                         const double* product_tangents = block_product_tangents + (w.m1 + block.l1) * m1_stride;
-                        double* product_ders = core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
+                        double* product_ders = atom_core_product_ders.data() + (w.m1 + block.l1) * m1_stride;
                         double* product_adjoints = core_product_adjoints.data() + (w.m1 + block.l1) * m1_stride;
                         for (int n3 = 0; n3 < n3_count; n3++) {
-                            const double G = w.w * bond_energy_ders[io + n3];
+                            const double G = w.w * atom_bond_energy_ders[io + n3];
                             const double A = w.w * bond_adjoints[io + n3];
                             if (G == 0.0 && A == 0.0) continue;
                             for (int n2 = 0; n2 < n2_count; n2++) {
                                 const int k = n3 * n2_count + n2;
-                                input_energy_ders[iv + n2] += G * products[k];
+                                atom_input_energy_ders[iv + n2] += G * products[k];
                                 input_adjoints[iv + n2] += A * products[k] + G * product_tangents[k];
-                                product_ders[k] += G * input_vals[iv + n2];
-                                product_adjoints[k] += A * input_vals[iv + n2] + G * input_tangents[iv + n2];
+                                product_ders[k] += G * atom_input_vals[iv + n2];
+                                product_adjoints[k] += A * atom_input_vals[iv + n2] + G * input_tangents[iv + n2];
                             }
                         }
                     }
@@ -541,7 +541,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                     // The left bond's derivatives and adjoints, and the core's gradient, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                         const int iu = in + left.index(block.l1, m1);
-                        const double* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
+                        const double* product_ders = atom_core_product_ders.data() + (m1 + block.l1) * m1_stride;
                         const double* product_adjoints = core_product_adjoints.data() + (m1 + block.l1) * m1_stride;
                         for (int n3 = 0; n3 < n3_count; n3++)
                             for (int n2 = 0; n2 < n2_count; n2++) {
@@ -551,9 +551,9 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                                 const double* c2 = core.coeffs.data() + c2_offset;
                                 double* c2_grad = core_grad + c2_offset;
                                 for (int n1 = 0; n1 < n1_count; n1++) {
-                                    bond_energy_ders[iu + n1] += Gv * c2[n1];
+                                    atom_bond_energy_ders[iu + n1] += Gv * c2[n1];
                                     bond_adjoints[iu + n1] += Av * c2[n1];
-                                    c2_grad[n1] += Av * bond_vals[iu + n1] + Gv * bond_tangents[iu + n1];
+                                    c2_grad[n1] += Av * atom_bond_vals[iu + n1] + Gv * bond_tangents[iu + n1];
                                 }
                             }
                     }
@@ -582,8 +582,8 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                     for (int m = -l; m <= l; m++) {
                         const int index = l * l + l + m;
                         const int k = input_shape.index(l, m) + shift + n;
-                        value_adjoint += ylm[index] * input_adjoints[k] + ylm_tangents[index] * input_energy_ders[k];
-                        der_adjoint += ylm[index] * input_energy_ders[k];
+                        value_adjoint += ylm[index] * input_adjoints[k] + ylm_tangents[index] * atom_input_energy_ders[k];
+                        der_adjoint += ylm[index] * atom_input_energy_ders[k];
                     }
                     der_adjoint *= dist_tangent;
                     for (int np = 0; np < n_rad; np++) mixing_grad[np * rank_r + n] += value_adjoint * basis_vals[np] + der_adjoint * basis_ders[np];
