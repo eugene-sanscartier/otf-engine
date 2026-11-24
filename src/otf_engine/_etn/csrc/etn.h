@@ -16,9 +16,14 @@ class ETN : public PairETN {
     // row ii for atom ilist[ii], laid out as get_input_shape() and get_bond_offset() give.
     void eval_bonds(const NeighList& list, double* inputs_out, double* bonds_out);
 
-    // dE_i/dc per central atom: [inum * coeff_count]; row ii for atom ilist[ii]. Throws when
-    // given force_grad, since the ETN has no force gradients here.
-    void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad) override;
+    // d(E_i, F, virial)/dc. With nonlinear false, only the columns the energy is linear in, the last core's
+    // and the species', are filled; the other columns stay zero. force_grad throws with nonlinear true.
+    //
+    //   site_energy_grad : [inum * coeff_count]      per-atom dE_i/dc, row ii for atom ilist[ii]
+    //   force_grad       : [n_atoms * 3 * coeff_count], or null
+    //   virial_grad      : [6 * coeff_count], or null
+    void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad, bool nonlinear);
+    void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad) override { eval_grad(list, site_energy_grad, force_grad, virial_grad, true); }
 
     // Adds dL/dc to loss_grad [coeff_count], for a loss L whose derivatives
     // with respect to the energy, forces and virial of this structure are
@@ -29,8 +34,9 @@ class ETN : public PairETN {
     // Grows the neighbor rows to jnum neighbors.
     void grow_neighbor_rows(int jnum);
 
-    // The neighbors of the current atom, each array in rows over the neighbors: the harmonics, the radial basis'
-    // values and derivatives; and eval_loss_grad's tangents of the harmonics and of the distance along the loss weight
+    // The neighbors of the current atom, or of each atom of eval_loss_grad's chunk in blocks of atom_cache_size rows,
+    // each array in rows over the neighbors: the harmonics, the radial basis' values and derivatives; and
+    // eval_loss_grad's tangents of the harmonics and of the distance along the loss weight
     int rows_size = 0;
     std::vector<double> neighbor_harmonics;          // [rows_size * l_count^2]
     std::vector<double> neighbor_radial_vals;        // [rows_size * radial_basis_size]
@@ -38,13 +44,22 @@ class ETN : public PairETN {
     std::vector<double> neighbor_harmonic_tangents;  // [rows_size * l_count^2]
     std::vector<double> neighbor_dist_tangents;      // [rows_size]
 
-    // eval_loss_grad: per entry of the input and bond vectors, the tangent and the adjoint of the value.
-    std::vector<double> input_tangents;   // [input_shape.size]
-    std::vector<double> bond_tangents;    // [bonds_size]
-    std::vector<double> input_adjoints;   // [input_shape.size]
-    std::vector<double> bond_adjoints;    // [bonds_size]
-    std::vector<double> core_product_tangents;  // laid out as atom_core_products
-    std::vector<double> core_product_adjoints;  // laid out as atom_core_product_ders
+    // eval_loss_grad: per entry of the input and bond vectors, the tangent and the adjoint of the value, for its chunk
+    std::vector<Lanes> input_tangents;   // [input_shape.size]
+    std::vector<Lanes> bond_tangents;    // [bonds_size]
+    std::vector<Lanes> input_adjoints;   // [input_shape.size]
+    std::vector<Lanes> bond_adjoints;    // [bonds_size]
+    std::vector<Lanes> core_product_tangents;  // laid out as core_products
+    std::vector<Lanes> core_product_adjoints;  // laid out as core_product_ders
     // dL/dS_l of each species pair's radial mixing over the structure: [l], laid out as radial_mixing
     std::vector<std::vector<double>> radial_mixing_grad;
+
+    // eval_grad without the nonlinear columns: per entry of the input and bond vectors, and of one block's
+    // products, the adjoint each backwards pass carries, the passes innermost; then per entry of the input,
+    // the derivative of each last-core column's site energy, the columns innermost
+    std::vector<double> input_pass_ders;      // [input_shape.size * pass count]
+    std::vector<double> bond_pass_ders;       // [bonds_size * pass count]
+    std::vector<double> product_pass_ders;    // [atom_core_product_ders.size() * pass count]
+    std::vector<double> input_column_ders;    // [input_shape.size * column count]
+    std::vector<double> column_pair_ders;     // [4 * column count] per column, dE_k/dr_ij's angular part (x, y, z), then its radial part
 };

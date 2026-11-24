@@ -4,8 +4,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Every target is built for the CPU of the machine that builds it
-add_compile_options(-march=native)
+# Every target is built for the CPU of the machine that builds it, with `#pragma omp simd` honoured and no thread
+add_compile_options(-march=native -fopenmp-simd)
 
 find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)

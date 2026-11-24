@@ -39,7 +39,8 @@ class MTP : public PairMTP {
     // Grows the neighbor rows to jnum neighbors.
     void grow_neighbor_rows(int jnum);
 
-    // The neighbors of the current atom, each array in rows over the neighbors: the unit displacement's three
+    // The neighbors of the current atom, or of each atom of eval_loss_grad's chunk in a block of its own with rows of
+    // atom_cache_size, each array in rows over the neighbors: the unit displacement's three
     // components and the inverse distance, the angular monomials, the radial functions' values and derivatives;
     // eval_loss_grad's tangents of the unit displacement along the loss weight, with that weight's radial component,
     // and the monomials' tangents; and for eval_grad's force passes the monomials' derivatives w.r.t. the displacement
@@ -58,8 +59,8 @@ class MTP : public PairMTP {
     std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] the basis values' rows of moment_ders, transposed
     std::vector<char> first_product;  // [alpha_index_times_count] whether the product is the first to add to its moment
 
-    // eval_loss_grad: per moment, the tangent and the adjoint of the moment value.
-    std::vector<double> moment_tangents;                    // [alpha_moment_count]
-    std::vector<double> moment_adjoints;                    // [alpha_moment_count]
+    // eval_loss_grad: per moment, the tangent and the adjoint of the moment value, for its chunk.
+    std::vector<Lanes> moment_tangents;                     // [alpha_moment_count]
+    std::vector<Lanes> moment_adjoints;                     // [alpha_moment_count]
     std::vector<double> basic_adjoints_by_mu;               // [alpha_index_basic_count] moment_adjoints of the basic moments, grouped
 };

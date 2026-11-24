@@ -53,6 +53,7 @@ void MTPFit::run() {
 
     add_species();
     log_event(log, "coefficients", "%zu, %d radial, %d linear", coeffs.size(), n_radial, n_linear);
+    if (options.varpro && options.varpro_fraction < 1.0) draw_varpro_subset(0);
 
     // Every rank checks the same options and sizes, so every rank raises together.
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
@@ -482,16 +483,16 @@ void MTPFit::fit_riemannian(int max_iter) {
 /* ----------------------------------------------------------------------
    Least squares for the species and linear coefficients. Rank 0 solves the summed system.
 ------------------------------------------------------------------------- */
-void MTPFit::fit_linear() {
+void MTPFit::fit_linear(bool subset) {
     potential.set_coeffs(coeffs.data());
-    assemble_linear();
+    assemble_linear(subset);
     if (rank == 0) solve_linear();
     broadcast_linear();
 }
 
 // Sums the upper triangle of the least-squares system over every rank's structures, into
 // lin_matrix and lin_vector on rank 0.
-void MTPFit::assemble_linear() {
+void MTPFit::assemble_linear(bool subset) {
     const int n = n_linear;
     const int width = (int) coeffs.size();
     lin_matrix.assign((size_t) n * n, 0.0);
@@ -508,8 +509,13 @@ void MTPFit::assemble_linear() {
     Eigen::VectorXd references(equations.rows());
     std::vector<double> scratch_rows;
     if (options.varpro) linear_rows.resize(structures.size());
+    const double subset_scale = subset ? 1.0 / options.varpro_fraction : 1.0;
     for (size_t index = 0; index < structures.size(); index++) {
         const FitStructure& s = structures[index];
+        if (subset && !varpro_subset[index]) {
+            if (options.varpro) linear_rows[index].clear();
+            continue;
+        }
         const NeighList list = s.list();
         site_energy_grad.resize((size_t) list.inum * width);
         force_grad.resize((size_t) list.n_atoms * 3 * width);
@@ -528,21 +534,21 @@ void MTPFit::assemble_linear() {
 
         int m = 0;
         if (s.has_energy) {
-            const double root = std::sqrt(energy_weight(s));
+            const double root = std::sqrt(subset_scale * energy_weight(s));
             equations.row(m) = root * rows.row(0);
             references[m++] = root * s.energy;
         }
         if (options.force_weight != 0 && s.has_forces)
             for (int ii = 0; ii < list.inum; ii++) {
                 const int atom = list.ilist[ii];
-                const double root = std::sqrt(force_weight(s, atom, s.forces.data()));
+                const double root = std::sqrt(subset_scale * force_weight(s, atom, s.forces.data()));
                 for (int a = 0; a < 3; a++) {
                     equations.row(m) = root * rows.row(1 + atom * 3 + a);
                     references[m++] = root * s.forces[atom * 3 + a];
                 }
             }
         if (options.stress_weight != 0 && s.has_virial) {
-            const double root = std::sqrt(stress_weight(s));
+            const double root = std::sqrt(subset_scale * stress_weight(s));
             for (int a = 0; a < 3; a++)
                 for (int b = 0; b < 3; b++) {
                     equations.row(m) = root * rows.row(1 + 3 * list.n_atoms + VIRIAL_INDEX[a][b]);
@@ -604,6 +610,7 @@ void MTPFit::solve_linear() {
 
     for (int i = 0; i < n; i++)
         A[i * n + i] += reg_vector[i] * structure_count;
+    if (options.varpro_fraction < 1.0) linear_system.assign(A, A + (size_t) n * n);
 
     if (options.ldlt) {
         const Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> matrix(A, n, n);
@@ -720,6 +727,7 @@ void MTPFit::rescale() {
 
 double MTPFit::objective(const std::vector<double>& at, std::vector<double>& grad) {
     // fixes the regularization at the potential's own radial coefficients, where BFGS's first evaluation fixes it
+    if (options.varpro && options.varpro_fraction < 1.0) draw_varpro_subset(0);
     if (options.varpro) fit_linear();
     std::copy(at.begin(), at.end(), coeffs.begin());
     double terms[4];
@@ -735,13 +743,65 @@ double MTPFit::objective(const std::vector<double>& at, std::vector<double>& gra
 }
 
 double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4], bool solve_linear) {
-    if (options.varpro && solve_linear) fit_linear();    // the linear coefficients at their optimum for these radial ones
+    // the linear coefficients at their optimum for these radial ones
+    const bool subset = options.varpro && solve_linear && options.varpro_fraction < 1.0;
+    if (options.varpro && solve_linear) fit_linear(subset);
     local_grad.resize(coeffs.size());
     double loss = loss_grad(local_grad) / structure_count;
     for (double& g : local_grad) g /= structure_count;
     double local_terms[4] = {loss_terms[0] / structure_count, loss_terms[1] / structure_count, loss_terms[2] / structure_count, loss};
     if (rank == 0) add_penalty(loss, local_grad, radial);
     local_terms[3] = loss - local_terms[3];
+
+    // varpro_fraction: x minimizes the draw's loss and the loss takes every structure, so dL/dx is not zero. Its path
+    // through the solve is -d/dc of sum w (J x - y) . J mu over the draw, at fixed x and mu = A^-1 dL/dx, with w the
+    // solve's weights: each structure's rows give J x - y and J mu, and eval_loss_grad the derivative of each factor.
+    if (subset) {
+        std::vector<double> slope(rank == 0 ? n_linear : 0), mu(n_linear);
+        comm.reduce(local_grad.data() + n_radial, slope.data(), n_linear, ReduceOp::sum, 0);
+        if (rank == 0) {
+            for (double& g : slope) g *= structure_count;    // of the summed loss, as the system is
+            Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> matrix(linear_system.data(), n_linear, n_linear);
+            Eigen::Map<Eigen::VectorXd>(mu.data(), n_linear) = matrix.ldlt().solve(Eigen::Map<const Eigen::VectorXd>(slope.data(), n_linear));
+        }
+        comm.bcast(mu.data(), n_linear, 0);
+        std::vector<double> at_mu = coeffs, path(coeffs.size(), 0.0);
+        std::copy(mu.begin(), mu.end(), at_mu.begin() + n_radial);
+
+        const double subset_scale = 1.0 / options.varpro_fraction;
+        for (bool by_mu : {false, true}) {
+            // at x, seeded by J mu; at mu, seeded by J x - y
+            potential.set_coeffs(by_mu ? at_mu.data() : coeffs.data());
+            for (size_t index = 0; index < structures.size(); index++) {
+                if (linear_rows[index].empty()) continue;
+                const FitStructure& s = structures[index];
+                const NeighList list = s.list();
+                const int m = 1 + 3 * list.n_atoms + 6;
+                const double* factors = by_mu ? coeffs.data() + n_radial : mu.data();
+                linear_values.resize(m);
+                Eigen::Map<Eigen::VectorXd>(linear_values.data(), m).noalias() = Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(linear_rows[index].data(), m, n_linear) * Eigen::Map<const Eigen::VectorXd>(factors, n_linear);
+
+                double energy_seed = 0.0, virial_seed[6] = {};
+                dloss_dforces.assign((size_t) list.n_atoms * 3, 0.0);
+                if (s.has_energy) energy_seed = -subset_scale * energy_weight(s) * (linear_values[0] - (by_mu ? s.energy : 0.0));
+                if (options.force_weight != 0 && s.has_forces)
+                    for (int ii = 0; ii < list.inum; ii++) {
+                        const int atom = list.ilist[ii];
+                        const double wgt = subset_scale * force_weight(s, atom, s.forces.data());
+                        for (int a = 0; a < 3; a++) dloss_dforces[atom * 3 + a] = -wgt * (linear_values[1 + atom * 3 + a] - (by_mu ? s.forces[atom * 3 + a] : 0.0));
+                    }
+                if (options.stress_weight != 0 && s.has_virial)
+                    for (int a = 0; a < 3; a++)
+                        for (int b = 0; b < 3; b++) {
+                            const int k = VIRIAL_INDEX[a][b];
+                            virial_seed[k] -= subset_scale * stress_weight(s) * (linear_values[1 + 3 * list.n_atoms + k] - (by_mu ? s.virial[k] : 0.0));
+                        }
+                potential.eval_loss_grad(list, energy_seed, dloss_dforces.data(), virial_seed, path.data());
+            }
+        }
+        potential.set_coeffs(coeffs.data());
+        for (size_t i = 0; i < path.size(); i++) local_grad[i] += path[i] / structure_count;
+    }
 
     double total = 0.0;
     comm.reduce(&loss, &total, 1, ReduceOp::sum, 0);
@@ -771,7 +831,7 @@ double MTPFit::loss_grad(std::vector<double>& grad) {
         const NeighList list = s.list();
         double energy;
         const double *forces, *virial;
-        if (from_rows) {
+        if (from_rows && !linear_rows[index].empty()) {
             const int m = 1 + 3 * list.n_atoms + 6;
             linear_values.resize(m);
             Eigen::Map<Eigen::VectorXd>(linear_values.data(), m).noalias() = Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(linear_rows[index].data(), m, n_linear) * Eigen::Map<const Eigen::VectorXd>(coeffs.data() + n_radial, n_linear);

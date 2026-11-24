@@ -46,6 +46,8 @@ class WolfeBFGS {
     void set_identity_as_inv_hess();
     // Zeroes the inverse Hessian's off-diagonal entries.
     void diag_inv_hess();
+    // Multiplies the inverse Hessian by c.
+    void scale_inv_hess(double c);
     void set_wolfe_c1(double value) { wolfe_c1 = linesearch.wolfe_c1 = value; }
     void set_wolfe_c2(double value) { wolfe_c2 = linesearch.wolfe_c2 = value; }
 

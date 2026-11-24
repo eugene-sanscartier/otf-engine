@@ -249,11 +249,11 @@ struct OptionFields {
 };
 
 // A fit's options from strings, as name (fit_mtp, fit_etn) takes them: log, the log target, into log;
-// species, the species' names, comma-separated; the weights; balance_species; and the fields add_option_fields(o, fields) adds.
+// species, the species' names, comma-separated; the weights; balance_species; varpro_fraction; and the fields add_option_fields(o, fields) adds.
 template <class Options>
 Options parse_options(const char* name, const std::map<std::string, std::string>& options, std::string& log) {
     Options o;
-    OptionFields fields{{{"energy_weight", &o.energy_weight}, {"force_weight", &o.force_weight}, {"stress_weight", &o.stress_weight}}, {}, {{"balance_species", &o.balance_species}}};
+    OptionFields fields{{{"energy_weight", &o.energy_weight}, {"force_weight", &o.force_weight}, {"stress_weight", &o.stress_weight}, {"varpro_fraction", &o.varpro_fraction}}, {}, {{"balance_species", &o.balance_species}}};
     add_option_fields(o, fields);
 
     for (const auto& [key, value] : options) {

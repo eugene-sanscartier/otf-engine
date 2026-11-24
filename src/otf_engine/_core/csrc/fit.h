@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <functional>
 #include <ostream>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -29,6 +30,7 @@ struct FitOptions {
     double force_weight = 0.01;
     double stress_weight = 0.001;
     bool balance_species = true;         // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
+    double varpro_fraction = 1.0;        // < 1: varpro's system in the fit's evaluations from this fraction of the structures, weights divided by it
     std::vector<std::string> species;    // the species' names in the error tables
 
     // The weights and balance_species, the loss weights' line of the log's options.
@@ -164,6 +166,22 @@ class Fit {
         if (log) *log << table;
     }
 
+    // varpro_fraction: draws each of this rank's structures into varpro_subset with probability varpro_fraction, from
+    // random_seed, draw and its number. Throws on every rank together when no rank draws one.
+    void draw_varpro_subset(int draw) {
+        varpro_subset.assign(structures.size(), false);
+        int local = 0, total = 0;
+        for (size_t k = 0; k < structures.size(); k++) {
+            std::seed_seq seed{options.random_seed, draw, structures[k].number};
+            std::mt19937 generator(seed);
+            varpro_subset[k] = std::uniform_real_distribution<>(0.0, 1.0)(generator) < options.varpro_fraction;
+            local += varpro_subset[k] ? 1 : 0;
+        }
+        comm.allreduce(&local, &total, 1, ReduceOp::sum);
+        if (total == 0)
+            throw std::runtime_error("varpro_fraction " + std::to_string(options.varpro_fraction) + " draws no structure");
+    }
+
     // Hands the potential at coeffs to checkpoint, on the rank given one.
     void save_checkpoint() {
         if (!checkpoint) return;
@@ -184,4 +202,5 @@ class Fit {
     StepColumns columns;                  // the optional columns of the current phase's step lines
     double loss_terms[3] = {};            // the energy, force and stress terms of the last loss_grad on this rank
     std::vector<double> dloss_dforces;    // per-structure scratch
+    std::vector<bool> varpro_subset;      // varpro_fraction: whether each of this rank's structures is in the draw
 };

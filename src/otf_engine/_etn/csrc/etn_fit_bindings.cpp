@@ -8,9 +8,9 @@
 
 // ETNFitOptions' fields beside the weights.
 void add_option_fields(ETNFitOptions& o, OptionFields& fields) {
-    fields.doubles.insert({{"tolerance", &o.tolerance}, {"wolfe_c1", &o.wolfe_c1}, {"wolfe_c2", &o.wolfe_c2}});
-    fields.ints = {{"iteration_limit", &o.iteration_limit}, {"max_func_eval", &o.max_func_eval}, {"bfgs_max_iters_no_improve", &o.bfgs_max_iters_no_improve}};
-    fields.bools.insert({{"rescale", &o.rescale}, {"skip_preinit", &o.skip_preinit}});
+    fields.doubles.insert({{"tolerance", &o.tolerance}, {"wolfe_c1", &o.wolfe_c1}, {"wolfe_c2", &o.wolfe_c2}, {"init_scale", &o.init_scale}, {"reg_param", &o.reg_param}});
+    fields.ints = {{"iteration_limit", &o.iteration_limit}, {"max_func_eval", &o.max_func_eval}, {"bfgs_max_iters_no_improve", &o.bfgs_max_iters_no_improve}, {"random_seed", &o.random_seed}, {"varpro_redraw_every", &o.varpro_redraw_every}};
+    fields.bools.insert({{"rescale", &o.rescale}, {"skip_preinit", &o.skip_preinit}, {"init_random", &o.init_random}, {"init_species", &o.init_species}, {"varpro", &o.varpro}, {"reg_at_main", &o.reg_at_main}});
 }
 
 static py::object train(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, int ranks, py::object comm, py::object checkpoint) {

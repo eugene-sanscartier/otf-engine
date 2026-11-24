@@ -5,6 +5,7 @@
 
 #include "mtp.h"
 
+#include <algorithm>
 #include <cmath>
 
 // Accumulate the virial components of a pair force's direction d, as
@@ -457,11 +458,13 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
    w_j = dL/dF_i - dL/dF_j - S r_ij, where S[b][a] = dL/dvirial_ab, since
    virial_ab sums -r_a f_b over the pairs. The forward pass carries each
    moment's derivative along w (its tangent) beside its value. Backward, the
-   tangents' adjoints are atom_energy_ders_wrt_moments, and the values'
+   tangents' adjoints are nbh_energy_ders_wrt_moments, and the values'
    adjoints pick up the tangents through the products. The angular factors
    are the monomials of the unit displacement u, built through PairMTP's
    shared tree, and their tangents follow the same tree along
-   v = (w - (w.u) u) / |r|, the tangent of u.
+   v = (w - (w.u) u) / |r|, the tangent of u. The central atoms go in
+   chunks, as in PairMTP::compute, and a linear coefficient's gradient sums
+   over the chunk's atoms.
 ------------------------------------------------------------------------- */
 void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
@@ -484,113 +487,124 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
     moment_adjoints.resize(alpha_moment_count);
     basic_adjoints_by_mu.resize(alpha_index_basic_count);
 
+    grow_chunk_cache(list);
+    grow_neighbor_rows(chunk_size * atom_cache_size);
+    const int N = atom_cache_size;    // a row of the neighbor arrays, in each atom's block
+
     int nbr_offset = 0;
 
-    for (int ii = 0; ii < list.inum; ii++) {
-        const int i = list.ilist[ii];
-        const int itype = list.types[i];
-        const int jnum = list.numneigh[ii];
-        const int* nbrs = list.firstneigh + nbr_offset;
-        const double* dr = list.displacements + nbr_offset * 3;
-        nbr_offset += jnum;
+    // Loop over all provided neighbourhoods, a chunk of them at a time
+    for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
+        const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
-        int valid_count = 0;
+        for (std::vector<Lanes>* lanes : {&moment_tensor_vals, &moment_tangents, &nbh_energy_ders_wrt_moments, &moment_adjoints})
+            std::fill(lanes->begin(), lanes->end(), Lanes());
 
-        grow_cache(jnum);
-        grow_neighbor_rows(jnum);
-        const int N = jnum;    // a row of the neighbor arrays
+        for (int ii = ii_begin; ii < ii_end; ii++) {
+            const int i = list.ilist[ii];
+            const int itype = list.types[i];
+            const int jnum = list.numneigh[ii];
+            const int* nbrs = list.firstneigh + nbr_offset;
+            const double* dr = list.displacements + nbr_offset * 3;
+            nbr_offset += jnum;
 
-        std::fill(atom_moment_vals.begin(), atom_moment_vals.end(), 0.0);
-        std::fill(moment_tangents.begin(), moment_tangents.end(), 0.0);
-        std::fill(atom_energy_ders_wrt_moments.begin(), atom_energy_ders_wrt_moments.end(), 0.0);
-        std::fill(moment_adjoints.begin(), moment_adjoints.end(), 0.0);
+            int valid_count = 0;
+            const int atom = ii - ii_begin;
 
-        // ------------ The neighbors within the cutoff: unit displacement, its tangent and radial basis ------------
-        double* u[3] = {neighbor_units.data(), neighbor_units.data() + N, neighbor_units.data() + 2 * N};
-        double* v[3] = {neighbor_unit_tangents.data(), neighbor_unit_tangents.data() + N, neighbor_unit_tangents.data() + 2 * N};
-        double* w_dot_unit_r = neighbor_unit_tangents.data() + 3 * N;
-        for (int jj = 0; jj < jnum; jj++) {
-            const int j = nbrs[jj];
-            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
-            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+            select_atom_cache(atom);
+            double* units = neighbor_units.data() + (size_t) atom * 4 * N;
+            double* unit_tangents = neighbor_unit_tangents.data() + (size_t) atom * 4 * N;
+            double* radial_vals = neighbor_radial_vals.data() + (size_t) atom * radial_basis_size * N;
+            double* radial_ders = neighbor_radial_ders.data() + (size_t) atom * radial_basis_size * N;
 
-            if (rsq > max_cutoff_sq) continue;
-            cached_j[valid_count] = j;
-            valid_dr[valid_count] = {r[0], r[1], r[2]};
+            // ------------ The neighbors within the cutoff: unit displacement, its tangent and radial basis ------------
+            double* u[3] = {units, units + N, units + 2 * N};
+            double* v[3] = {unit_tangents, unit_tangents + N, unit_tangents + 2 * N};
+            double* w_dot_unit_r = unit_tangents + 3 * N;
+            for (int jj = 0; jj < jnum; jj++) {
+                const int j = nbrs[jj];
+                const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
+                const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
 
-            const double dist = std::sqrt(rsq);
-            const double inv_dist = 1.0 / dist;
-            radial_basis->calc_radial_basis_ders(dist);
-            std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size);
-            std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size);
+                if (rsq > max_cutoff_sq) continue;
+                cached_j[valid_count] = j;
+                valid_dr[valid_count] = {r[0], r[1], r[2]};
 
-            // The loss weight of this displacement
-            double w[3] = {0.0, 0.0, 0.0};
-            if (dloss_dforces)
-                for (int d = 0; d < 3; d++) w[d] = dloss_dforces[i * 3 + d] - dloss_dforces[j * 3 + d];
-            for (int d = 0; d < 3; d++) w[d] -= S[d][0] * r[0] + S[d][1] * r[1] + S[d][2] * r[2];
-            const double w_r = (w[0] * r[0] + w[1] * r[1] + w[2] * r[2]) * inv_dist;
-            w_dot_unit_r[valid_count] = w_r;
+                const double dist = std::sqrt(rsq);
+                const double inv_dist = 1.0 / dist;
+                radial_basis->calc_radial_basis_ders(dist);
+                std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), radial_vals + (size_t) valid_count * radial_basis_size);
+                std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), radial_ders + (size_t) valid_count * radial_basis_size);
 
-            for (int d = 0; d < 3; d++) {
-                u[d][valid_count] = r[d] * inv_dist;
-                v[d][valid_count] = (w[d] - w_r * u[d][valid_count]) * inv_dist;
+                // The loss weight of this displacement
+                double w[3] = {0.0, 0.0, 0.0};
+                if (dloss_dforces)
+                    for (int d = 0; d < 3; d++) w[d] = dloss_dforces[i * 3 + d] - dloss_dforces[j * 3 + d];
+                for (int d = 0; d < 3; d++) w[d] -= S[d][0] * r[0] + S[d][1] * r[1] + S[d][2] * r[2];
+                const double w_r = (w[0] * r[0] + w[1] * r[1] + w[2] * r[2]) * inv_dist;
+                w_dot_unit_r[valid_count] = w_r;
+
+                for (int d = 0; d < 3; d++) {
+                    u[d][valid_count] = r[d] * inv_dist;
+                    v[d][valid_count] = (w[d] - w_r * u[d][valid_count]) * inv_dist;
+                }
+                valid_count++;
             }
-            valid_count++;
-        }
-        const int V = valid_count;
+            const int V = valid_count;
+            cached_counts[atom] = valid_count;
 
-        // ------------ The angular monomials, their tangents and the radial functions ------------
-        double* ang = neighbor_angulars.data();
-        double* tangents = neighbor_angular_tangents.data();
-        for (int jj = 0; jj < V; jj++) {
-            ang[jj] = 1.0;
-            tangents[jj] = 0.0;
-        }
-        for (int k = 1; k < angular_count; k++) {
-            const int parent = angular_parent[k], axis = angular_axis[k];
-            const double* parent_val = ang + (size_t) parent * N;
-            const double* parent_tangent = tangents + (size_t) parent * N;
-            double* out = ang + (size_t) k * N;
-            double* out_tangent = tangents + (size_t) k * N;
+            // ------------ The angular monomials, their tangents and the radial functions ------------
+            double* ang = neighbor_angulars.data() + (size_t) atom * angular_count * N;
+            double* tangents = neighbor_angular_tangents.data() + (size_t) atom * angular_count * N;
             for (int jj = 0; jj < V; jj++) {
-                out[jj] = parent_val[jj] * u[axis][jj];
-                out_tangent[jj] = parent_tangent[jj] * u[axis][jj] + parent_val[jj] * v[axis][jj];
+                ang[jj] = 1.0;
+                tangents[jj] = 0.0;
             }
-        }
-        double* radial_funcs = neighbor_radial_funcs.data();    // value of mu at row 2 mu, derivative at 2 mu + 1
-        for (int jj = 0; jj < V; jj++) {
-            const int pair_offset = itype * species_count + list.types[cached_j[jj]];
-            const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
-            const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
-            for (int mu = 0; mu < radial_func_count; mu++) {
-                double val = 0;
-                double der = 0;
-                const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
-                for (int ri = 0; ri < radial_basis_size; ri++) {
-                    val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
-                    der += radial_basis_coeffs[offset + ri] * basis_ders[ri];
-                }
-                radial_funcs[(size_t) 2 * mu * N + jj] = val;
-                radial_funcs[(size_t) (2 * mu + 1) * N + jj] = der;
-            }
-        }
-
-        // ------------ Basic moments and their tangents ------------
-        for (int mu = 0; mu < radial_func_count; mu++) {
-            const double* val = radial_funcs + (size_t) 2 * mu * N;
-            const double* der = val + N;
-            for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
-                const int k = basic_by_mu[t];
-                const double* ang_k = ang + (size_t) angular_by_mu[t] * N;
-                const double* tangent_k = tangents + (size_t) angular_by_mu[t] * N;
-                double moment = atom_moment_vals[k], tangent = moment_tangents[k];
+            for (int k = 1; k < angular_count; k++) {
+                const int parent = angular_parent[k], axis = angular_axis[k];
+                const double* parent_val = ang + (size_t) parent * N;
+                const double* parent_tangent = tangents + (size_t) parent * N;
+                double* out = ang + (size_t) k * N;
+                double* out_tangent = tangents + (size_t) k * N;
                 for (int jj = 0; jj < V; jj++) {
-                    moment += val[jj] * ang_k[jj];
-                    tangent += der[jj] * w_dot_unit_r[jj] * ang_k[jj] + val[jj] * tangent_k[jj];
+                    out[jj] = parent_val[jj] * u[axis][jj];
+                    out_tangent[jj] = parent_tangent[jj] * u[axis][jj] + parent_val[jj] * v[axis][jj];
                 }
-                atom_moment_vals[k] = moment;
-                moment_tangents[k] = tangent;
+            }
+            double* radial_funcs = neighbor_radial_funcs.data() + (size_t) atom * radial_func_count * 2 * N;    // value of mu at row 2 mu, derivative at 2 mu + 1
+            for (int jj = 0; jj < V; jj++) {
+                const int pair_offset = itype * species_count + list.types[cached_j[jj]];
+                const double* basis_vals = radial_vals + (size_t) jj * radial_basis_size;
+                const double* basis_ders = radial_ders + (size_t) jj * radial_basis_size;
+                for (int mu = 0; mu < radial_func_count; mu++) {
+                    double val = 0;
+                    double der = 0;
+                    const int offset = (pair_offset * radial_coeff_count_per_pair) + mu * radial_basis_size;
+                    for (int ri = 0; ri < radial_basis_size; ri++) {
+                        val += radial_basis_coeffs[offset + ri] * basis_vals[ri];
+                        der += radial_basis_coeffs[offset + ri] * basis_ders[ri];
+                    }
+                    radial_funcs[(size_t) 2 * mu * N + jj] = val;
+                    radial_funcs[(size_t) (2 * mu + 1) * N + jj] = der;
+                }
+            }
+
+            // ------------ Basic moments and their tangents ------------
+            for (int mu = 0; mu < radial_func_count; mu++) {
+                const double* val = radial_funcs + (size_t) 2 * mu * N;
+                const double* der = val + N;
+                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
+                    const int k = basic_by_mu[t];
+                    const double* ang_k = ang + (size_t) angular_by_mu[t] * N;
+                    const double* tangent_k = tangents + (size_t) angular_by_mu[t] * N;
+                    double moment = moment_tensor_vals[k][atom], tangent = moment_tangents[k][atom];
+                    for (int jj = 0; jj < V; jj++) {
+                        moment += val[jj] * ang_k[jj];
+                        tangent += der[jj] * w_dot_unit_r[jj] * ang_k[jj] + val[jj] * tangent_k[jj];
+                    }
+                    moment_tensor_vals[k][atom] = moment;
+                    moment_tangents[k][atom] = tangent;
+                }
             }
         }
 
@@ -598,57 +612,73 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-            const double M_a0 = atom_moment_vals[a0], M_a1 = atom_moment_vals[a1];
-            moment_tangents[a3] += mul * (moment_tangents[a0] * M_a1 + M_a0 * moment_tangents[a1]);
-            atom_moment_vals[a3] += mul * M_a0 * M_a1;
+            moment_tangents[a3] += mul * moment_tangents[a0] * moment_tensor_vals[a1];
+            moment_tangents[a3] += mul * moment_tensor_vals[a0] * moment_tangents[a1];
+            moment_tensor_vals[a3] += mul * moment_tensor_vals[a0] * moment_tensor_vals[a1];
         }
 
         // =========== Backpropagation of values and tangents ===========
         for (int s = 0; s < alpha_scalar_count; s++) {
-            atom_energy_ders_wrt_moments[alpha_moment_mapping[s]] = linear_coeffs[s];
+            nbh_energy_ders_wrt_moments[alpha_moment_mapping[s]] = linear_coeffs[s];
             moment_adjoints[alpha_moment_mapping[s]] = a * linear_coeffs[s];
         }
 
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
-            const double M_a0 = atom_moment_vals[a0], M_a1 = atom_moment_vals[a1];
-            const double G_a3 = atom_energy_ders_wrt_moments[a3];
-            const double A_a3 = moment_adjoints[a3];
-            moment_adjoints[a0] += mul * (A_a3 * M_a1 + G_a3 * moment_tangents[a1]);
-            moment_adjoints[a1] += mul * (A_a3 * M_a0 + G_a3 * moment_tangents[a0]);
-            atom_energy_ders_wrt_moments[a1] += G_a3 * mul * M_a0;
-            atom_energy_ders_wrt_moments[a0] += G_a3 * mul * M_a1;
+            const Lanes& G_a3 = nbh_energy_ders_wrt_moments[a3];
+            const Lanes& A_a3 = moment_adjoints[a3];
+            moment_adjoints[a0] += mul * A_a3 * moment_tensor_vals[a1];
+            moment_adjoints[a0] += mul * G_a3 * moment_tangents[a1];
+            moment_adjoints[a1] += mul * A_a3 * moment_tensor_vals[a0];
+            moment_adjoints[a1] += mul * G_a3 * moment_tangents[a0];
+            nbh_energy_ders_wrt_moments[a1] += mul * G_a3 * moment_tensor_vals[a0];
+            nbh_energy_ders_wrt_moments[a0] += mul * G_a3 * moment_tensor_vals[a1];
         }
 
-        // ---- Species and linear coefficients ----
-        loss_grad[sp_off + itype] += a;
+        // ---- Linear coefficients, summed over the chunk's atoms ----
         for (int s = 0; s < alpha_scalar_count; s++)
-            loss_grad[lin_off + s] += a * atom_moment_vals[alpha_moment_mapping[s]] + moment_tangents[alpha_moment_mapping[s]];
+            loss_grad[lin_off + s] += a * sum_over_atoms(moment_tensor_vals[alpha_moment_mapping[s]]) + sum_over_atoms(moment_tangents[alpha_moment_mapping[s]]);
 
-        // ---- Radial coefficients ----
-        for (int t = 0; t < alpha_index_basic_count; t++) {
-            basic_ders_by_mu[t] = atom_energy_ders_wrt_moments[basic_by_mu[t]];
-            basic_adjoints_by_mu[t] = moment_adjoints[basic_by_mu[t]];
-        }
+        for (int ii = ii_begin; ii < ii_end; ii++) {
+            const int itype = list.types[list.ilist[ii]];
+            const int atom = ii - ii_begin;
+            const int valid_count = cached_counts[atom];
 
-        for (int jj = 0; jj < valid_count; jj++) {
-            const int jtype = list.types[cached_j[jj]];
-            const double w_r = w_dot_unit_r[jj];
-            const double* basis_vals = neighbor_radial_vals.data() + (size_t) jj * radial_basis_size;
-            const double* basis_ders = neighbor_radial_ders.data() + (size_t) jj * radial_basis_size;
-            double* row = loss_grad + (size_t) (itype * species_count + jtype) * radial_coeff_count_per_pair;
-            for (int mu = 0; mu < radial_func_count; mu++) {
-                // adjoints of the radial function's value and derivative
-                double value_adjoint = 0.0, der_adjoint = 0.0;
-                for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
-                    const double angular = ang[(size_t) angular_by_mu[t] * N + jj];
-                    value_adjoint += basic_adjoints_by_mu[t] * angular + basic_ders_by_mu[t] * tangents[(size_t) angular_by_mu[t] * N + jj];
-                    der_adjoint += basic_ders_by_mu[t] * angular;
+            select_atom_cache(atom);
+            const double* ang = neighbor_angulars.data() + (size_t) atom * angular_count * N;
+            const double* tangents = neighbor_angular_tangents.data() + (size_t) atom * angular_count * N;
+            const double* w_dot_unit_r = neighbor_unit_tangents.data() + (size_t) atom * 4 * N + 3 * N;
+            const double* radial_vals = neighbor_radial_vals.data() + (size_t) atom * radial_basis_size * N;
+            const double* radial_ders = neighbor_radial_ders.data() + (size_t) atom * radial_basis_size * N;
+
+            // ---- Species coefficients ----
+            loss_grad[sp_off + itype] += a;
+
+            // ---- Radial coefficients ----
+            for (int t = 0; t < alpha_index_basic_count; t++) {
+                basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]][atom];
+                basic_adjoints_by_mu[t] = moment_adjoints[basic_by_mu[t]][atom];
+            }
+
+            for (int jj = 0; jj < valid_count; jj++) {
+                const int jtype = list.types[cached_j[jj]];
+                const double w_r = w_dot_unit_r[jj];
+                const double* basis_vals = radial_vals + (size_t) jj * radial_basis_size;
+                const double* basis_ders = radial_ders + (size_t) jj * radial_basis_size;
+                double* row = loss_grad + (size_t) (itype * species_count + jtype) * radial_coeff_count_per_pair;
+                for (int mu = 0; mu < radial_func_count; mu++) {
+                    // adjoints of the radial function's value and derivative
+                    double value_adjoint = 0.0, der_adjoint = 0.0;
+                    for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
+                        const double angular = ang[(size_t) angular_by_mu[t] * N + jj];
+                        value_adjoint += basic_adjoints_by_mu[t] * angular + basic_ders_by_mu[t] * tangents[(size_t) angular_by_mu[t] * N + jj];
+                        der_adjoint += basic_ders_by_mu[t] * angular;
+                    }
+                    der_adjoint *= w_r;
+                    for (int ri = 0; ri < radial_basis_size; ri++)
+                        row[mu * radial_basis_size + ri] += value_adjoint * basis_vals[ri] + der_adjoint * basis_ders[ri];
                 }
-                der_adjoint *= w_r;
-                for (int ri = 0; ri < radial_basis_size; ri++)
-                    row[mu * radial_basis_size + ri] += value_adjoint * basis_vals[ri] + der_adjoint * basis_ders[ri];
             }
         }
     }

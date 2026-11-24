@@ -14,7 +14,7 @@ import numpy
 import pytest
 from ase import Atoms
 
-from conftest import ETN_REFERENCE, StoredOutputs, assert_compute_by_atom, several_chunks
+from conftest import ETN_REFERENCE, StoredOutputs, assert_compute_by_atom, assert_loss_grad_by_atom, several_chunks
 from etn_potentials import MAX_DIST, MIN_DIST, POTENTIALS, RADIAL_BASIS_SIZE, coeff_blocks, compile_probe, get_block, params, parse_tensors, reference_potential, set_params, species_of, untrained_etn
 from otf_engine._core import neighbors
 from otf_engine._core.derivative_checks import check_forces, check_invariance, check_virial
@@ -179,13 +179,15 @@ def test_derivatives(name, potentials, cells):
 
 @pytest.mark.parametrize("name", ["etn-3", "etn-5"])
 def test_compute_in_chunks(name, potentials, cells):
-    """compute over a cell of several chunks of central atoms gives what it gives one central atom at a time."""
+    """compute and eval_loss_grad over a cell of several chunks of central atoms give what they give one central atom at a time."""
     atoms, types = cells[0]
     atoms = atoms.copy()
     potential = potentials[name]
     atoms.arrays["type_index"] = species_of(potential, types)
     atoms = several_chunks(atoms)
-    assert_compute_by_atom(potential, neighbors(atoms, MAX_DIST, types=atoms.arrays["type_index"].astype(numpy.int32)))
+    nl = neighbors(atoms, MAX_DIST, types=atoms.arrays["type_index"].astype(numpy.int32))
+    assert_compute_by_atom(potential, nl)
+    assert_loss_grad_by_atom(potential, nl)
 
 
 def test_loss_grad(potentials, cells, step=1e-5):
@@ -219,6 +221,43 @@ def test_loss_grad(potentials, cells, step=1e-5):
         numeric = (loss(coeffs + step * direction) - loss(coeffs - step * direction)) / (2 * step)
         assert abs(numeric - analytic) <= 1e-6 * abs(analytic), f"{kind} {arg}"
     potential.set_coeffs(coeffs)
+
+
+@pytest.mark.parametrize("name", ["etn-1", "etn-3", "etn-5", "etn-3-single"])
+def test_linear_columns(name, potentials, cells):
+    """eval_grad without the nonlinear columns gives each linear column's energy, virial and forces as compute gives them
+    with that coefficient alone, and leaves the other columns zero."""
+    potential = potentials[name]
+    atoms, types = cells[0]
+    nl = neighbors(atoms, MAX_DIST, types=species_of(potential, types))
+    coeffs = potential.get_coeffs()
+
+    blocks, offset = {}, 0
+    for kind, arg in coeff_blocks(potential):
+        size = len(get_block(potential, kind, arg))
+        blocks[kind, arg] = list(range(offset, offset + size))
+        offset += size
+    linear = blocks["core", (potential.get_core_count() - 1, False)] + blocks["species", None]
+
+    trial = coeffs.copy()
+    trial[linear] = 0.0
+    want = []
+    for k in linear:
+        trial[k] = 1.0
+        potential.set_coeffs(trial)
+        result = potential.compute(nl)
+        trial[k] = 0.0
+        want += [numpy.concatenate([[result["energy"]], result["virial"], result["forces"].ravel()])]
+    potential.set_coeffs(coeffs)
+
+    site_grad, force_grad, virial_grad = potential.eval_grad(nl, forces=True, virial=True, nonlinear=False)
+    got = numpy.concatenate([site_grad.sum(axis=0)[None], virial_grad, force_grad.reshape(-1, len(coeffs))])
+    rel, rel_row = relative_differences(got[:, linear].T, numpy.array(want))
+    assert rel < TOL and rel_row < ROW_TOL, (rel, rel_row)
+
+    nonlinear = numpy.setdiff1d(numpy.arange(len(coeffs)), linear)
+    assert not got[:, nonlinear].any()
+    numpy.testing.assert_allclose(site_grad[:, linear], potential.eval_grad(nl)[:, linear], rtol=0, atol=TOL * numpy.abs(site_grad).max())
 
 
 @pytest.mark.parametrize("name", POTENTIALS)

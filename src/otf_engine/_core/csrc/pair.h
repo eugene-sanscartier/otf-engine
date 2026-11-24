@@ -82,6 +82,22 @@ inline Lanes& operator+=(Lanes& out, const ScaledLanesProduct& e) {
     return out;
 }
 
+// The sum of x * y over the chunk's atoms, in an order the compiler may vectorize (-fopenmp-simd).
+inline double sum_of_products(const Lanes& x, const Lanes& y) {
+    double sum = 0.0;
+#pragma omp simd reduction(+ : sum)
+    for (int a = 0; a < chunk_size; a++) sum += x.v[a] * y.v[a];
+    return sum;
+}
+
+// The sum of x over the chunk's atoms, in an order the compiler may vectorize (-fopenmp-simd).
+inline double sum_over_atoms(const Lanes& x) {
+    double sum = 0.0;
+#pragma omp simd reduction(+ : sum)
+    for (int a = 0; a < chunk_size; a++) sum += x.v[a];
+    return sum;
+}
+
 class Pair {
   public:
     virtual ~Pair() { delete radial_basis; }

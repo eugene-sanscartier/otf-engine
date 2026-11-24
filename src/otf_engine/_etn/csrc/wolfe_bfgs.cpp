@@ -242,6 +242,10 @@ bool WolfeBFGS::make_nonlinesearch_iteration(double f, const std::vector<double>
     return loss_decrease;
 }
 
+void WolfeBFGS::scale_inv_hess(double c) {
+    for (double& h : inv_hess) h *= c;
+}
+
 void WolfeBFGS::diag_inv_hess() {
     for (int i = 0; i < size; i++)
         for (int j = 0; j < size; j++)

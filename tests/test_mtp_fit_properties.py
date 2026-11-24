@@ -52,6 +52,7 @@ OPTION_SETS = {
     "recipe": ({}, 1e-3),
     "riemannian": ({"varpro": "false"}, 1e-6),
     "varpro": ({"riemannian": "false"}, 1e-3),
+    "varpro_fraction": ({"varpro_fraction": "0.5", "random_seed": "1"}, 1e-3),
 }
 
 

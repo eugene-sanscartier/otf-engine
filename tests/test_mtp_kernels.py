@@ -9,7 +9,7 @@ import subprocess
 import numpy
 import pytest
 
-from conftest import DATA, MTP_REFERENCE, StoredOutputs, assert_compute_by_atom, parse_probe, several_chunks, two_species
+from conftest import DATA, MTP_REFERENCE, StoredOutputs, assert_compute_by_atom, assert_loss_grad_by_atom, parse_probe, several_chunks, two_species
 from otf_engine._core import derivative_checks
 from otf_engine._core.neighbors import neighbors
 
@@ -114,13 +114,15 @@ def test_forward_passes_agree(name, structures):
 
 @pytest.mark.parametrize("name", POTENTIALS)
 def test_compute_in_chunks(name, structures):
-    """compute over a cell of several chunks of central atoms gives what it gives one central atom at a time."""
+    """compute and eval_loss_grad over a cell of several chunks of central atoms give what they give one central atom at a time."""
     from otf_engine._mtp import MTP
 
     potential_path, renamed = POTENTIALS[name]
     atoms = several_chunks((two_species(structures) if renamed else structures)[1])
     potential = MTP(str(potential_path))
-    assert_compute_by_atom(potential, neighbors(atoms, potential.get_max_cutoff()))
+    nl = neighbors(atoms, potential.get_max_cutoff())
+    assert_compute_by_atom(potential, nl)
+    assert_loss_grad_by_atom(potential, nl)
 
 
 @pytest.mark.parametrize("name", POTENTIALS)

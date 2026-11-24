@@ -155,3 +155,65 @@ def test_fit(name, structures, stored, tmp_path):
         ours, theirs = tensors(trained, trained.get_coeffs(), structures[1]), tensors(trained, stored[f"{reference}/params"], structures[1])
         for key in theirs:
             assert numpy.max(numpy.abs(ours[key] - theirs[key])) <= 1e-6 * max(numpy.max(numpy.abs(theirs[key])), 1e-300), key
+
+
+RECIPE = {"energy_weight": "1.0", "force_weight": "0.1", "stress_weight": "0.001", "iteration_limit": "10", "skip_preinit": "true", "init_random": "true", "random_seed": "1", "init_scale": "0.3", "init_species": "true", "varpro": "true", "reg_at_main": "true", "log": "none"}
+
+
+def varpro_fit(structures, workdir, chosen=(0, 1), **options):
+    """The recipe's short fit of the 3-core potential on the chosen structures from a seeded start: the trained potential,
+    its steps' losses and the labelled structures."""
+    from otf_engine._etn import ETN
+    from otf_engine._etn._etn_testing import fit_etn_steps
+
+    path = Path(workdir) / "etn-3.etn"
+    untrained_etn("etn-3").write(path)
+    labelled = [FitStructure(structures[k], ETN(str(path)).get_max_cutoff(), k + 1) for k in chosen]
+    trained, steps = fit_etn_steps(str(path), labelled, RECIPE | options, 1)
+    return trained, steps, labelled
+
+
+def test_varpro_fit(structures, tmp_path):
+    """The recipe's VarPro fit, whose loss takes the outputs from the columns of the last solve, gives the losses of a build
+    that computed them, stored in etn_reference/varpro_fit.npz, to rounding."""
+    stored = numpy.load(ETN_REFERENCE / "varpro_fit.npz")
+    _, steps, _ = varpro_fit(structures, tmp_path)
+    assert [len(s) for s in steps] == list(stored["counts"])
+    numpy.testing.assert_allclose(numpy.concatenate(steps), stored["losses"], rtol=1e-9)
+
+
+@pytest.mark.parametrize("fraction", ["1", "0.5"])
+def test_varpro_gradient(fraction, structures, tmp_path):
+    """Under varpro, its system built on every structure or on half of them, the objective's gradient matches
+    fourth-order finite differences along 4 directions of the coefficients BFGS steps, after the recipe's short fit on
+    the 6 structures."""
+    from otf_engine._etn._etn_testing import ETNObjective
+
+    trained, _, labelled = varpro_fit(structures, tmp_path, chosen=range(6))
+    path = tmp_path / "trained.etn"
+    trained.write(path)
+    objective = ETNObjective(str(path), labelled, RECIPE | {"varpro_fraction": fraction})
+    x = numpy.asarray(trained.get_coeffs())
+    grad = objective(x)[1]
+
+    rng = numpy.random.default_rng(0)
+    for _ in range(4):
+        xi = rng.standard_normal(len(x)) * (grad != 0.0)
+        xi /= numpy.linalg.norm(xi)
+        analytic = grad @ xi
+        errors = []
+        for h in (1e-2, 1e-3, 1e-4):
+            f = {m: objective(x + m * h * xi)[0] for m in (-2, -1, 1, 2)}
+            fd = (8 * (f[1] - f[-1]) - (f[2] - f[-2])) / (12 * h)
+            errors += [abs(fd - analytic) / abs(analytic)]
+        assert min(errors) < 1e-4
+
+
+def test_varpro_redraw(structures, tmp_path):
+    """Under varpro_fraction 0.5 on the 6 structures, varpro_redraw_every 1 draws anew at each step: its fit leaves the
+    fixed draw's losses after the first step, and lowers the loss."""
+    _, fixed, _ = varpro_fit(structures, tmp_path, chosen=range(6), varpro_fraction="0.5")
+    _, redrawn, _ = varpro_fit(structures, tmp_path, chosen=range(6), varpro_fraction="0.5", varpro_redraw_every="1")
+    assert redrawn[0] == fixed[0]
+    assert redrawn[2] != fixed[2]
+    assert redrawn[-1][-1] < redrawn[0][0]

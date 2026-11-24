@@ -59,6 +59,7 @@ struct MTPFitOptions : FitOptions {
         const std::pair<const char*, bool> flags[] = {{"varpro", varpro}, {"riemannian", riemannian}, {"reg_once", reg_once}, {"reg_at_main", reg_at_main}, {"no_orthogonalize", no_orthogonalize}, {"ldlt", ldlt}, {"init_random", init_random}, {"skip_preinit", skip_preinit}, {"bfgs_only", bfgs_only}, {"radial_only", radial_only}, {"no_mindist_update", no_mindist_update}};
         for (const auto& [name, set] : flags)
             if (set) algorithm << (algorithm.tellp() > 0 ? ", " : "") << name;
+        if (varpro && varpro_fraction < 1.0) algorithm << (algorithm.tellp() > 0 ? ", " : "") << "varpro_fraction " << varpro_fraction;
 
         std::vector<std::string> lines = {stopping.str(), weights.str(), regularization.str()};
         if (algorithm.tellp() > 0) lines.push_back(algorithm.str());
@@ -88,15 +89,17 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
     void update_min_dist();
     void fit_nonlinear(int max_iter);
     void fit_riemannian(int max_iter);
-    void fit_linear();
-    void assemble_linear();
+    // The linear fit over every structure, or over varpro_fraction's draw if subset.
+    void fit_linear(bool subset = false);
+    void assemble_linear(bool subset = false);
     void solve_linear();
     void broadcast_linear();
     void rescale();
 
     // The loss at coeffs, penalty included (the radial one if radial), on rank 0, with its gradient over the first n
     // coefficients in grad and its energy, force, stress and penalty terms in terms, summed over the ranks onto rank 0.
-    // Under varpro, unless solve_linear is false, the linear coefficients are solved for coeffs first.
+    // Under varpro, unless solve_linear is false, the linear coefficients are solved for coeffs first, over
+    // varpro_fraction's draw, the gradient then taking the path through the solve.
     double evaluate(std::vector<double>& grad, int n, bool radial, double terms[4], bool solve_linear = true);
     // Logs the loss at coeffs after a linear fit, as the step lines of a phase with the radial penalty if radial give it.
     void log_linear_fit(bool radial);
@@ -130,6 +133,7 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
     // Linear least squares for the species and linear coefficients
     std::vector<double> lin_matrix, lin_vector;
     std::vector<double> reg_vector;    // regularization on its diagonal
+    std::vector<double> linear_system;    // varpro_fraction: the last solve's matrix, regularization included, on rank 0
     bool reg_init = true;              // whether reg_vector is rebuilt at the next solve
     bool reg_built = false;            // whether a linear fit has built reg_vector
     bool orthogonalizing = true;       // whether orthogonalize acts; no_orthogonalize clears it after pre-training
@@ -142,8 +146,9 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
     BFGS bfgs;
 
     // Under varpro, each structure's energy, forces and virial as linear in the species and linear coefficients, the
-    // rows assemble_linear last built (energy, 3 per atom, the 6 virial components), at the radial coefficients and
-    // scaling in linear_rows_at; loss_grad takes the values from them at those coefficients in place of PairMTP::compute
+    // rows assemble_linear last built (energy, 3 per atom, the 6 virial components; empty outside varpro_fraction's
+    // draw), at the radial coefficients and scaling in linear_rows_at; loss_grad takes the values from them at those
+    // coefficients in place of PairMTP::compute
     std::vector<std::vector<double>> linear_rows;    // per structure, [(1 + 3 n_atoms + 6) * n_linear]
     std::vector<double> linear_rows_at;              // [n_radial radial coefficients | scaling]
 

@@ -1,10 +1,14 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for ETN (see etn.h). Its eval_grad and
-   eval_loss_grad are Pair's bindings.
+   Python bindings for ETN (see etn.h). Its eval_loss_grad is Pair's
+   binding.
 ------------------------------------------------------------------------- */
 
 #include "etn.h"
 #include "pair_etn_bindings.h"
+
+static py::object eval_grad(ETN& self, const PyNeighbors& nb, bool forces, bool virial, bool nonlinear) {
+    return grad_arrays(nb, self.coeff_count(), forces, virial, [&](double* eg, double* fg, double* vg) { self.eval_grad(nb.view(), eg, fg, vg, nonlinear); });
+}
 
 static py::dict eval_bonds(ETN& self, const PyNeighbors& nb) {
     const int inum = nb.inum();
@@ -48,4 +52,15 @@ Returns a dict with "inputs" (inum, input size), and "bonds" and "bonds_im",
 lists of (inum, bond size) arrays for bonds 0 .. core_count. A covariant vector
 holds entry (l, m, n) at offset(l) + (m + l) * rank(l) + n.
 )doc");
+    def_neighbors(cls, "eval_grad", &eval_grad,
+                  R"doc(
+d(E_i, F, virial)/dc, c as get_coeffs orders it.
+
+Without forces, returns site_energy_grad (inum, cc); row ii is dE_i/dc for
+atom ilist[ii]. With forces, returns (site_energy_grad (inum, cc),
+force_grad (n_atoms, 3, cc), virial_grad (6, cc)|None), which needs
+nonlinear False. With nonlinear False, only the last core's and the
+species' columns are filled.
+)doc",
+                  py::arg("forces") = false, py::arg("virial") = false, py::arg("nonlinear") = true);
 }

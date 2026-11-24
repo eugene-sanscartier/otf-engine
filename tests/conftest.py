@@ -56,17 +56,22 @@ def several_chunks(atoms):
     return atoms.repeat((repeats, repeats, repeats))
 
 
-def compute_by_atom(potential, nl):
-    """compute's energy, per-atom energies, forces and virial summed over one call per central atom of nl."""
+def central_atom_lists(nl):
+    """One neighbor list per central atom of nl, over the same atoms."""
     from otf_engine._core import NeighList
 
     numneigh = numpy.asarray(nl.numneigh)
     starts = numpy.concatenate([[0], numpy.cumsum(numneigh)])
     firstneigh, displacements = numpy.asarray(nl.firstneigh), numpy.asarray(nl.displacements)
-    total = {"energy": 0.0, "eatom": 0.0, "forces": 0.0, "virial": 0.0}
     for ii, i in enumerate(numpy.asarray(nl.ilist)):
         begin, end = starts[ii], starts[ii + 1]
-        single = NeighList(nl.types, numpy.array([i], dtype=numpy.int32), numneigh[ii : ii + 1], firstneigh[begin:end], displacements[begin:end])
+        yield NeighList(nl.types, numpy.array([i], dtype=numpy.int32), numneigh[ii : ii + 1], firstneigh[begin:end], displacements[begin:end])
+
+
+def compute_by_atom(potential, nl):
+    """compute's energy, per-atom energies, forces and virial summed over one call per central atom of nl."""
+    total = {"energy": 0.0, "eatom": 0.0, "forces": 0.0, "virial": 0.0}
+    for single in central_atom_lists(nl):
         result = potential.compute(single)
         for key in total:
             total[key] = total[key] + numpy.asarray(result[key])
@@ -80,6 +85,16 @@ def assert_compute_by_atom(potential, nl):
     for key, value in whole.items():
         scale = numpy.max(numpy.abs(value))
         assert numpy.max(numpy.abs(by_atom[key] - value)) <= 1e-12 * scale, key
+
+
+def assert_loss_grad_by_atom(potential, nl, seed=0):
+    """eval_loss_grad over every central atom of nl at once, in chunks, gives the sum of eval_loss_grad over each atom
+    alone, for seeded derivatives of the loss with respect to the energy, forces and virial."""
+    rng = numpy.random.default_rng(seed)
+    dloss_denergy, dloss_dforces, dloss_dvirial = float(rng.standard_normal()), rng.standard_normal((nl.n_atoms, 3)), rng.standard_normal(6)
+    whole = numpy.asarray(potential.eval_loss_grad(nl, dloss_denergy, dloss_dforces, dloss_dvirial))
+    by_atom = sum(numpy.asarray(potential.eval_loss_grad(single, dloss_denergy, dloss_dforces, dloss_dvirial)) for single in central_atom_lists(nl))
+    assert numpy.max(numpy.abs(by_atom - whole)) <= 1e-12 * numpy.max(numpy.abs(whole))
 
 
 @pytest.fixture(scope="session")
