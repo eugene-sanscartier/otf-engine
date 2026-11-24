@@ -18,9 +18,11 @@ class RBCinf : public RadialMTPBasis {
     // min_cutoff / max_cutoff must not exceed 0.8.
     RBCinf(double min_cutoff, double max_cutoff, int size);
     void calc_radial_basis_ders(double dist) override;
+    void calc_radial_basis_rows(int count, const double* dist) override;
 
   private:
     double exp_ratio = 0;                                 // exponent of the envelope at x = 0
     double zeroth_poly = 0;                               // normalization of phi_0
     std::vector<std::array<double, 3>> recursive_coeffs;  // [size] recursion coefficients
+    std::vector<double> row_work;                         // calc_radial_basis_rows's x^2, its derivative and the recursion's derivatives
 };

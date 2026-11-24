@@ -31,6 +31,8 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
         std::fill(atom_bond_vals.begin(), atom_bond_vals.end(), 0.0);
         atom_input_vals[0] = 1.0;
         atom_bond_vals[bond_offsets[0]] = 1.0;
+        int valid_count = 0;
+        calc_neighbor_rows(jnum, dr);
 
         // ------------ Calculate the Input Vector ------------
         for (int jj = 0; jj < jnum; jj++) {
@@ -41,13 +43,11 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
 
             if (rsq > max_cutoff_sq) continue;
 
-            const double dist = std::sqrt(rsq);
-            const double inv_dist = 1.0 / dist;
-            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            radial_basis->calc_radial_basis_ders(dist);
+            radial_basis->select_row(valid_count);
             const double* basis_vals = radial_basis->radial_basis_vals.data();
-            harmonics.compute(u);
+            harmonics.select_row(valid_count);
             const double* ylm = harmonics.vals.data();
+            valid_count++;
 
             for (int l = 0; l < l_count; l++) {
                 const int n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
@@ -210,6 +210,7 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 
         grow_cache(jnum);
         grow_neighbor_rows(jnum);
+        calc_neighbor_rows(jnum, dr);
 
         std::fill(atom_input_vals.begin(), atom_input_vals.end(), 0.0);
         std::fill(atom_bond_vals.begin(), atom_bond_vals.end(), 0.0);
@@ -231,12 +232,11 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 
             const double dist = std::sqrt(rsq);
             const double inv_dist = 1.0 / dist;
-            const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-            radial_basis->calc_radial_basis_ders(dist);
+            radial_basis->select_row(valid_count);
             double* basis_vals = neighbor_radial_vals.data() + (size_t) valid_count * radial_basis_size;
             std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), basis_vals);
             std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), neighbor_radial_ders.data() + (size_t) valid_count * radial_basis_size);
-            harmonics.compute(u);
+            harmonics.select_row(valid_count);
             double* ylm = neighbor_harmonics.data() + (size_t) valid_count * harmonic_count;
             std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
 
@@ -666,6 +666,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             nbr_offset += jnum;
 
             select_atom_cache(ii - ii_begin);
+            calc_neighbor_rows(jnum, dr);
             const size_t first_row = (size_t) (ii - ii_begin) * atom_cache_size;
 
             for (int jj = 0; jj < jnum; jj++) {
@@ -681,13 +682,12 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 const size_t row = first_row + valid_count;
                 const double dist = std::sqrt(rsq);
                 const double inv_dist = 1.0 / dist;
-                const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
-                radial_basis->calc_radial_basis_ders(dist);
+                radial_basis->select_row(valid_count);
                 double* basis_vals = neighbor_radial_vals.data() + row * radial_basis_size;
                 double* basis_ders = neighbor_radial_ders.data() + row * radial_basis_size;
                 std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), basis_vals);
                 std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), basis_ders);
-                harmonics.compute(u);
+                harmonics.select_row(valid_count);
                 double* ylm = neighbor_harmonics.data() + row * harmonic_count;
                 std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
 

@@ -18,6 +18,20 @@ RadialMTPBasis::RadialMTPBasis(double min_cutoff, double max_cutoff, int size) :
     radial_basis_ders.resize(size);
 }
 
+// calc_radial_basis_ders at each distance.
+void RadialMTPBasis::calc_radial_basis_rows(int count, const double* dist) {
+    row_count = count;
+    rows_vals.resize((size_t) size * count);
+    rows_ders.resize((size_t) size * count);
+    for (int k = 0; k < count; k++) {
+        calc_radial_basis_ders(dist[k]);
+        for (int i = 0; i < size; i++) {
+            rows_vals[(size_t) i * count + k] = radial_basis_vals[i];
+            rows_ders[(size_t) i * count + k] = radial_basis_ders[i];
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 void RBChebyshev::calc_radial_basis_ders(double dist) {
     const double delta = dist - max_cutoff;

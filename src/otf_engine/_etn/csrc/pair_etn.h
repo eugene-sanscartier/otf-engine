@@ -102,6 +102,13 @@ class PairETN : public Pair {
     void reset_coeffs();
 
   protected:
+    // Pair's rows, and the harmonics at the neighbors' unit vectors in harmonics' rows.
+    void calc_neighbor_rows(int jnum, const double* dr) override {
+        Pair::calc_neighbor_rows(jnum, dr);
+        const double* units = neighbor_units.data();
+        harmonics.compute_rows(radial_basis->row_count, units, units + jnum, units + 2 * jnum);
+    }
+
     void read_file(std::istream& is);
     void prepare_cores();
     Core prepare_core(int i, bool imaginary);

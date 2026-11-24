@@ -15,6 +15,15 @@ class RadialMTPBasis {
     virtual ~RadialMTPBasis() = default;
 
     virtual void calc_radial_basis_ders(double dist) = 0;
+    // The values and derivatives at count distances into rows_vals and rows_ders, each function's in a row of count.
+    virtual void calc_radial_basis_rows(int count, const double* dist);
+    // Copies distance k of the rows into radial_basis_vals and radial_basis_ders.
+    void select_row(int k) {
+        for (int i = 0; i < size; i++) {
+            radial_basis_vals[i] = rows_vals[(size_t) i * row_count + k];
+            radial_basis_ders[i] = rows_ders[(size_t) i * row_count + k];
+        }
+    }
 
     int size = 0;          // The size of the radial basis functions
     double min_cutoff = 0; // Minimum radius value
@@ -24,6 +33,10 @@ class RadialMTPBasis {
     // Values and derivatives for radial basis functions
     std::vector<double> radial_basis_vals;
     std::vector<double> radial_basis_ders;
+
+    // The last calc_radial_basis_rows: its count of distances, and the values and derivatives [size * row_count]
+    int row_count = 0;
+    std::vector<double> rows_vals, rows_ders;
 };
 
 // phi_0 = (r - r_cut)^2, phi_1 = ksi (r - r_cut)^2, Chebyshev recursion above.

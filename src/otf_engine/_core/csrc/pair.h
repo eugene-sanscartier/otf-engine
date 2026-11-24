@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -206,6 +207,25 @@ class Pair {
         grow_cache(chunk_size * atom_cache_size);
     }
 
+    // The radial basis at each of an atom's jnum neighbors at displacements dr within the cutoff, in order, in
+    // radial_basis's rows, and their unit vectors in neighbor_units, x, y and z each in a row of jnum.
+    virtual void calc_neighbor_rows(int jnum, const double* dr) {
+        neighbor_dists.resize(jnum);
+        neighbor_units.resize(3 * (size_t) jnum);
+        int count = 0;
+        for (int jj = 0; jj < jnum; jj++) {
+            const double r[3] = {dr[jj * 3 + 0], dr[jj * 3 + 1], dr[jj * 3 + 2]};
+            const double rsq = r[0] * r[0] + r[1] * r[1] + r[2] * r[2];
+            if (rsq > max_cutoff_sq) continue;
+            const double dist = std::sqrt(rsq);
+            const double inv_dist = 1.0 / dist;
+            neighbor_dists[count] = dist;
+            for (int a = 0; a < 3; a++) neighbor_units[(size_t) a * jnum + count] = r[a] * inv_dist;
+            count++;
+        }
+        radial_basis->calc_radial_basis_rows(count, neighbor_dists.data());
+    }
+
     // Points cached_j, valid_dr and neighbor_cache at the block of the chunk's atom a.
     void select_atom_cache(int a) {
         const size_t first = (size_t) a * atom_cache_size;
@@ -225,4 +245,7 @@ class Pair {
     int cache_stride = 0;                       // values per cached neighbor
     double* neighbor_cache = nullptr;           // [cache_stride] per neighbor: 1/dist, then the potential's per-neighbor values
     std::array<int, chunk_size> cached_counts{};  // compute's chunk: the neighbors each atom has cached
+
+    // calc_neighbor_rows's distances [jnum] and unit vectors [3 * jnum] of the neighbors within the cutoff
+    std::vector<double> neighbor_dists, neighbor_units;
 };

@@ -39,6 +39,48 @@ RBCinf::RBCinf(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(
     zeroth_poly = accumulator;
 }
 
+// calc_radial_basis_ders's operations, each over the distances.
+void RBCinf::calc_radial_basis_rows(int count, const double* dist) {
+    row_count = count;
+    rows_vals.resize((size_t) size * count);
+    rows_ders.resize((size_t) size * count);
+    row_work.resize(4 * (size_t) count);
+    double* vals = rows_vals.data();
+    double* ders = rows_ders.data();
+    const double inv_max_sq = 1.0 / (max_cutoff * max_cutoff);
+    double* x_sq = row_work.data();
+    double* dx_sq = x_sq + count;
+    double* der = x_sq + 2 * count;
+    double* der_prev = x_sq + 3 * count;
+    for (int j = 0; j < count; j++) {
+        x_sq[j] = dist[j] * dist[j] * inv_max_sq;
+        dx_sq[j] = 2 * dist[j] * inv_max_sq;
+        const double exponent = 1.0 / exp_ratio - (1.0 / exp_ratio) * x_sq[j];
+        vals[j] = zeroth_poly * scaling * std::exp(1.0 / exponent);
+    }
+    for (int j = 0; j < count; j++) {
+        const double one_minus_x_sq = 1 - x_sq[j];
+        der[j] = vals[j] * exp_ratio / (one_minus_x_sq * one_minus_x_sq);
+        ders[j] = der[j] * dx_sq[j];
+        der_prev[j] = 0;
+    }
+    for (int i = 0; i < size - 1; i++) {
+        const auto& c = recursive_coeffs[i];
+        const double* v = vals + (size_t) i * count;
+        const double* v_prev = vals + (size_t) (i > 0 ? i - 1 : 0) * count;
+        double* v_next = vals + (size_t) (i + 1) * count;
+        double* d_next = ders + (size_t) (i + 1) * count;
+        const double c2 = i > 0 ? c[2] : 0.0;
+        for (int j = 0; j < count; j++) {
+            v_next[j] = c[0] * x_sq[j] * v[j] + c[0] * c[1] * v[j] + c[0] * c2 * v_prev[j];
+            const double der_next = c[0] * (v[j] + x_sq[j] * der[j]) + c[0] * c[1] * der[j] + c[0] * c[2] * der_prev[j];
+            der_prev[j] = der[j];
+            der[j] = der_next;
+            d_next[j] = der_next * dx_sq[j];
+        }
+    }
+}
+
 // RadialBasisCinf::ComposeProgram, in its order of operations, with the derivatives beside.
 void RBCinf::calc_radial_basis_ders(double dist) {
     const double max_cutoff_sq = max_cutoff * max_cutoff;

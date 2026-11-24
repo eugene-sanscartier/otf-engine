@@ -81,6 +81,85 @@ void RealHarmonics::compute(const double u[3]) {
         }
 }
 
+void RealHarmonics::compute_rows(int count, const double* x, const double* y, const double* z) {
+    const int stride = l_count + 1;
+    row_count = count;
+    rows_vals.resize(vals.size() * count);
+    rows_grads.resize(grads.size() * count);
+    double* vals_rows = rows_vals.data();
+    double* grads_rows = rows_grads.data();
+    rows_cos.resize((size_t) l_count * count);
+    rows_sin.resize((size_t) l_count * count);
+    rows_legendre.assign((size_t) l_count * stride * count, 0.0);
+
+    for (int j = 0; j < count; j++) {
+        rows_cos[j] = 1.0;
+        rows_sin[j] = 0.0;
+    }
+    for (int m = 1; m < l_count; m++) {
+        const double* c0 = rows_cos.data() + (size_t) (m - 1) * count;
+        const double* s0 = rows_sin.data() + (size_t) (m - 1) * count;
+        double* c1 = rows_cos.data() + (size_t) m * count;
+        double* s1 = rows_sin.data() + (size_t) m * count;
+        for (int j = 0; j < count; j++) {
+            c1[j] = x[j] * c0[j] - y[j] * s0[j];
+            s1[j] = x[j] * s0[j] + y[j] * c0[j];
+        }
+    }
+
+    double diagonal = 1.0;
+    for (int m = 0; m < l_count; m++) {
+        if (m > 0) diagonal *= 2 * m - 1;
+        double* pmm = rows_legendre.data() + (size_t) (m * stride + m) * count;
+        for (int j = 0; j < count; j++) pmm[j] = diagonal;
+        if (m + 1 < l_count) {
+            double* p1 = rows_legendre.data() + (size_t) ((m + 1) * stride + m) * count;
+            for (int j = 0; j < count; j++) p1[j] = (2 * m + 1) * z[j] * diagonal;
+        }
+        for (int l = m + 2; l < l_count; l++) {
+            const double* pa = rows_legendre.data() + (size_t) ((l - 1) * stride + m) * count;
+            const double* pb = rows_legendre.data() + (size_t) ((l - 2) * stride + m) * count;
+            double* pl = rows_legendre.data() + (size_t) (l * stride + m) * count;
+            for (int j = 0; j < count; j++) pl[j] = ((2 * l - 1) * z[j] * pa[j] - (l + m - 1) * pb[j]) / (l - m);
+        }
+    }
+
+    for (int l = 0; l < l_count; l++)
+        for (int m = -l; m <= l; m++) {
+            const int k = std::abs(m);
+            const int index = l * l + l + m;
+            const double norm = norms[index];
+            const double* p = rows_legendre.data() + (size_t) (l * stride + k) * count;
+            const double* dp = rows_legendre.data() + (size_t) (l * stride + k + 1) * count;
+            const double* ck = rows_cos.data() + (size_t) k * count;
+            const double* sk = rows_sin.data() + (size_t) k * count;
+            const double* ck1 = rows_cos.data() + (size_t) (k > 0 ? k - 1 : 0) * count;
+            const double* sk1 = rows_sin.data() + (size_t) (k > 0 ? k - 1 : 0) * count;
+            double* v = vals_rows + (size_t) index * count;
+            double* g0 = grads_rows + (size_t) (index * 3 + 0) * count;
+            double* g1 = grads_rows + (size_t) (index * 3 + 1) * count;
+            double* g2 = grads_rows + (size_t) (index * 3 + 2) * count;
+            for (int j = 0; j < count; j++) {
+                double a, b, c;
+                if (m >= 0) {
+                    v[j] = norm * p[j] * ck[j];
+                    a = k > 0 ? norm * p[j] * k * ck1[j] : 0.0;
+                    b = k > 0 ? -norm * p[j] * k * sk1[j] : 0.0;
+                    c = norm * dp[j] * ck[j];
+                } else {
+                    v[j] = norm * p[j] * sk[j];
+                    a = norm * p[j] * k * sk1[j];
+                    b = norm * p[j] * k * ck1[j];
+                    c = norm * dp[j] * sk[j];
+                }
+                const double radial = a * x[j] + b * y[j] + c * z[j];
+                g0[j] = a - radial * x[j];
+                g1[j] = b - radial * y[j];
+                g2[j] = c - radial * z[j];
+            }
+        }
+}
+
 // Racah's formula in long double.
 double wigner_3j(int l1, int l2, int l3, int m1, int m2, int m3) {
     if (m1 + m2 + m3 != 0 || std::abs(m1) > l1 || std::abs(m2) > l2 || std::abs(m3) > l3) return 0.0;

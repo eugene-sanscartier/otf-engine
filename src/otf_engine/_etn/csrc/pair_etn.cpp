@@ -74,6 +74,7 @@ void PairETN::compute(const NeighList& list) {
             nbr_offset += jnum;
 
             select_atom_cache(ii - ii_begin);
+            calc_neighbor_rows(jnum, dr);
 
             // ------------ Calculate the Input Vector ------------
             for (int jj = 0; jj < jnum; jj++) {
@@ -88,19 +89,16 @@ void PairETN::compute(const NeighList& list) {
 
                 const double dist = std::sqrt(rsq);
                 const double inv_dist = 1.0 / dist;
-                const double u[3] = {r[0] * inv_dist, r[1] * inv_dist, r[2] * inv_dist};
                 double* cache = neighbor_cache + (size_t) valid_count * cache_stride;
                 cache[0] = inv_dist;
                 double* ylm = cache + 1;
                 double* ylm_grads = ylm + harmonic_count;
                 double* mixed = ylm_grads + 3 * harmonic_count;
                 double* mixed_ders = mixed + mixed_size;
-                radial_basis->calc_radial_basis_ders(dist);
+                radial_basis->select_row(valid_count);
                 const double* basis_vals = radial_basis->radial_basis_vals.data();
                 const double* basis_ders = radial_basis->radial_basis_ders.data();
-                harmonics.compute(u);
-                std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
-                std::copy(harmonics.grads.begin(), harmonics.grads.end(), ylm_grads);
+                harmonics.copy_row(valid_count, ylm, ylm_grads);
 
                 // The radial channels of the species pair, and their products with the harmonics
                 for (int l = 0; l < l_count; l++) {
