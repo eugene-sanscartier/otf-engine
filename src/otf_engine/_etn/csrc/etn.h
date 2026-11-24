@@ -31,6 +31,10 @@ class ETN : public PairETN {
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
   private:
+    // eval_grad's kernel, A atoms per chunk; its linear path runs their backwards passes on a lane per atom.
+    template <int A>
+    void eval_grad_lanes(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad, bool nonlinear);
+
     // Grows the neighbor rows to jnum neighbors.
     void grow_neighbor_rows(int jnum);
 
@@ -62,4 +66,11 @@ class ETN : public PairETN {
     std::vector<double> product_pass_ders;    // [atom_core_product_ders.size() * pass count]
     std::vector<double> input_column_ders;    // [input_shape.size * column count]
     std::vector<double> column_pair_ders;     // [4 * column count] per column, dE_k/dr_ij's angular part (x, y, z), then its radial part
+
+    // eval_grad's linear path: the atoms per chunk of a structure that has as many, and per atom of the chunk, a lane
+    // innermost in the pass arrays above and in these
+    static constexpr int jacobian_chunk = 16;
+    std::vector<double> lane_input_vals;      // [input_shape.size * jacobian_chunk]
+    std::vector<double> lane_core_products;   // [atom_core_products.size() * jacobian_chunk]
+    std::vector<double> lane_column_ders;     // [input_shape.size * column count * jacobian_chunk]
 };
