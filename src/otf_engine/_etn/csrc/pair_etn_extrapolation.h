@@ -37,5 +37,6 @@ class PairETNExtrapolation : public PairETN {
 
     std::vector<double> energy_ders_wrt_coeffs;    // dE_i/dc of the current atom, or of the configuration
     std::vector<double> nbh_extrapolation_grades;  // [n_atoms]
-    std::vector<double> neighbor_radial_vals;      // [neighbors * radial_basis_size] the radial basis at each neighbor
+    std::vector<double> neighbor_radial_vals;      // [chunk_size * atom_cache_size * radial_basis_size] the radial basis at each neighbor, a block per atom of the chunk
+    std::vector<Lanes> core_coeff_ders;            // [coeff_count] each atom of the chunk's dE_i/dc in the cores' columns, zero in the others
 };
