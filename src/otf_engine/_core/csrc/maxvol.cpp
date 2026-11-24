@@ -84,11 +84,11 @@ MaxVol::MaxVol(int n, double init_scale, double threshold, std::optional<double>
 MaxVol::MaxVol(int n, const double* A, const double* invA, double threshold, std::optional<double> threshold_swap)
     : n(n), threshold(threshold), threshold_swap(threshold_swap), A(A, A + (size_t) n * n), invA(invA, invA + (size_t) n * n), active_pool_ids(n, -1), active_structure_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {}
 
-void MaxVol::grade(const double* rows, int count, double* grades) {
+void grade_rows(const double* invA, int n, const double* rows, int count, double* grades, std::vector<double>& block) {
     using RowMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
     block.resize((size_t) std::min(grade_block_rows, count) * n);
 
-    const Eigen::Map<const RowMatrix> inverse(invA.data(), n, n);
+    const Eigen::Map<const RowMatrix> inverse(invA, n, n);
     for (int start = 0; start < count; start += grade_block_rows) {
         const int b = std::min(grade_block_rows, count - start);
         Eigen::Map<RowMatrix> product(block.data(), b, n);
@@ -96,6 +96,8 @@ void MaxVol::grade(const double* rows, int count, double* grades) {
         Eigen::Map<Eigen::VectorXd>(grades + start, b) = product.cwiseAbs().rowwise().maxCoeff();
     }
 }
+
+void MaxVol::grade(const double* rows, int count, double* grades) { grade_rows(invA.data(), n, rows, count, grades, block); }
 
 void MaxVol::maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_swaps) {
     const int count = pool.size();

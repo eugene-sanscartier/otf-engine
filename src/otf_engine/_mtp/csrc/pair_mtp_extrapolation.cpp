@@ -6,6 +6,8 @@
 
 #include "pair_mtp_extrapolation.h"
 
+#include "maxvol.h"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -13,7 +15,7 @@
 void PairMTPExtrapolation::set_active_set(const double* invA, bool configuration_mode, int weight_scaling) {
     const size_t n = (size_t) coeff_count() * coeff_count();
     inverse_active_set.assign(invA, invA + n);
-    energy_ders_wrt_coeffs.resize(coeff_count());
+    energy_ders_wrt_coeffs.resize((size_t) chunk_size * coeff_count());
     this->configuration_mode = configuration_mode;
     this->weight_scaling = weight_scaling;
 }
@@ -166,14 +168,16 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
 
             select_atom_cache(ii - ii_begin);
 
+            // The configuration's candidate vector, or the atom's row of the chunk's
+            double* atom_ders = energy_ders_wrt_coeffs.data() + (configuration_mode ? 0 : (size_t) (ii - ii_begin) * coeff_count());
             if (!configuration_mode)
-                std::fill(energy_ders_wrt_coeffs.begin(), energy_ders_wrt_coeffs.end(), 0.0);
+                std::fill(atom_ders, atom_ders + coeff_count(), 0.0);
 
             // The site energy's derivatives w.r.t. the linear and species coefficients
             const int linear_basis_offset = radial_coeff_count + species_count;
             for (int k = 0; k < alpha_scalar_count; k++)
-                energy_ders_wrt_coeffs[linear_basis_offset + k] += moment_tensor_vals[alpha_moment_mapping[k]][ii - ii_begin];
-            energy_ders_wrt_coeffs[radial_coeff_count + itype] += 1;
+                atom_ders[linear_basis_offset + k] += moment_tensor_vals[alpha_moment_mapping[k]][ii - ii_begin];
+            atom_ders[radial_coeff_count + itype] += 1;
 
             for (int t = 0; t < alpha_index_basic_count; t++)
                 basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]][ii - ii_begin];
@@ -188,7 +192,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                 const double* vals = cache + 1;
                 const double* ders = vals + radial_func_count;
                 const double* basis_vals = atom_radial_basis + (size_t) jj * radial_basis_size;
-                double* pair_ders = energy_ders_wrt_coeffs.data() +
+                double* pair_ders = atom_ders +
                     (itype * species_count + list.types[j]) * radial_coeff_count_per_pair;
                 for (int k = 1; k < angular_count; k++)
                     angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
@@ -241,12 +245,16 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                 virial[4] -= r[0] * temp_force[2];    //xz
                 virial[5] -= r[1] * temp_force[2];    //yz
             }
+        }
 
-            // Directly calculate extrapolation grade for neighbourhood mode
-            if (!configuration_mode) {
-                double grade = calculate_extrapolation_grade(itype);
-                max_grade = std::max(grade, max_grade);
-                nbh_extrapolation_grades[i] = grade;
+        // The chunk's neighbourhood grades, at once
+        if (!configuration_mode) {
+            const int count = ii_end - ii_begin;
+            chunk_grades.resize(count);
+            grade_rows(inverse_active_set.data(), coeff_count(), energy_ders_wrt_coeffs.data(), count, chunk_grades.data(), grade_block);
+            for (int ii = ii_begin; ii < ii_end; ii++) {
+                nbh_extrapolation_grades[list.ilist[ii]] = chunk_grades[ii - ii_begin];
+                max_grade = std::max(chunk_grades[ii - ii_begin], max_grade);
             }
         }
     }
@@ -255,35 +263,11 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
 }
 
 /* ----------------------------------------------------------------------
-   Extrapolation Calculation Function
-------------------------------------------------------------------------- */
-double PairMTPExtrapolation::calculate_extrapolation_grade(int itype) {
-    const int n = coeff_count();
-    const int begin = itype < 0 ? 0 : itype * species_count * radial_coeff_count_per_pair;
-    const int end = itype < 0 ? n : begin + species_count * radial_coeff_count_per_pair;
-    const int linear_offset = radial_coeff_count + species_count;
-    double grade_max = 0;
-    for (int i = 0; i < n; i++) {
-        double current_grade = 0;
-        const double* row = inverse_active_set.data() + (size_t) i * n;
-        for (int j = begin; j < end; j++) { current_grade += energy_ders_wrt_coeffs[j] * row[j]; }
-        if (itype >= 0) {
-            const int species_offset = radial_coeff_count + itype;
-            current_grade += energy_ders_wrt_coeffs[species_offset] * row[species_offset];
-            for (int j = linear_offset; j < n; j++)
-                current_grade += energy_ders_wrt_coeffs[j] * row[j];
-        }
-        grade_max = std::max(std::abs(current_grade), grade_max);
-    }
-    return grade_max;
-}
-
-/* ----------------------------------------------------------------------
    Configuration grade, normalized by the atom count
 ------------------------------------------------------------------------- */
 void PairMTPExtrapolation::compile_grades(int natoms) {
     if (configuration_mode) {    // Configuration mode
-        max_grade = calculate_extrapolation_grade();
+        grade_rows(inverse_active_set.data(), coeff_count(), energy_ders_wrt_coeffs.data(), 1, &max_grade, grade_block);
 
         if (natoms > 0)
             max_grade /= std::pow((double) natoms, 0.5 * weight_scaling);    // Normalize

@@ -28,7 +28,6 @@ class PairMTPExtrapolation : public PairMTP {
     bool get_configuration_mode() const { return configuration_mode; }
 
   protected:
-    double calculate_extrapolation_grade(int itype = -1);    // Grades from candidate vector
     void compile_grades(int natoms);                        // Configuration grade and its normalization
 
     bool configuration_mode = false;         // Is configuration mode?
@@ -39,7 +38,9 @@ class PairMTPExtrapolation : public PairMTP {
     //Working buffers
     std::vector<double> radial_basis_cache;      // [radial_basis_cache_size * radial_basis_size] radial basis at r_ij, a block of atom_cache_size per atom of the chunk
     int radial_basis_cache_size = 0;
-    std::vector<double> energy_ders_wrt_coeffs;  // Candidate information vector
+    std::vector<double> energy_ders_wrt_coeffs;  // Candidate information vector: the configuration's, or in neighbourhood mode each atom of the chunk's [chunk_size * coeff_count]
+    std::vector<double> chunk_grades;            // [chunk_size] the chunk's neighbourhood grades
+    std::vector<double> grade_block;             // grade_rows' scratch
 
     // Only needed for neighbourhood mode
     std::vector<double> nbh_extrapolation_grades;  // [n_atoms] Extrapolation grades of all neighbourhoods

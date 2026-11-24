@@ -9,6 +9,8 @@
 
 #include "pair_etn_extrapolation.h"
 
+#include "maxvol.h"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -16,7 +18,7 @@
 void PairETNExtrapolation::set_active_set(const double* invA, bool configuration_mode, int weight_scaling) {
     const size_t n = (size_t) coeff_count() * coeff_count();
     inverse_active_set.assign(invA, invA + n);
-    energy_ders_wrt_coeffs.resize(coeff_count());
+    energy_ders_wrt_coeffs.resize((size_t) chunk_size * coeff_count());
     this->configuration_mode = configuration_mode;
     this->weight_scaling = weight_scaling;
 }
@@ -233,8 +235,8 @@ void PairETNExtrapolation::compute(const NeighList& list) {
 
             select_atom_cache(a);
 
-            // ---- The cores' coefficients, then the species' ----
-            double* row = energy_ders_wrt_coeffs.data();
+            // ---- The cores' coefficients, then the species', into the configuration's candidate vector or the atom's row of the chunk's ----
+            double* row = energy_ders_wrt_coeffs.data() + (configuration_mode ? 0 : (size_t) a * n_coeffs);
             if (configuration_mode)
                 for (int k = 0; k < n_coeffs; k++) row[k] += core_coeff_ders[k][a];
             else
@@ -319,27 +321,23 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                 virial[4] -= r[0] * temp_force[2];    //xz
                 virial[5] -= r[1] * temp_force[2];    //yz
             }
+        }
 
-            if (!configuration_mode) {
-                const double grade = calculate_extrapolation_grade();
-                max_grade = std::max(grade, max_grade);
-                nbh_extrapolation_grades[i] = grade;
+        // The chunk's neighborhood grades, at once
+        if (!configuration_mode) {
+            const int count = ii_end - ii_begin;
+            chunk_grades.resize(count);
+            grade_rows(inverse_active_set.data(), n_coeffs, energy_ders_wrt_coeffs.data(), count, chunk_grades.data(), grade_block);
+            for (int ii = ii_begin; ii < ii_end; ii++) {
+                nbh_extrapolation_grades[list.ilist[ii]] = chunk_grades[ii - ii_begin];
+                max_grade = std::max(chunk_grades[ii - ii_begin], max_grade);
             }
         }
     }
 
     // The configuration grade, normalized by the atom count
-    if (configuration_mode) max_grade = list.n_atoms > 0 ? calculate_extrapolation_grade() / std::pow((double) list.n_atoms, 0.5 * weight_scaling) : 0.0;
-}
-
-double PairETNExtrapolation::calculate_extrapolation_grade() const {
-    const int n = coeff_count();
-    double grade_max = 0;
-    for (int i = 0; i < n; i++) {
-        const double* row = inverse_active_set.data() + (size_t) i * n;
-        double current_grade = 0;
-        for (int j = 0; j < n; j++) current_grade += energy_ders_wrt_coeffs[j] * row[j];
-        grade_max = std::max(std::abs(current_grade), grade_max);
+    if (configuration_mode) {
+        grade_rows(inverse_active_set.data(), n_coeffs, energy_ders_wrt_coeffs.data(), 1, &max_grade, grade_block);
+        max_grade = list.n_atoms > 0 ? max_grade / std::pow((double) list.n_atoms, 0.5 * weight_scaling) : 0.0;
     }
-    return grade_max;
 }

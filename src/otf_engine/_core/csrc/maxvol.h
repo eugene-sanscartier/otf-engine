@@ -59,6 +59,9 @@ class Equations {
     std::vector<double> site_energy_grad, force_grad, virial_grad;
 };
 
+// grades[r] = max_i |rows[r] . invA[i]| for count rows of n, invA [n * n] row-major, by blocks of rows; block is scratch.
+void grade_rows(const double* invA, int n, const double* rows, int count, double* grades, std::vector<double>& block);
+
 class MaxVol {
   public:
     // A = init_scale * I; the defaults are mlip-3's.
