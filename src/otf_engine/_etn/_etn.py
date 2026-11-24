@@ -4,6 +4,7 @@ The binary implementation lives in otf_engine._etn._etn_ext, whose classes deriv
 from _core_ext's Pair.
 
     PairETN          energy, forces, virial (a Pair)
+    PairETNExtrapolation  + extrapolation grades against an active set (a PairETN)
     ETN              + each atom's input and bond vectors, and derivatives of site energies
                        and of a loss w.r.t. the coefficients
     fit_etn          fits an ETN with ETNFit
@@ -23,6 +24,7 @@ from .io import write_etn
 _ext = _import_module("._etn_ext", __package__)
 
 PairETN = _ext.PairETN
+PairETNExtrapolation = _ext.PairETNExtrapolation
 ETN = _ext.ETN
 fit_etn = _ext.fit_etn
 real_harmonics = _ext.real_harmonics
@@ -34,4 +36,4 @@ PairETN.fit = staticmethod(fit_etn)
 PairETN.threshold_swap = 1.00001    # mlip-4's MaximizeVol goes on swapping, once a search has swapped, while a grade exceeds this
 PairETN.retrain_pass = False        # mlip-4's CfgCalc makes no training pass after the candidates
 
-__all__ = ["PairETN", "ETN", "fit_etn", "real_harmonics", "wigner_3j", "real_wigner_3j"]
+__all__ = ["PairETN", "PairETNExtrapolation", "ETN", "fit_etn", "real_harmonics", "wigner_3j", "real_wigner_3j"]

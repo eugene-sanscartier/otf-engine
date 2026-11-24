@@ -11,6 +11,7 @@ PYBIND11_MODULE(_etn_ext, m) {
 
     bind_etn_harmonics(m);
     bind_pair_etn(m);
+    bind_pair_etn_extrapolation(m);
     bind_etn(m);
     bind_etn_fit(m);
 }

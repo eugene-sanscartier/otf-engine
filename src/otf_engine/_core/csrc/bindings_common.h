@@ -329,5 +329,6 @@ void bind_mtp(py::module_& m);
 void bind_mtp_fit(py::module_& m);
 void bind_etn_harmonics(py::module_& m);
 void bind_pair_etn(py::module_& m);
+void bind_pair_etn_extrapolation(py::module_& m);
 void bind_etn(py::module_& m);
 void bind_etn_fit(py::module_& m);

@@ -74,6 +74,7 @@ install(TARGETS _mtp_testing DESTINATION otf_engine/_mtp)
 add_library(etn STATIC
     ${ETN_CSRC}/etn_harmonics.cpp
     ${ETN_CSRC}/pair_etn.cpp
+    ${ETN_CSRC}/pair_etn_extrapolation.cpp
     ${ETN_CSRC}/etn.cpp
     ${ETN_CSRC}/wolfe_bfgs.cpp
     ${ETN_CSRC}/etn_fit.cpp
@@ -86,6 +87,7 @@ pybind11_add_module(_etn_ext
     ${ETN_CSRC}/etn_module.cpp
     ${ETN_CSRC}/etn_harmonics_bindings.cpp
     ${ETN_CSRC}/pair_etn_bindings.cpp
+    ${ETN_CSRC}/pair_etn_extrapolation_bindings.cpp
     ${ETN_CSRC}/etn_bindings.cpp
     ${ETN_CSRC}/etn_fit_bindings.cpp
 )
