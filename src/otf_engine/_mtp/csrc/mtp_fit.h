@@ -30,7 +30,6 @@ struct MTPFitOptions : FitOptions {
     int weight_scaling_forces = 0;  // force weights by n_atoms^weight_scaling_forces
     int iteration_limit = 1000;
     double tolerance = 1e-3;        // stop when 50 BFGS steps decrease the loss by less than this, relatively
-    bool no_mindist_update = false; // keep min_dist rather than setting it to 0.99 of the shortest training distance
     bool init_random = false;       // randomize the radial coefficients of an untrained potential
     bool skip_preinit = false;      // skip the 75-step pre-training of an untrained potential
     bool bfgs_only = false;         // BFGS over every coefficient, no linear fit or rescale; a trained potential
@@ -87,7 +86,6 @@ class MTPFit : public Fit<MTP, MTPFitOptions> {
     friend class MTPFitStages;    // _mtp_testing runs the stages one at a time
 
     void add_species();
-    void update_min_dist();
     void fit_nonlinear(int max_iter);
     void fit_riemannian(int max_iter);
     // The linear fit over every structure, or over varpro_fraction's draw if subset.

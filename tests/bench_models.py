@@ -12,8 +12,8 @@ random split of a cfg, on --ranks threads, then writes into OUT/NAME:
 
 A rerun skips the fit and the errors already written and adds a timing file, so reruns on other nodes
 give the timings a spread. Every potential has the same radial cutoffs: min_dist 0.99 of the
-shortest distance in the training part, max_dist 5 and 8 radial basis functions. The MTP keeps
-its min_dist (no_mindist_update), as the ETN does. Each fit runs with its defaults.
+shortest distance in the training part, max_dist 5 and 8 radial basis functions. Both fits keep
+it (no_mindist_update). Each fit runs with its other defaults.
 
 `report` gathers OUT into a table, pairs each MTP with the ETN closest in coefficient count, and plots
 the times against the test force RMSE and against the coefficient count into OUT/bench_models.svg.
@@ -125,7 +125,7 @@ def run(name, args):
             template = workdir / f"untrained.{model}"
             untrained(name, min_dist).write(str(template))
             fit_structures = [FitStructure(atoms, MAX_DIST, k + 1) for k, atoms in enumerate(training_set)]
-            options = {"log": str(workdir / "fit.log")} | ({"no_mindist_update": "true"} if model == "mtp" else {})
+            options = {"log": str(workdir / "fit.log"), "no_mindist_update": "true"}
 
             start = time.perf_counter()
             potential = fit(str(template), fit_structures, options, ranks=args.ranks)

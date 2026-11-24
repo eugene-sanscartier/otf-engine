@@ -50,6 +50,7 @@ struct ETNFitOptions : FitOptions {
         if (varpro) algorithm << (algorithm.tellp() > 0 ? ", " : "") << "varpro, reg_param " << reg_param << (reg_at_main ? ", reg_at_main" : "");
         if (varpro && varpro_fraction < 1.0) algorithm << ", varpro_fraction " << varpro_fraction;
         if (varpro && varpro_fraction < 1.0 && varpro_redraw_every > 0) algorithm << ", varpro_redraw_every " << varpro_redraw_every;
+        if (no_mindist_update) algorithm << (algorithm.tellp() > 0 ? ", " : "") << "no_mindist_update";
 
         std::vector<std::string> lines = {stopping.str(), loss_weights()};
         if (algorithm.tellp() > 0) lines.push_back(algorithm.str());

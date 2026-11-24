@@ -85,7 +85,8 @@ void ETNFit::run() {
     add_species();
     log_event(log, "coefficients", "%zu", coeffs.size());
     if (options.varpro && options.varpro_fraction < 1.0) draw_varpro_subset(0);
-    log_errors("before training");
+    log_errors("before training");    // the potential as given, before update_min_dist moves its radial basis
+    update_min_dist();
 
     if (options.init_random && !potential.is_trained()) {
         if (rank == 0) {

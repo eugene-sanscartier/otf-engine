@@ -180,23 +180,6 @@ void MTPFit::add_species() {
     reg_vector.resize(n_linear);
 }
 
-void MTPFit::update_min_dist() {
-    double min_dist = 999;
-    for (const FitStructure& s : structures)
-        for (size_t p = 0; p < s.firstneigh.size(); p++) {
-            const double* r = s.displacements.data() + p * 3;
-            min_dist = std::min(min_dist, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]));
-        }
-
-    double total_min_dist = min_dist;
-    comm.allreduce(&min_dist, &total_min_dist, 1, ReduceOp::min);
-
-    if (!options.no_mindist_update) {
-        log_event(log, "init", "min_dist %g", total_min_dist);
-        potential.set_min_cutoff(0.99 * total_min_dist);
-    }
-}
-
 /* ----------------------------------------------------------------------
    BFGS over every coefficient. Rank 0 steps; the others evaluate their
    share at the coefficients it broadcasts.

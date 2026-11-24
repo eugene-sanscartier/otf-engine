@@ -146,8 +146,8 @@ class Pair {
 
     void set_species_coeffs(const double* c) { std::copy(c, c + species_count, species_coeffs.begin()); }
     void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
-    // Sets the minimum distance of the radial basis.
-    void set_min_cutoff(double d) { min_cutoff = d; radial_basis->min_cutoff = d; }
+    // Sets the minimum distance of the radial basis, rebuilt at it, as RBCinf's recursion depends on it.
+    void set_min_cutoff(double d) { set_radial_basis(radial_basis_type, d, max_cutoff, radial_basis_size); }
     void set_trained(bool t) { trained = t; }
 
   protected:

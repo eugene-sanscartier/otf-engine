@@ -31,6 +31,7 @@ struct FitOptions {
     double stress_weight = 0.001;
     bool balance_species = true;         // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
     double varpro_fraction = 0.25;       // < 1: varpro's system in the fit's evaluations from this fraction of the structures, weights divided by it
+    bool no_mindist_update = false;      // keep min_dist rather than setting it to 0.99 of the shortest training distance
     std::vector<std::string> species;    // the species' names in the error tables
 
     // The weights and balance_species, the loss weights' line of the log's options.
@@ -168,6 +169,24 @@ class Fit {
         potential.set_coeffs(coeffs.data());
         const std::string table = error_table(potential, structures, options.species, comm, "errors: " + when);
         if (log) *log << table;
+    }
+
+    // Sets min_dist to 0.99 of the shortest distance in the training set, unless no_mindist_update.
+    void update_min_dist() {
+        double min_dist = 999;
+        for (const FitStructure& s : structures)
+            for (size_t p = 0; p < s.firstneigh.size(); p++) {
+                const double* r = s.displacements.data() + p * 3;
+                min_dist = std::min(min_dist, std::sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]));
+            }
+
+        double total_min_dist = min_dist;
+        comm.allreduce(&min_dist, &total_min_dist, 1, ReduceOp::min);
+
+        if (!options.no_mindist_update) {
+            log_event(log, "init", "min_dist %g", total_min_dist);
+            potential.set_min_cutoff(0.99 * total_min_dist);
+        }
     }
 
     // varpro_fraction: draws each of this rank's structures into varpro_subset with probability varpro_fraction, from

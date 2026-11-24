@@ -181,9 +181,9 @@ def varpro_fit(structures, workdir, chosen=(0, 1), **options):
 
 def test_varpro_fit(structures, tmp_path):
     """The recipe's VarPro fit, whose loss takes the outputs from the columns of the last solve, gives the losses of a build
-    that computed them, stored in etn_reference/varpro_fit.npz, to rounding."""
+    that computed them, stored in etn_reference/varpro_fit.npz, to rounding; that build kept min_dist."""
     stored = numpy.load(ETN_REFERENCE / "varpro_fit.npz")
-    _, steps, _ = varpro_fit(structures, tmp_path)
+    _, steps, _ = varpro_fit(structures, tmp_path, no_mindist_update="true")
     assert [len(s) for s in steps] == list(stored["counts"])
     numpy.testing.assert_allclose(numpy.concatenate(steps), stored["losses"], rtol=1e-9)
 
@@ -238,3 +238,34 @@ def test_varpro_redraw(structures, tmp_path):
     assert redrawn[0] == fixed[0]
     assert redrawn[2] != fixed[2]
     assert redrawn[-1][-1] < redrawn[0][0]
+
+
+def test_set_min_cutoff(structures):
+    """set_min_cutoff rebuilds RBCinf at the new min_dist: the ETN computes as one built with it."""
+    from otf_engine._etn import ETN
+    from etn_potentials import POTENTIALS, MAX_DIST, RADIAL_BASIS_SIZE
+
+    moved = untrained_etn("etn-3")
+    moved.set_min_cutoff(1.5)
+    _, species_ranks, radial_funcs_counts, radial_ranks, bond_ranks = POTENTIALS["etn-3"]
+    built = ETN(species_ranks=species_ranks, radial_funcs_counts=radial_funcs_counts, radial_ranks=radial_ranks, bond_ranks=bond_ranks, species_count=moved.get_species_count(), min_dist=1.5, max_dist=MAX_DIST, radial_basis_size=RADIAL_BASIS_SIZE)
+    nl = neighbors(structures[1], MAX_DIST)
+
+    moved_result, built_result = moved.compute(nl), built.compute(nl)
+
+    assert moved.get_min_cutoff() == 1.5
+    assert moved_result["energy"] == pytest.approx(built_result["energy"], rel=1e-12)
+    numpy.testing.assert_allclose(moved_result["forces"], built_result["forces"], rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("keep", [False, True], ids=["update", "no_mindist_update"])
+def test_min_dist_update(keep, structures, tmp_path):
+    """The ETN fit sets min_dist to 0.99 of the shortest training distance, as the MTP fit does, unless no_mindist_update."""
+    from ase.neighborlist import neighbor_list
+    from etn_potentials import MIN_DIST, MAX_DIST
+
+    options = {"no_mindist_update": "true"} if keep else {}
+    trained, _, _ = varpro_fit(structures, tmp_path, **options)
+    shortest = min(neighbor_list("d", structures[k], MAX_DIST).min() for k in (0, 1))
+
+    assert trained.get_min_cutoff() == pytest.approx(MIN_DIST if keep else 0.99 * shortest, rel=1e-12)
