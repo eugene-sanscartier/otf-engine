@@ -30,7 +30,7 @@ struct FitOptions {
     double force_weight = 0.01;
     double stress_weight = 0.001;
     bool balance_species = true;         // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
-    double varpro_fraction = 1.0;        // < 1: varpro's system in the fit's evaluations from this fraction of the structures, weights divided by it
+    double varpro_fraction = 0.25;       // < 1: varpro's system in the fit's evaluations from this fraction of the structures, weights divided by it
     std::vector<std::string> species;    // the species' names in the error tables
 
     // The weights and balance_species, the loss weights' line of the log's options.
@@ -40,6 +40,9 @@ struct FitOptions {
         return text.str();
     }
 };
+
+// The fewest structures varpro_fraction may draw on average; a smaller draw takes every structure.
+constexpr int VARPRO_MIN_DRAWN = 32;
 
 // The optional columns of a phase's step lines: the MTP's penalty, the loss after a linear fit, the inverse Hessian set.
 struct StepColumns {
@@ -64,6 +67,7 @@ class Fit {
         comm.allreduce(&local_count, &structure_count, 1, ReduceOp::sum);
         if (structure_count == 0)
             throw std::runtime_error("no training structures");
+        if (this->options.varpro_fraction * structure_count < VARPRO_MIN_DRAWN) this->options.varpro_fraction = 1.0;
 
         load_coeffs();
     }

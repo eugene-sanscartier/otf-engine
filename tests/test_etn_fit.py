@@ -162,15 +162,19 @@ def test_fit(name, structures, stored, tmp_path):
 RECIPE = {"energy_weight": "1.0", "force_weight": "0.1", "stress_weight": "0.001", "iteration_limit": "10", "skip_preinit": "true", "init_random": "true", "random_seed": "1", "init_scale": "0.3", "init_species": "true", "varpro": "true", "reg_at_main": "true", "log": "none"}
 
 
+# The 6 structures 11 times over, so that varpro_fraction 0.5 draws the 32 structures a fraction needs on average
+FRACTION_CHOSEN = list(range(6)) * 11
+
+
 def varpro_fit(structures, workdir, chosen=(0, 1), **options):
-    """The recipe's short fit of the 3-core potential on the chosen structures from a seeded start: the trained potential,
-    its steps' losses and the labelled structures."""
+    """The recipe's short fit of the 3-core potential on the chosen structures, numbered by position, from a seeded start:
+    the trained potential, its steps' losses and the labelled structures."""
     from otf_engine._etn import ETN
     from otf_engine._etn._etn_testing import fit_etn_steps
 
     path = Path(workdir) / "etn-3.etn"
     untrained_etn("etn-3").write(path)
-    labelled = [FitStructure(structures[k], ETN(str(path)).get_max_cutoff(), k + 1) for k in chosen]
+    labelled = [FitStructure(structures[k], ETN(str(path)).get_max_cutoff(), n + 1) for n, k in enumerate(chosen)]
     trained, steps = fit_etn_steps(str(path), labelled, RECIPE | options, 1)
     return trained, steps, labelled
 
@@ -188,10 +192,10 @@ def test_varpro_fit(structures, tmp_path):
 def test_varpro_gradient(fraction, structures, tmp_path):
     """Under varpro, its system built on every structure or on half of them, the objective's gradient matches
     fourth-order finite differences along 4 directions of the coefficients BFGS steps, after the recipe's short fit on
-    the 6 structures."""
+    the 6 structures 11 times over."""
     from otf_engine._etn._etn_testing import ETNObjective
 
-    trained, _, labelled = varpro_fit(structures, tmp_path, chosen=range(6))
+    trained, _, labelled = varpro_fit(structures, tmp_path, chosen=FRACTION_CHOSEN)
     path = tmp_path / "trained.etn"
     trained.write(path)
     objective = ETNObjective(str(path), labelled, RECIPE | {"varpro_fraction": fraction})
@@ -211,11 +215,26 @@ def test_varpro_gradient(fraction, structures, tmp_path):
         assert min(errors) < 1e-4
 
 
+def test_varpro_fraction_small_set(structures, tmp_path):
+    """On the 6 structures, varpro_fraction 0.5 would draw fewer than 32 structures on average, so the objective takes them
+    all, as varpro_fraction 1 does."""
+    from otf_engine._etn._etn_testing import ETNObjective
+
+    trained, _, labelled = varpro_fit(structures, tmp_path, chosen=range(6))
+    path = tmp_path / "trained.etn"
+    trained.write(path)
+    x = numpy.asarray(trained.get_coeffs())
+    halved = ETNObjective(str(path), labelled, RECIPE | {"varpro_fraction": "0.5"})(x)[0]
+    full = ETNObjective(str(path), labelled, RECIPE | {"varpro_fraction": "1"})(x)[0]
+
+    assert halved == full
+
+
 def test_varpro_redraw(structures, tmp_path):
-    """Under varpro_fraction 0.5 on the 6 structures, varpro_redraw_every 1 draws anew at each step: its fit leaves the
-    fixed draw's losses after the first step, and lowers the loss."""
-    _, fixed, _ = varpro_fit(structures, tmp_path, chosen=range(6), varpro_fraction="0.5")
-    _, redrawn, _ = varpro_fit(structures, tmp_path, chosen=range(6), varpro_fraction="0.5", varpro_redraw_every="1")
+    """Under varpro_fraction 0.5 on the 6 structures 11 times over, varpro_redraw_every 1 draws anew at each step: its fit
+    leaves the fixed draw's losses after the first step, and lowers the loss."""
+    _, fixed, _ = varpro_fit(structures, tmp_path, chosen=FRACTION_CHOSEN, varpro_fraction="0.5", varpro_redraw_every="0")
+    _, redrawn, _ = varpro_fit(structures, tmp_path, chosen=FRACTION_CHOSEN, varpro_fraction="0.5", varpro_redraw_every="1")
     assert redrawn[0] == fixed[0]
     assert redrawn[2] != fixed[2]
     assert redrawn[-1][-1] < redrawn[0][0]

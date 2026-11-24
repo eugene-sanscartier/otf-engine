@@ -35,7 +35,7 @@ struct ETNFitOptions : FitOptions {
     bool varpro = true;               // variable projection: the site energies and the last core solved exactly at every evaluation, no rescale
     double reg_param = 1e-10;         // varpro's ridge on the linear coefficients, times max(1, A_ii) of the first solve
     bool reg_at_main = true;          // rebuild varpro's ridge at the main fit's first solve
-    int varpro_redraw_every = 0;      // > 0, under varpro_fraction: in the main fit, a new draw every so many steps, the last one kept over the last 20% of iteration_limit
+    int varpro_redraw_every = 50;     // > 0, under varpro_fraction: in the main fit, a new draw every so many steps, the last one kept over the last 20% of iteration_limit
 
     ETNFitOptions() { force_weight = 0.1; }
 

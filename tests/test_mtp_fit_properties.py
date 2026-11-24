@@ -55,12 +55,16 @@ OPTION_SETS = {
     "varpro_fraction": ({"varpro_fraction": "0.5", "random_seed": "1"}, 1e-3),
 }
 
+# Copies of the 6 structures under varpro_fraction 0.5, so that it draws the 32 structures a fraction needs on average
+FRACTION_COPIES = 11
+
 
 @pytest.mark.parametrize("name", OPTION_SETS)
 def test_gradient(name, structures):
     """The objective's gradient matches fourth-order finite differences along 4 directions, tangent under riemannian."""
     options, tol = OPTION_SETS[name]
-    stage = stages(TEACHER, structures, **options)
+    copies = FRACTION_COPIES if "varpro_fraction" in options else 1
+    stage = stages(TEACHER, structures * copies, **options)
     riemannian, varpro = options.get("riemannian") != "false", options.get("varpro") != "false"
     n_radial = stage.potential.get_radial_coeff_count()
     radial = numpy.asarray(stage.potential.get_radial_basis_coeffs())
