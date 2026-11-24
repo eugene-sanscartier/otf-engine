@@ -19,8 +19,8 @@
 #include <vector>
 
 // `mlp train`'s options, under its names and with its defaults, and the fit's own, whose defaults
-// are the recipe; varpro, reg_once, no_orthogonalize, riemannian, reg_at_main and ldlt false and
-// init_noise 5 give mlp's algorithm.
+// are the recipe; varpro, reg_once, no_orthogonalize, riemannian, reg_at_main, ldlt and
+// reg_follows_scaling false and init_noise 5 give mlp's algorithm.
 struct MTPFitOptions : FitOptions {
     double penalty_weight = 1e-6;
     double reg_param = 1e-10;       // the linear coefficients' regularization, times max(1, A_ii) / N once the first linear fit builds it
@@ -41,6 +41,7 @@ struct MTPFitOptions : FitOptions {
     bool no_orthogonalize = true;   // orthogonalize the radial functions in pre-training only, so a linear fit never raises the loss
     bool riemannian = true;         // the main fit by Riemannian L-BFGS with the radial functions orthonormal (W W^T = I), no radial penalty
     bool ldlt = true;               // solve the linear system by LDLT with diagonal pivoting, not by elimination without row swaps
+    bool reg_follows_scaling = true;    // rescale multiplies each linear coefficient's regularization by its basis function's scaling factor squared
     int lbfgs_memory = 1000;        // the pairs riemannian's L-BFGS keeps
     double init_noise = 0.5;        // init_random's noise on each radial coefficient, relative to the diagonal one's 1e-7 scale
     int random_seed = -1;           // init_random's seed; -1 draws one from std::random_device
@@ -56,7 +57,7 @@ struct MTPFitOptions : FitOptions {
         weights << loss_weights();
         if (scale_by_force > 0) weights << ", scale_by_force " << scale_by_force;
         regularization << "penalty_weight " << penalty_weight << ", reg_param " << reg_param;
-        const std::pair<const char*, bool> flags[] = {{"varpro", varpro}, {"riemannian", riemannian}, {"reg_once", reg_once}, {"reg_at_main", reg_at_main}, {"no_orthogonalize", no_orthogonalize}, {"ldlt", ldlt}, {"init_random", init_random}, {"skip_preinit", skip_preinit}, {"bfgs_only", bfgs_only}, {"radial_only", radial_only}, {"no_mindist_update", no_mindist_update}};
+        const std::pair<const char*, bool> flags[] = {{"varpro", varpro}, {"riemannian", riemannian}, {"reg_once", reg_once}, {"reg_at_main", reg_at_main}, {"no_orthogonalize", no_orthogonalize}, {"ldlt", ldlt}, {"reg_follows_scaling", reg_follows_scaling}, {"init_random", init_random}, {"skip_preinit", skip_preinit}, {"bfgs_only", bfgs_only}, {"radial_only", radial_only}, {"no_mindist_update", no_mindist_update}};
         for (const auto& [name, set] : flags)
             if (set) algorithm << (algorithm.tellp() > 0 ? ", " : "") << name;
         if (varpro && varpro_fraction < 1.0) algorithm << (algorithm.tellp() > 0 ? ", " : "") << "varpro_fraction " << varpro_fraction;

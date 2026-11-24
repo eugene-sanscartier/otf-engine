@@ -36,7 +36,7 @@ def errors(potential_path: str, structures: list, title: str, first: int = 1, sp
 
 
 # The fit options that give mlp's algorithm in place of the fit's defaults, for runs compared with mlp.
-MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "ldlt": "false", "init_noise": "5", "balance_species": "false"}
+MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "ldlt": "false", "reg_follows_scaling": "false", "init_noise": "5", "balance_species": "false"}
 
 # The fit options that give mlip-4's algorithm in place of the ETN fit's defaults, for runs compared with mlip-4.
 MLIP4_ALGORITHM = {"init_random": "false", "init_species": "false", "varpro": "false", "reg_at_main": "false", "force_weight": "0.01", "balance_species": "false"}

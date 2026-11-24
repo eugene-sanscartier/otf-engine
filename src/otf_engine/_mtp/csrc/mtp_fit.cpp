@@ -642,6 +642,8 @@ void MTPFit::solve_linear() {
    linear fit. A basis function of degree d in the radial functions scales as
    scaling^d, so each fit rescales the system last assembled, which is
    reassembled only when orthogonalizing moves the radial functions.
+   Under reg_follows_scaling its regularization scales as scaling^(2d), so
+   the fitted potential and the loss do not depend on the scaling chosen.
 ------------------------------------------------------------------------- */
 void MTPFit::rescale() {
     double min_scaling = potential.get_scaling();
@@ -652,8 +654,15 @@ void MTPFit::rescale() {
     double assembled_scaling = 0.0;    // none assembled yet
     std::vector<double> assembled_matrix, assembled_vector, radial(n_radial), factors(n_linear);
 
+    const double entry_scaling = potential.get_scaling();
+    const std::vector<double> entry_reg = reg_vector;
+    const int species = n_linear - (int) scalar_degree.size();
+
     auto fit_at = [&](double scaling) {
         potential.set_scaling(scaling);
+        if (options.reg_follows_scaling && reg_built)
+            for (int i = species; i < n_linear; i++)
+                reg_vector[i] = entry_reg[i] * std::pow(scaling / entry_scaling, 2 * scalar_degree[i - species]);
         if (!scalable) {
             orthogonalize();
             fit_linear();
@@ -677,7 +686,6 @@ void MTPFit::rescale() {
 
         if (rank == 0) {
             const int n = n_linear;
-            const int species = n_linear - (int) scalar_degree.size();
             for (int i = 0; i < n; i++)
                 factors[i] = i < species ? 1.0 : std::pow(scaling / assembled_scaling, scalar_degree[i - species]);
             for (int i = 0; i < n; i++) {

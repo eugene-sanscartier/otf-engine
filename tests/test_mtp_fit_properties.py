@@ -125,8 +125,8 @@ def test_teacher_linear_fit(teacher_labelled):
     assert fitted < 1e-15 * at_zero
 
 
-def test_dimer_rescale():
-    """On Ni–Ni dimers, whose basis functions all depend on one distance, rescale from init_random's radial functions gives finite coefficients."""
+def dimer_stage(**options):
+    """A fit on Ni–Ni dimers, whose basis functions all depend on one distance, linearly fitted at init_random's radial functions."""
     from otf_engine._mtp import PairMTP
 
     teacher = PairMTP(str(TEACHER))
@@ -138,7 +138,7 @@ def test_dimer_rescale():
         atoms.calc.calculate(atoms, ["energy", "forces", "stress"])
         dimers += [atoms]
 
-    stage = stages(MTP_REFERENCE / "template-16-r3.almtp", dimers)
+    stage = stages(MTP_REFERENCE / "template-16-r3.almtp", dimers, **options)
     stage.add_species()
     stage.update_min_dist()
     P, K, R = numpy.asarray(stage.potential.get_radial_basis_coeffs()).shape
@@ -152,9 +152,29 @@ def test_dimer_rescale():
 
     stage.orthogonalize()
     stage.fit_linear()
+    return stage
+
+
+def test_dimer_rescale():
+    """On dimers, rescale gives finite coefficients."""
+    stage = dimer_stage()
     stage.rescale()
 
     assert numpy.isfinite(stage.coeffs).all()
+
+
+def test_rescale_keeps_loss():
+    """On dimers, the final rescale (no_orthogonalize) moves the scaling and leaves the loss, regularization included, unchanged."""
+    stage = dimer_stage()
+    stage.orthogonalizing = False
+    before = stage.objective(stage.coeffs)[0]
+    scaling = stage.scaling
+
+    stage.rescale()
+    after = stage.objective(stage.coeffs)[0]
+
+    assert stage.scaling != scaling
+    assert abs(after - before) < 1e-10 * before
 
 
 @pytest.mark.parametrize("options, loss_tol, grad_tol", [(MLP_ALGORITHM, 1e-12, 1e-10), ({}, 1e-10, 1e-5)], ids=["mlp", "recipe"])

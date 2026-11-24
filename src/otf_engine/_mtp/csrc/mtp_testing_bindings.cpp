@@ -40,6 +40,8 @@ class MTPFitStages {
     }
     py::array_t<double> get_reg_vector() const { return py::array_t<double>(fit->reg_vector.size(), fit->reg_vector.data()); }
     void set_reg_vector(const std::vector<double>& r) { fit->reg_vector = r; }
+    bool get_orthogonalizing() const { return fit->orthogonalizing; }
+    void set_orthogonalizing(bool v) { fit->orthogonalizing = v; }
 
     MTP potential;
 
@@ -125,6 +127,7 @@ PYBIND11_MODULE(_mtp_testing, m) {
         .def("objective", &MTPFitStages::objective, py::arg("coeffs"))
         .def_property("coeffs", &MTPFitStages::get_coeffs, &MTPFitStages::set_coeffs)
         .def_property("reg_vector", &MTPFitStages::get_reg_vector, &MTPFitStages::set_reg_vector)
+        .def_property("orthogonalizing", &MTPFitStages::get_orthogonalizing, &MTPFitStages::set_orthogonalizing)
         .def_property("scaling", [](MTPFitStages& s) { return s.potential.get_scaling(); }, [](MTPFitStages& s, double v) { s.potential.set_scaling(v); })
         .def_property_readonly("min_dist", [](MTPFitStages& s) { return s.potential.get_min_cutoff(); })
         .def_property_readonly("potential", [](MTPFitStages& s) -> MTP& { return s.potential; }, py::return_value_policy::reference_internal);
