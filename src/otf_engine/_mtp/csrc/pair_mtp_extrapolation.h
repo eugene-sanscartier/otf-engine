@@ -37,7 +37,7 @@ class PairMTPExtrapolation : public PairMTP {
     std::vector<double> inverse_active_set;  // [coeff_count * coeff_count]
 
     //Working buffers
-    std::vector<double> radial_basis_cache;      // [radial_basis_cache_size * radial_basis_size] radial basis at r_ij
+    std::vector<double> radial_basis_cache;      // [radial_basis_cache_size * radial_basis_size] radial basis at r_ij, a block of atom_cache_size per atom of the chunk
     int radial_basis_cache_size = 0;
     std::vector<double> energy_ders_wrt_coeffs;  // Candidate information vector
 
