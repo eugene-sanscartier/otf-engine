@@ -13,8 +13,7 @@ from _core_ext's Pair.
     real_wigner_3j   3-j symbols of real harmonics, which the cores carry
 
 PairETN and ETN load an .etn file or build the untrained ETN of a shape given by the file's fields.
-PairETN carries what the selection and the training call for every ETN: write, fit (fit_etn),
-and mlip-4's CfgCalc rules threshold_swap and retrain_pass.
+PairETN carries what the training calls for every ETN: write and fit (fit_etn).
 """
 
 from importlib import import_module as _import_module
@@ -33,7 +32,5 @@ real_wigner_3j = _ext.real_wigner_3j
 
 PairETN.write = write_etn                                  # potential.write(path)
 PairETN.fit = staticmethod(fit_etn)
-PairETN.threshold_swap = 1.00001    # mlip-4's MaximizeVol goes on swapping, once a search has swapped, while a grade exceeds this
-PairETN.retrain_pass = False        # mlip-4's CfgCalc makes no training pass after the candidates
 
 __all__ = ["PairETN", "PairETNExtrapolation", "ETN", "fit_etn", "real_harmonics", "wigner_3j", "real_wigner_3j"]

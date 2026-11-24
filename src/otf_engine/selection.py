@@ -152,29 +152,28 @@ def select_add(potential_path: str, training_set: list, candidates: list, thresh
     extended active set, which write_mvs_state stores.
     """
     potential = read_potential(potential_path)
-    threshold_swap = potential.threshold_swap
 
     if active_set is None:
         stored_weights, active_set = stored_selection(potential_path, al_mode, potential.get_coeff_count())
         weights = weights or stored_weights
     weights = weights or dict(DEFAULT_SELECTION_WEIGHTS[al_mode])
     if active_set is None:
-        mv = MaxVol(potential.get_coeff_count(), threshold=threshold, threshold_swap=threshold_swap)
+        mv = MaxVol(potential.get_coeff_count(), threshold=threshold)
     else:
-        mv = MaxVol(active_set.A, active_set.invA, threshold=threshold, threshold_swap=threshold_swap)
+        mv = MaxVol(active_set.A, active_set.invA, threshold=threshold)
 
     if train_eqns is None:
         train_eqns = selection_equations(potential, training_set, weights, comm)
     cand_eqns = selection_equations(potential, candidates, weights, comm)
 
     # This three-pass sequence matches mlip-3's select_add and must stay ordered:
-    # training rebuild at 1.001, candidate selection at threshold, training pass again, if the model makes it.
+    # training rebuild at 1.001, candidate selection at threshold, training pass again.
     mv.threshold = 1.001
     mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
     initial = MaxVol(mv.A, mv.invA)
     mv.threshold = threshold
     mv.maximize_volume(cand_eqns, pool_id=_POOL_CAND, comm=comm)
-    if potential.retrain_pass: mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
+    mv.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
 
     active_indices = sorted({int(structure_index) for active_pool_id, structure_index in zip(mv.active_pool_ids, mv.active_structure_indices, strict=True) if int(active_pool_id) == _POOL_CAND and int(structure_index) >= 0})
     selected = [candidates[i] for i in active_indices]
@@ -225,7 +224,7 @@ def converge_active_set(potential: Pair, training_set: list, weights: dict, thre
         saved_rows = {(match[c], e) for p, c, e in zip(saved.active_pool_ids.tolist(), saved.active_structure_indices.tolist(), saved.active_eqn_indices.tolist(), strict=True) if p == _POOL_SAVED and match[c] is not None}
     seed = train_eqns.subset(numpy.array([row in saved_rows for row in zip(train_eqns.structure_indices.tolist(), train_eqns.equation_indices.tolist())], dtype=bool))
 
-    active_set = MaxVol(potential.get_coeff_count(), threshold=threshold, threshold_swap=potential.threshold_swap)
+    active_set = MaxVol(potential.get_coeff_count(), threshold=threshold)
     active_set.maximize_volume(seed, pool_id=_POOL_TRAIN, comm=comm)
     active_set.maximize_volume(train_eqns, pool_id=_POOL_TRAIN, comm=comm)
     return active_set, train_eqns

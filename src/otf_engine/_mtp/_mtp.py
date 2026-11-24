@@ -11,8 +11,8 @@ The three classes mirror the C++ hierarchy, on _core's Pair:
                               w.r.t. the coefficients    (a PairMTP)
 
 Each class loads a file or builds the untrained MTP of a level or of basis functions;
-level_basis_functions gives a level's. fit_mtp fits an MTP with MTPFit. PairMTP carries what the selection and the
-training call for every MTP: write, fit (fit_mtp), threshold_swap and retrain_pass.
+level_basis_functions gives a level's. fit_mtp fits an MTP with MTPFit. PairMTP carries what the training calls for
+every MTP: write and fit (fit_mtp).
 """
 
 from importlib import import_module as _import_module
@@ -29,7 +29,5 @@ level_basis_functions = _ext.level_basis_functions
 
 PairMTP.write = write_mtp                                  # potential.write(path)
 PairMTP.fit = staticmethod(fit_mtp)
-PairMTP.threshold_swap = None                              # MaxVol.threshold_swap of its searches
-PairMTP.retrain_pass = True                                # select_add searches the training set again after the candidates
 
 __all__ = ["PairMTP", "PairMTPExtrapolation", "MTP", "fit_mtp", "level_basis_functions"]
