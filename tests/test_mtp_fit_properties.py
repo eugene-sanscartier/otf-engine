@@ -1,5 +1,6 @@
 """MTPFit's properties that hold without a reference: its gradient, a teacher's fit, its invariance under the ranks, and its options."""
 
+import ase
 import numpy
 import pytest
 
@@ -121,6 +122,38 @@ def test_teacher_linear_fit(teacher_labelled):
 
     assert fitted <= at_teacher
     assert fitted < 1e-15 * at_zero
+
+
+def test_dimer_rescale():
+    """On Ni–Ni dimers, whose basis functions all depend on one distance, rescale from init_random's radial functions gives finite coefficients."""
+    from otf_engine._mtp import PairMTP
+
+    teacher = PairMTP(str(TEACHER))
+    dimers = []
+    for r in numpy.arange(1.5, 4.9, 0.02):
+        atoms = ase.Atoms("Ni2", positions=[[10, 10, 10], [10, 10, 10 + r]], cell=[20, 20, 20], pbc=True)
+        atoms.arrays["type_index"] = numpy.array([0, 0])
+        atoms.calc = PairCalculator(teacher)
+        atoms.calc.calculate(atoms, ["energy", "forces", "stress"])
+        dimers += [atoms]
+
+    stage = stages(MTP_REFERENCE / "template-16-r3.almtp", dimers)
+    stage.add_species()
+    stage.update_min_dist()
+    P, K, R = numpy.asarray(stage.potential.get_radial_basis_coeffs()).shape
+    rng = numpy.random.default_rng(0)
+    radial = 1e-7 * 0.5 * rng.uniform(-1, 1, (P, K, R))
+    for k in range(K):
+        radial[:, k, min(k, R - 1)] = 1e-7 * (1 + rng.uniform(-1, 1, P))
+    coeffs = stage.coeffs.copy()
+    coeffs[: radial.size] = radial.ravel()
+    stage.coeffs = coeffs
+
+    stage.orthogonalize()
+    stage.fit_linear()
+    stage.rescale()
+
+    assert numpy.isfinite(stage.coeffs).all()
 
 
 @pytest.mark.parametrize("options, loss_tol, grad_tol", [(MLP_ALGORITHM, 1e-12, 1e-10), ({}, 1e-10, 1e-5)], ids=["mlp", "recipe"])

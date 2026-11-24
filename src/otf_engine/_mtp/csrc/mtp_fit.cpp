@@ -576,7 +576,7 @@ void MTPFit::broadcast_linear() {
 }
 
 // Regularizes the upper triangle held in lin_matrix and solves it into the
-// linear coefficients, by Gaussian elimination without row swaps.
+// linear coefficients, by LDLT under ldlt, else by Gaussian elimination without row swaps.
 void MTPFit::solve_linear() {
     const int n = n_linear;
     double* A = lin_matrix.data();
@@ -604,6 +604,12 @@ void MTPFit::solve_linear() {
 
     for (int i = 0; i < n; i++)
         A[i * n + i] += reg_vector[i] * structure_count;
+
+    if (options.ldlt) {
+        const Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> matrix(A, n, n);
+        Eigen::Map<Eigen::VectorXd>(x, n) = matrix.ldlt().solve(Eigen::Map<const Eigen::VectorXd>(b, n));
+        return;
+    }
 
     for (int i = 0; i < n - 1; i++) {
         const double m_ii = A[i * n + i];

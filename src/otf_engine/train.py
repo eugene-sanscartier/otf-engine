@@ -35,7 +35,7 @@ def errors(potential_path: str, structures: list, title: str, first: int = 1, sp
 
 
 # The fit options that give mlp's algorithm in place of the fit's defaults, for runs compared with mlp.
-MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "init_noise": "5", "balance_species": "false"}
+MLP_ALGORITHM = {"varpro": "false", "riemannian": "false", "reg_once": "false", "reg_at_main": "false", "no_orthogonalize": "false", "ldlt": "false", "init_noise": "5", "balance_species": "false"}
 
 
 def fit(potential_path: str, structures, options: dict, checkpoint=None, ranks: int | None = None, comm=None, inverse_hessian=None):
