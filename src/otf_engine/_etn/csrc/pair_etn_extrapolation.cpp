@@ -1,8 +1,8 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   An ETN that grades extrapolation in compute. One atom at a time, the
-   forward pass, then the backwards pass, which gives the forces as
-   PairETN::compute does and the site energy's gradient over every
-   coefficient as ETN::eval_grad does; the grade is the gradient against
+   An ETN that grades extrapolation in compute. It takes one atom at a
+   time: the forward pass, then the backwards pass, which gives the forces
+   as PairETN::compute does and the site energy's gradient over every
+   coefficient as ETN::eval_grad does. The grade is that gradient against
    the inverse active set, as MaxVol::grade takes it.
 ------------------------------------------------------------------------- */
 
