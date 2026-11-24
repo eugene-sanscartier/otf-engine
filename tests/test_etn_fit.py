@@ -52,10 +52,12 @@ def mlip4_steps(text):
 
 def fit_options(settings):
     """mlip-4's *settings* and the weights as fit_etn takes them: strings, under mlp's names where mlp has the
-    setting, pretrain inverted as skip_preinit, without a log, and without balance_species, which mlip-4 lacks."""
+    setting, pretrain inverted as skip_preinit, over MLIP4_ALGORITHM, without a log."""
+    from otf_engine.train import MLIP4_ALGORITHM
+
     options = {MLP_NAMES.get(key, key): str(value) for key, value in dict(settings, **WEIGHTS).items() if key != "pretrain"}
     options["skip_preinit"] = str(not settings["pretrain"])
-    return options | {"log": "none", "balance_species": "false"}
+    return MLIP4_ALGORITHM | options | {"log": "none"}
 
 
 def case_inputs(name, structures, workdir):

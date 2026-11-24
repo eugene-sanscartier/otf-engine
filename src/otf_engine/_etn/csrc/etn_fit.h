@@ -16,8 +16,9 @@
 #include <vector>
 
 // mlip-4's TrainingParams with their defaults, under mlp's names where mlp has the option (iteration_limit,
-// tolerance, skip_preinit). The loss doubles stress_weight on the virial's off-diagonal components, as mlip-4's
-// LossCfg does.
+// tolerance, skip_preinit), and the fit's own, whose defaults and force_weight 0.1 are the recipe; train.MLIP4_ALGORITHM
+// gives mlip-4's algorithm. The loss doubles stress_weight on the virial's off-diagonal components, as mlip-4's LossCfg
+// does.
 struct ETNFitOptions : FitOptions {
     int iteration_limit = 1000;
     int max_func_eval = 10000;
@@ -27,14 +28,16 @@ struct ETNFitOptions : FitOptions {
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
     int bfgs_max_iters_no_improve = 10;
-    bool init_random = false;         // start an untrained potential from init_scale * sin(theta_k), theta_k uniform, in place of sin(10 + k^2)
-    double init_scale = 1.0;
+    bool init_random = true;          // start an untrained potential from init_scale * sin(theta_k), theta_k uniform, in place of sin(10 + k^2)
+    double init_scale = 0.3;
     int random_seed = -1;             // init_random's seed and varpro_fraction's; -1 draws init_random's from std::random_device
-    bool init_species = false;        // before training, set the site energies to the least-squares fit of the energies the tensor train leaves
-    bool varpro = false;              // variable projection: the site energies and the last core solved exactly at every evaluation, no rescale
+    bool init_species = true;         // before training, set the site energies to the least-squares fit of the energies the tensor train leaves
+    bool varpro = true;               // variable projection: the site energies and the last core solved exactly at every evaluation, no rescale
     double reg_param = 1e-10;         // varpro's ridge on the linear coefficients, times max(1, A_ii) of the first solve
-    bool reg_at_main = false;         // rebuild varpro's ridge at the main fit's first solve
+    bool reg_at_main = true;          // rebuild varpro's ridge at the main fit's first solve
     int varpro_redraw_every = 0;      // > 0, under varpro_fraction: in the main fit, a new draw every so many steps, the last one kept over the last 20% of iteration_limit
+
+    ETNFitOptions() { force_weight = 0.1; }
 
     // The options as the log lists them, one line per group: stopping, loss weights, the algorithm's flags set.
     std::vector<std::string> summary() const {
