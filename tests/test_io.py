@@ -123,6 +123,11 @@ def test_training_set_extxyz(structures, tmp_path):
     from otf_engine.training_set import read_training_set, write_training_set
 
     written = named(structures, ["Ni", "Si", "H"])
+    for atoms in written:
+        atoms.calc = SinglePointCalculator(atoms, **atoms.calc.results, energies=numpy.linspace(-1.0, 1.0, len(atoms)))
+        atoms.arrays["nbh_grades"] = numpy.linspace(1.0, 2.0, len(atoms))
+        atoms.arrays["id"] = numpy.arange(1, len(atoms) + 1)
+        atoms.arrays["type"] = numpy.ones(len(atoms), dtype=int)
     write_training_set(tmp_path / "train.xyz", written[:2])
     write_training_set(tmp_path / "train.xyz", written[2:])
     back = read_training_set(tmp_path / "train.xyz")
@@ -130,7 +135,9 @@ def test_training_set_extxyz(structures, tmp_path):
     assert len(back) == len(written)
     for a, b in zip(written, back):
         assert b.get_chemical_symbols() == a.get_chemical_symbols()
-        assert "type_index" not in b.arrays
+        assert "id" not in b.arrays and "type" not in b.arrays
+        numpy.testing.assert_allclose(b.arrays["nbh_grades"], a.arrays["nbh_grades"], atol=1e-8)
+        numpy.testing.assert_allclose(b.calc.results["energies"], a.calc.results["energies"], atol=1e-8)
         numpy.testing.assert_array_equal(b.cell[:], a.cell[:])
         numpy.testing.assert_allclose(b.positions, a.positions, atol=1e-8)
         assert b.calc.results["energy"] == a.calc.results["energy"]

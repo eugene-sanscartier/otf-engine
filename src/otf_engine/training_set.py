@@ -19,6 +19,6 @@ def write_training_set(path, structures) -> None:
             write_cfg(f, structures)
             return
         for atoms in structures:
-            columns = ["symbols", "positions"]
-            if atoms.calc is not None and "forces" in atoms.calc.results: columns += ["forces"]
-            ase.io.extxyz.write_extxyz(f, [atoms], columns=columns)
+            atoms.arrays.pop("id", None)
+            atoms.arrays.pop("type", None)
+        ase.io.extxyz.write_extxyz(f, structures)
