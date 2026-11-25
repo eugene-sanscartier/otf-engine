@@ -64,9 +64,6 @@ class PairMTP : public Pair {
 
     void reset_coeffs();    // mlip-3's MLMTPR::Load defaults, an untrained potential's coefficients.
 
-
-    std::string potential_tag;
-
     // Radial basis
     int radial_func_count = 0;           // Number of radial bases (mu_max)
     int radial_coeff_count = 0;          // Number of total radial coeffs

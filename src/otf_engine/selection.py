@@ -41,11 +41,15 @@ _POOL_CAND = 2
 
 
 def selection_equations(potential: Pair, structures: list, weights: dict, comm=None) -> Equations:
-    """The MaxVol equations of *structures* under the coefficients of *potential* and the selection *weights*.
+    """The MaxVol equations of *structures* under the coefficients of *potential* and the selection *weights*; sets each structure's type_index.
 
     comm : an mpi4py communicator; the equations are then those of this rank's share of *structures*,
            dealt round-robin, each structure numbered by its index in *structures*
     """
+    species = potential.get_species()
+    for structure in structures:
+        structure.arrays["type_index"] = species_indices(structure, species)
+
     rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
     cutoff = potential.get_max_cutoff()
     eqns = Equations(potential.get_coeff_count(), **weights)
@@ -77,7 +81,7 @@ def calculate_grade(potential_path: str, structures: list, weights: dict | None 
     Parameters
     ----------
     potential_path : the file of the potential
-    structures : list of ase.Atoms, with the species information neighbors() reads
+    structures : list of ase.Atoms
     weights, active_set : the selection weights and the active set to grade against; by default those stored
         in the #MVS_v1.1 section of *potential_path*
 

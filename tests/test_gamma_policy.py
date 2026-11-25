@@ -42,7 +42,7 @@ def preselected(state=None, gammas=(), **options):
     if state is not None:
         with open("otf_state.json", "w") as f:
             json.dump(state, f)
-    with OTFCycle([], NestedLauncher(), **options) as cycle:
+    with OTFCycle([], NestedLauncher(), training_set_path="train.cfg", **options) as cycle:
         kept = sorted(atoms.info["features"]["MV_grade"] for atoms in cycle.preselect(graded(*gammas)))
         branch = cycle.record["selection_branch"]
     with open("otf_state.json") as f:
@@ -116,3 +116,20 @@ def test_cycle_recorded(workdir):
     entry = state["history"][-1]
     assert entry["selection_branch"] == "normal" and entry["n_preselected"] == 1
     assert (workdir / "otf_cycles" / "cycle_0" / "status").read_text().strip() == "ok"
+
+
+def test_species_tag(workdir):
+    """Entering a cycle writes species into an empty potential_tag."""
+    from otf_engine._core import read_potential
+
+    preselected(species=["Ni", "Si"])
+    assert read_potential("potential.almtp").get_species() == ["Ni", "Si"]
+    preselected(species=["Si", "Ni"])
+    assert read_potential("potential.almtp").get_species() == ["Ni", "Si"]
+
+
+def test_extxyz_needs_species(workdir):
+    """Entering a cycle with an extxyz training set, a potential without species and no species raises."""
+    with pytest.raises(ValueError, match="an extxyz training set needs species"):
+        with OTFCycle([], NestedLauncher(), training_set_path="train.xyz"):
+            pass

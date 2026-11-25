@@ -7,11 +7,12 @@ train_potential as global ones over every worker. The workers share the manager'
 """
 
 from . import otf_cycle, selection, train
+from .training_set import read_training_set
 
 
-def update_active_set(comm, potential_path, training_set_path, species=None) -> None:
+def update_active_set(comm, potential_path, training_set_path) -> None:
     """Converge the active set in potential_path over the training set in training_set_path, over the ranks of comm; rank 0 writes potential_path."""
-    selection.update_active_set(potential_path, otf_cycle.read_training_set(training_set_path, species), comm=comm)
+    selection.update_active_set(potential_path, read_training_set(training_set_path), comm=comm)
 
 
 def grade_dump(comm, dump, potential_path, species=None) -> list | None:
@@ -24,15 +25,15 @@ def grade_dump(comm, dump, potential_path, species=None) -> list | None:
     return structures
 
 
-def select_add(comm, potential_path, training_set_path, candidates, species=None) -> list | None:
+def select_add(comm, potential_path, training_set_path, candidates) -> list | None:
     """Select, over the ranks of comm, the candidates that extend the active set of potential_path over the training set in training_set_path.
 
     Returns the selected candidates on rank 0, None on the other ranks.
     """
-    selected, _ = selection.select_add(potential_path, otf_cycle.read_training_set(training_set_path, species), candidates, comm=comm)
+    selected, _ = selection.select_add(potential_path, read_training_set(training_set_path), candidates, comm=comm)
     return selected if comm.Get_rank() == 0 else None
 
 
-def train_potential(comm, potential_path, training_set_path, save_path, species=None, options=None) -> None:
+def train_potential(comm, potential_path, training_set_path, save_path, options=None) -> None:
     """Train the potential in potential_path on the training set in training_set_path over the ranks of comm, and write it with an active set to the file save_path on rank 0."""
-    train.train(potential_path, otf_cycle.read_training_set(training_set_path, species), save_path, options=options, comm=comm)
+    train.train(potential_path, read_training_set(training_set_path), save_path, options=options, comm=comm)

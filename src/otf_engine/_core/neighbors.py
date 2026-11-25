@@ -3,26 +3,25 @@
 import itertools
 
 import numpy
+from ase.data import atomic_numbers, chemical_symbols
 from numpy import int32, ndarray
 from scipy.spatial import cKDTree
 
 from ._core import NeighList
 
 
-def species_indices(atoms) -> ndarray:
-    """Return the 0-indexed species array for *atoms*.
-
-    Uses ``atoms.arrays["type_index"]`` when present; otherwise assigns indices
-    by order of first appearance of chemical symbols.
-    """
+def species_indices(atoms, species=()) -> ndarray:
+    """Return the species index of each atom."""
     if "type_index" in atoms.arrays:
         return numpy.asarray(atoms.arrays["type_index"], dtype=int32)
+    if not species and "type" in atoms.arrays:    # a LAMMPS dump under a potential without species
+        return numpy.asarray(atoms.arrays["type"] - 1, dtype=int32)
 
-    seen: dict[str, int] = {}
-    for sym in atoms.get_chemical_symbols():
-        if sym not in seen:
-            seen[sym] = len(seen)
-    return numpy.array([seen[s] for s in atoms.get_chemical_symbols()], dtype=int32)
+    index_of_number = numpy.full(len(chemical_symbols), -1, dtype=int32)
+    index_of_number[[atomic_numbers[element] for element in species]] = numpy.arange(len(species))
+    indices = index_of_number[atoms.numbers]
+    if (indices < 0).any(): raise ValueError(f"{chemical_symbols[atoms.numbers[indices < 0][0]]} is not in species")
+    return indices
 
 
 def neighbors(atoms, cutoff: float, types: ndarray | None = None) -> NeighList:

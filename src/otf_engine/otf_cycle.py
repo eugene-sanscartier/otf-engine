@@ -16,9 +16,11 @@ import ase
 import ase.io.extxyz
 import ase.io.lammpsrun
 
-from .io_cfg import read_cfg, write_cfg
+from ._core import read_potential
+from ._core.io import write_potential_tag
 from .selection import calculate_grade, select_add, update_active_set
 from .train import errors
+from .training_set import read_training_set, write_training_set
 from .io_mvs import read_mvs_state
 from .cycles import CYCLE_PREFIX, LOG_FILE, LOG_FORMAT, TRAIN_LOG, archive_cycle, next_cycle_dir
 from .launchers import Launcher, JobTimedOut, JobOutOfMemory
@@ -53,16 +55,16 @@ MAX_STRUCTURES_PER_DUMP = 10000
 
 
 def grade_dump(dump, potential_path, species=None):
-    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them on one thread."""
+    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them on one thread.
+
+    species : the element of each LAMMPS type, in type order
+    """
     with open(dump) as dump_file:
         structures = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
 
     if len(structures) > MAX_STRUCTURES_PER_DUMP:
         kept = numpy.random.choice(len(structures), size=MAX_STRUCTURES_PER_DUMP, replace=False)
         structures = [structures[i] for i in kept]
-
-    for atoms in structures:
-        atoms.arrays["type_index"] = (atoms.arrays["type"] - 1).astype(numpy.int32)
 
     calculate_grade(potential_path, structures)
     return structures
@@ -83,13 +85,6 @@ def grade_extrapolative_dumps(potential_path, extrapolative_dumps, species=None)
 
 def max_force(atoms):
     return float(numpy.max(numpy.abs(numpy.array(atoms.calc.results["forces"]))))
-
-
-def read_training_set(path, species=None):
-    """The structures of the training set in the .cfg file *path*, with *species* as read_cfg takes them."""
-    with open(path) as f:
-        training_set = read_cfg(f, species)
-    return training_set
 
 
 @dataclass
@@ -114,7 +109,7 @@ class OTFCycle:
     launcher: Launcher
     _: KW_ONLY
     potential_path: str = "potential.almtp"
-    training_set_path: str = "train.cfg"
+    training_set_path: str = "train.xyz"
     species: list | None = None
     preselection_filtering: bool = True
     gamma_tolerance: float = 1.01
@@ -146,7 +141,10 @@ class OTFCycle:
             self.state.setdefault("memory", {})
             self.launcher.configure_timing(self.state, _save_state)
             self.launcher.configure_memory(self.state, _save_state)
-            self.training_set = read_training_set(self.training_set_path, self.species)
+            if not read_potential(self.potential_path).get_species():
+                if self.species: write_potential_tag(self.potential_path, self.species)
+                elif not str(self.training_set_path).endswith(".cfg"): raise ValueError("an extxyz training set needs species")
+            self.training_set = read_training_set(self.training_set_path)
         except BaseException as e:
             self.__exit__(type(e), e, e.__traceback__)
             raise
@@ -277,11 +275,11 @@ class OTFCycle:
     @property
     def active_set_update(self):
         """The active-set update the dumps must be graded after, as otf_pool.update_active_set's keyword arguments."""
-        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, species=self.species)
+        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path)
 
     def selection(self, candidates):
         """The selection from the candidates of those that extend the active set, as otf_pool.select_add's keyword arguments."""
-        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, candidates=candidates, species=self.species)
+        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, candidates=candidates)
 
     def evaluate(self, selected):
         """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, log the potential's errors on them before training, and return their count."""
@@ -306,8 +304,7 @@ class OTFCycle:
                     deferred += [structures[i]]
                 elif status == "ok":
                     evaluated += [result]
-                    with open(self.training_set_path, mode="a") as f:
-                        write_cfg(f, [result])
+                    write_training_set(self.training_set_path, [result])
                     gammas_evaluated += [structures[i].info["features"]["MV_grade"]]
         n_failed = n - len(evaluated) - len(deferred)
         logger.info(f"Evaluated {len(evaluated)}/{n} successfully ({len(deferred)} deferred, {n_failed} failed).")
@@ -315,7 +312,7 @@ class OTFCycle:
 
         ase.io.extxyz.write_extxyz(deferred_file, deferred)
         self.evaluated = evaluated
-        if evaluated: logger.info(errors(self.potential_path, evaluated, "Errors on the evaluated structures before training:", first=len(self.training_set) + 1, species=self.species))
+        if evaluated: logger.info(errors(self.potential_path, evaluated, "Errors on the evaluated structures before training:", first=len(self.training_set) + 1))
         else: logger.info("No configurations selected or evaluated — retraining.")
         return len(evaluated)
 
@@ -349,12 +346,12 @@ class OTFCycle:
     @property
     def training(self):
         """The training this cycle needs, as otf_pool.train_potential's keyword arguments."""
-        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, save_path=f"tmp_{self.potential_path}", species=self.species, options={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG, "species": ",".join(self.species or [])})
+        return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, save_path=f"tmp_{self.potential_path}", options={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG})
 
     def replace_potential(self):
         """Replace the potential with the one training wrote, and log its errors on the evaluated structures."""
         os.replace(self.training["save_path"], self.potential_path)
-        if self.evaluated: logger.info(errors(self.potential_path, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.training_set) + 1, species=self.species))
+        if self.evaluated: logger.info(errors(self.potential_path, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.training_set) + 1))
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {self.potential_path}.")
 
 

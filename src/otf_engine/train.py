@@ -2,7 +2,7 @@
 
 As a command line:
 
-    python -m otf_engine.train potential.almtp|potential.etn train.cfg [--save_path=FILE] [--ranks=N] [--al_mode=nbh|cfg] [fit options]
+    python -m otf_engine.train potential.almtp|potential.etn train.xyz|train.cfg [--save_path=FILE] [--ranks=N] [--al_mode=nbh|cfg] [fit options]
 
 Takes `mlp train`'s options (--iteration_limit=300, --tolerance=1e-3, --skip_preinit, --energy_weight=1,
 ...). For an MTP, also the fit's own (--varpro=false, --riemannian=false, ...; MLP_ALGORITHM lists
@@ -21,17 +21,18 @@ import os
 import sys
 
 from ._core import FitStructure, error_table, potential_class, read_potential
-from .io_cfg import read_cfg
 from .selection import converge_active_set, stored_selection, write_active_set
+from .training_set import read_training_set
 
 logger = logging.getLogger(__name__)
 
 
-def errors(potential_path: str, structures: list, title: str, first: int = 1, species: list | None = None) -> str:
+def errors(potential_path: str, structures: list, title: str, first: int = 1) -> str:
     """The errors of the potential in *potential_path* on the labelled *structures*, numbered from *first*, as the table training logs, under *title*."""
     potential = read_potential(potential_path)
     cutoff = potential.get_max_cutoff()
-    table = error_table(potential, [FitStructure(atoms, cutoff, first + k) for k, atoms in enumerate(structures)], species or [], title)
+    species = potential.get_species()
+    table = error_table(potential, [FitStructure(atoms, cutoff, first + k, species) for k, atoms in enumerate(structures)], species, title)
     return table
 
 
@@ -69,13 +70,20 @@ def train(potential_path: str, training_set: list, save_path: str, options: dict
     """
     template = read_potential(potential_path)
     weights = stored_selection(potential_path, al_mode, template.get_coeff_count())[0]
+    rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
+
+    species = template.get_species()
+    for atoms in training_set:
+        if "type_index" not in atoms.arrays: species += [element for element in dict.fromkeys(atoms.get_chemical_symbols()) if element not in species]
+    if species and rank == 0: logger.info("species indices: " + ", ".join(f"{index}={element}" for index, element in enumerate(species)))
 
     cutoff = template.get_max_cutoff()
     # Under MPI each rank fits its share, dealt round-robin as mlp and the threads deal them.
-    rank, size = (0, 1) if comm is None else (comm.Get_rank(), comm.Get_size())
-    structures = (FitStructure(training_set[i], cutoff, i + 1) for i in range(rank, len(training_set), size))
+    structures = (FitStructure(training_set[i], cutoff, i + 1, species) for i in range(rank, len(training_set), size))
     options = {key: str(value) for key, value in (options or {}).items()}
+    if species: options.setdefault("species", ",".join(species))
     potential = fit(potential_path, structures, options, checkpoint=lambda potential: potential.write(save_path), ranks=ranks, comm=comm)
+    potential.set_species(species)
 
     # with iteration_limit 0 an untrained potential stays untrained, and is written without coefficients to select with
     if potential.is_trained():
@@ -103,8 +111,7 @@ def main(argv=None):
     al_mode = options.pop("al_mode", "nbh")
     save_path = options.pop("save_path", options.pop("save_to", potential_path))
 
-    with open(training_set_path) as f:
-        training_set = read_cfg(f)
+    training_set = read_training_set(training_set_path)
     train(potential_path, training_set, save_path, options=options, ranks=ranks, al_mode=al_mode)
     logger.info("training complete")
 

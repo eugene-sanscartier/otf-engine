@@ -142,8 +142,10 @@ class Pair {
     bool is_trained() const { return trained; }
     const std::string& get_potential_name() const { return potential_name; }
     const std::string& get_radial_basis_type() const { return radial_basis_type; }
+    const std::vector<std::string>& get_species() const { return species; }
     const std::vector<double>& get_species_coeffs() const { return species_coeffs; }    // [species_count]
 
+    void set_species(const std::vector<std::string>& s) { species = s; }
     void set_species_coeffs(const double* c) { std::copy(c, c + species_count, species_coeffs.begin()); }
     void set_scaling(double s) { scaling = s; radial_basis->scaling = s; }
     // Sets the minimum distance of the radial basis, rebuilt at it, as RBCinf's recursion depends on it.
@@ -156,8 +158,8 @@ class Pair {
     // radial basis radial_basis_type names from its cutoffs and size.
     Pair(int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size);
 
-    // Reads a file's first lines: model (MTP, ETN) and version, then potential_name, scaling and species_count,
-    // each optional, and leaves tfr at the next line.
+    // Reads a file's first lines: model (MTP, ETN) and version, then potential_name, scaling, species_count and
+    // potential_tag, each optional, and leaves tfr at the next line.
     void read_header(TextFileReader& tfr, const std::string& model, const std::string& version);
     // Reads radial_basis_type at the current line of tfr and the cutoffs and size below it, and sets the basis.
     void read_radial_basis(TextFileReader& tfr);
@@ -167,6 +169,7 @@ class Pair {
 
     std::string potential_name = "Untitled";
     std::string radial_basis_type;
+    std::vector<std::string> species;    // the element of each species index
 
     int species_count = 0;
     double scaling = 1.0;

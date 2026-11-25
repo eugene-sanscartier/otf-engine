@@ -30,7 +30,7 @@ def main():
 
     parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
     parser.add_argument("-p", "--potential_path", help="input potential file (default: %(default)s)", type=str, default=defaults["potential_path"])
-    parser.add_argument("-t", "--training_set_path", help="Training set file (default: %(default)s)", type=str, default=defaults["training_set_path"])
+    parser.add_argument("-t", "--training_set_path", help="Training set file in .xyz/.extxyz or .cfg (default: %(default)s)", type=str, default=defaults["training_set_path"])
 
     parser.add_argument("-P", "--no_preselection_filtering", help="Preselection filtering", dest='preselection_filtering', action='store_false', default=defaults["preselection_filtering"])
 
@@ -42,7 +42,7 @@ def main():
     parser.add_argument("-m", "--max_structures", help="Max structures selection (default: %(default)s, no cap)", default=defaults["max_structures"], type=int)
     parser.add_argument("-l", "--iteration_limit", help="Number of maximum iteration in training algorithm (default: %(default)s)", default=defaults["iteration_limit"], type=int)
     parser.add_argument("-f", "--force_threshold", help="Force threshold (eV/Å): structures with max force component exceeding this value are skipped. Default: no threshold.", default=defaults["force_threshold"], type=float)
-    parser.add_argument("-s", "--species", nargs='+', type=str, default=defaults["species"], metavar="SYMBOLS", help="Ordered element symbols matching MTP type indices. Must cover ALL types defined in the potential and training set, not just those present in the current simulation. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
+    parser.add_argument("-s", "--species", nargs='+', type=str, default=defaults["species"], metavar="SYMBOLS", help="The element of each LAMMPS type, in type order. Space-separated: -s Al Cu, or single-string: -s Al,Cu or -s '[Al, Cu]'.")
 
     parser.add_argument("--launcher", choices=["nested", "fork", "slurm"], default="nested", help="Execution backend. 'nested' (default): wrap calls with mpirun. "
                         "'fork': run binary directly in MPI universe. "

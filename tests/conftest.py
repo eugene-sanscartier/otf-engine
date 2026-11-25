@@ -50,6 +50,28 @@ def two_species(structures):
     return out
 
 
+def write_dump(path, frames, lammps_species=None, element=False):
+    """Write *frames* as a LAMMPS text dump.
+
+    lammps_species : the element of each LAMMPS type
+    element        : whether the dump has an element column
+    """
+    from ase.calculators.lammps import Prism
+
+    lines = []
+    for step, atoms in enumerate(frames):
+        prism = Prism(atoms.cell.array)
+        xhi, yhi, zhi, xy, xz, yz = (float(x) for x in prism.get_lammps_prism())
+        positions = prism.vector_to_lammps(atoms.positions, wrap=True).tolist()
+        elements = atoms.get_chemical_symbols()
+        types = atoms.arrays["type_index"] + 1 if lammps_species is None else [lammps_species.index(e) + 1 for e in elements]
+        lines += ["ITEM: TIMESTEP", str(step), "ITEM: NUMBER OF ATOMS", str(len(atoms)), "ITEM: BOX BOUNDS xy xz yz pp pp pp"]
+        lines += [f"{min(0.0, xy, xz, xy + xz)!r} {xhi + max(0.0, xy, xz, xy + xz)!r} {xy!r}", f"{min(0.0, yz)!r} {yhi + max(0.0, yz)!r} {xz!r}", f"0.0 {zhi!r} {yz!r}"]
+        lines += ["ITEM: ATOMS id type element x y z" if element else "ITEM: ATOMS id type x y z"]
+        lines += [f"{i + 1} {t} {e + ' ' if element else ''}{p[0]!r} {p[1]!r} {p[2]!r}" for i, (t, e, p) in enumerate(zip(types, elements, positions))]
+    path.write_text("\n".join(lines) + "\n")
+
+
 def several_chunks(atoms):
     """atoms repeated into a cell of at least 130 atoms, more than two chunks of central atoms of any build."""
     repeats = int(numpy.ceil((130 / len(atoms)) ** (1 / 3)))

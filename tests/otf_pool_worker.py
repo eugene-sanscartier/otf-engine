@@ -27,14 +27,14 @@ manager = ManagerFactory(obj_factory=lambda comm, mode: None, session_size=sessi
 if manager is None: sys.exit(0)    # a worker, once the manager has shut the pool down
 
 shutil.copy("potential.almtp", "mpi_updated.almtp")
-manager.global_update_active_set(potential_path="mpi_updated.almtp", training_set_path="train.cfg", species=species)
+manager.global_update_active_set(potential_path="mpi_updated.almtp", training_set_path="train.cfg")
 graded = manager.grade_dump(dump="dump.lammps", potential_path="potential.almtp", species=species).result()
 grades = [atoms.info["features"]["MV_grade"] for atoms in graded]
 numpy.save("mpi_grades.npy", grades)
 candidates = [graded[i] for i in numpy.argsort(grades)[::-1][:candidate_count]]
-selected = manager.global_select_add(potential_path="mpi_updated.almtp", training_set_path="train.cfg", candidates=candidates, species=species)
+selected = manager.global_select_add(potential_path="mpi_updated.almtp", training_set_path="train.cfg", candidates=candidates)
 numpy.save("mpi_selected.npy", [next(i for i, c in enumerate(candidates) if numpy.array_equal(c.positions, s.positions)) for s in selected])
-manager.global_train_potential(potential_path="potential.almtp", training_set_path="train.cfg", save_path="mpi.almtp", species=species, options={"iteration_limit": iterations, "log": "mpi_train.log"})
+manager.global_train_potential(potential_path="potential.almtp", training_set_path="train.cfg", save_path="mpi.almtp", options={"iteration_limit": iterations, "log": "mpi_train.log"})
 
 
 def evaluator(structure):

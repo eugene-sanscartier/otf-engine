@@ -4,7 +4,7 @@ import numpy
 from numpy import float64
 from ase.calculators.calculator import Calculator, all_changes
 
-from .neighbors import neighbors
+from .neighbors import neighbors, species_indices
 from .fit_structure import virial2stress
 
 
@@ -26,7 +26,7 @@ class PairCalculator(Calculator):
 
     def neighbors(self, atoms):
         """Return the neighbor list for *atoms*."""
-        return neighbors(atoms, self.cutoff)
+        return neighbors(atoms, self.cutoff, species_indices(atoms, self.potential.get_species()))
 
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):
         super().calculate(atoms, properties, system_changes)

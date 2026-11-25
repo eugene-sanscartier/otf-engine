@@ -24,28 +24,13 @@ import sys
 import numpy
 import pytest
 
-from conftest import DATA, TESTS, two_species
+from conftest import DATA, TESTS, two_species, write_dump
 
 pytest.importorskip("pykmc")
 
 SPECIES = ["Ni", "Si"]
 RANKS, SESSION_SIZE, ITERATIONS, CANDIDATES = 4, 2, 2, 4
 LOSS_LINE = re.compile(r"^ *(\d+)  (\S+)  ", re.MULTILINE)    # a step of the fit's log: its number and loss
-
-
-def write_dump(path, frames):
-    """frames as a LAMMPS text dump, each cell turned into LAMMPS's triclinic orientation."""
-    from ase.calculators.lammps import Prism
-
-    lines = []
-    for step, atoms in enumerate(frames):
-        prism = Prism(atoms.cell.array)
-        xhi, yhi, zhi, xy, xz, yz = (float(x) for x in prism.get_lammps_prism())
-        positions = prism.vector_to_lammps(atoms.positions, wrap=True).tolist()
-        lines += ["ITEM: TIMESTEP", str(step), "ITEM: NUMBER OF ATOMS", str(len(atoms)), "ITEM: BOX BOUNDS xy xz yz pp pp pp"]
-        lines += [f"{min(0.0, xy, xz, xy + xz)!r} {xhi + max(0.0, xy, xz, xy + xz)!r} {xy!r}", f"{min(0.0, yz)!r} {yhi + max(0.0, yz)!r} {xz!r}", f"0.0 {zhi!r} {yz!r}"]
-        lines += ["ITEM: ATOMS id type x y z"] + [f"{i + 1} {t + 1} {p[0]!r} {p[1]!r} {p[2]!r}" for i, (t, p) in enumerate(zip(atoms.arrays["type_index"], positions))]
-    path.write_text("\n".join(lines) + "\n")
 
 
 def same_active_set(mpi_set, serial_set):

@@ -246,12 +246,6 @@ void PairMTP::read_file(std::istream& is) {
     // and the linear coeffs; mlip-3's MLMTPR::Load gives them defaults.
     read_header(tfr, "MTP", "1.1.0");
 
-    // Read the potential tag (also optional field)
-    if (tfr.keyword() == "potential_tag") {
-        tfr.rest() >> potential_tag;
-        tfr.advance();
-    }
-
     read_radial_basis(tfr);
 
     radial_func_count = tfr.next_int("radial_funcs_count");

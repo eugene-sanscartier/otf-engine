@@ -117,6 +117,8 @@ number    : the number the error tables name it by
         .def("set_trained", &Pair::set_trained, py::arg("trained"))
         .def("get_potential_name", &Pair::get_potential_name)
         .def("get_radial_basis_type", &Pair::get_radial_basis_type)
+        .def("get_species", &Pair::get_species, "The element of each species index.")
+        .def("set_species", &Pair::set_species, py::arg("species"))
         .def("get_species_coeffs",
              [](const Pair& self) { return to_array(self.get_species_coeffs()); },
              "ndarray float64 (species_count)  — per-species reference energies")

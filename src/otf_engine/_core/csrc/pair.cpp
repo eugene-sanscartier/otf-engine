@@ -48,6 +48,14 @@ void Pair::read_header(TextFileReader& tfr, const std::string& model, const std:
             throw std::runtime_error("Pair" + model + ": " + model + " species count must be positive");
         tfr.advance();
     }
+
+    // The element of each species index
+    if (tfr.keyword() == "potential_tag") {
+        auto words = tfr.rest();
+        species.clear();
+        for (std::string element; words >> element;) species.push_back(element);
+        tfr.advance();
+    }
 }
 
 void Pair::read_radial_basis(TextFileReader& tfr) {

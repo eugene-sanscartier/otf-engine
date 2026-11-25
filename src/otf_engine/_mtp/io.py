@@ -29,7 +29,6 @@ def write_mtp(potential, path):
 
     with path.open("w", encoding="utf-8") as stream:
         write_header(stream, potential, "MTP", "1.1.0", with_species_count=trained)
-        stream.write("potential_tag = \n")
         write_radial_basis(stream, potential)
         stream.write(f"\tradial_funcs_count = {radial_func_count}\n")
         stream.write("\tradial_coeffs\n")
