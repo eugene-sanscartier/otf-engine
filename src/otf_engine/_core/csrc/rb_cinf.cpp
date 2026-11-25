@@ -11,8 +11,8 @@
 #include <stdexcept>
 #include <string>
 
-// The recursion coefficients for the ratio min_cutoff / max_cutoff, from their Chebyshev
-// expansions, summed as RadialBasisCinf::PostConstruct sums them.
+// Sums the Chebyshev expansions of the recursion coefficients and of the normalization of phi_0 at the ratio
+// min_cutoff / max_cutoff.
 RBCinf::RBCinf(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(min_cutoff, max_cutoff, size) {
     if (size > RADIAL_BASIS_MAX_SIZE)
         throw std::runtime_error("RBCinf: radial_basis_size must not exceed " + std::to_string(RADIAL_BASIS_MAX_SIZE));
@@ -39,7 +39,7 @@ RBCinf::RBCinf(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(
     zeroth_poly = accumulator;
 }
 
-// calc_radial_basis_ders's operations, each over the distances.
+// Runs the operations of calc_radial_basis_ders, each in a loop over the distances.
 void RBCinf::calc_radial_basis_rows(int count, const double* dist) {
     row_count = count;
     rows_vals.resize((size_t) size * count);
@@ -81,7 +81,6 @@ void RBCinf::calc_radial_basis_rows(int count, const double* dist) {
     }
 }
 
-// RadialBasisCinf::ComposeProgram, in its order of operations, with the derivatives beside.
 void RBCinf::calc_radial_basis_ders(double dist) {
     const double max_cutoff_sq = max_cutoff * max_cutoff;
     const double x_sq = dist * dist * (1.0 / max_cutoff_sq);

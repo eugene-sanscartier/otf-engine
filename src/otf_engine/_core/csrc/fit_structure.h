@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   A structure to fit, which MTPFit and ETNFit take.
+   The training structure of MTPFit and ETNFit.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -12,7 +12,7 @@
 // Virial component of each entry of the symmetric 3x3 stress.
 constexpr int VIRIAL_INDEX[3][3] = {{0, 3, 4}, {3, 1, 5}, {4, 5, 2}};
 
-// A structure to fit: its neighbor list at the potential's cutoff and its reference values.
+// A training structure: its neighbor list at the cutoff of the potential, and its reference values.
 struct FitStructure {
     std::vector<int> types, ilist, numneigh, firstneigh;
     std::vector<double> displacements;    // [sum(numneigh) * 3]
@@ -20,11 +20,11 @@ struct FitStructure {
     bool has_energy = false, has_forces = false, has_virial = false;
     double energy = 0.0;
     std::vector<double> forces;    // [n_atoms * 3]
-    double virial[6] = {};         // xx,yy,zz,xy,xz,yz in eV, mlip-3's PlusStress
-    int number = 0;                // the caller's number for it, which the error table names
-    std::vector<double> species_factors;    // force-weight factor by species index under balance_species
+    double virial[6] = {};         // xx,yy,zz,xy,xz,yz in eV
+    int number = 0;                // number of the structure in the error table
+    std::vector<double> species_factors;    // [species] force-weight factor of each species under balance_species
 
-    // Sets species_factors: of N atoms of k species, n_s of species s, each atom of s weighs N / (k n_s).
+    // Sets species_factors: for N atoms of k species, n_s of them of species s, an atom of species s weighs N / (k n_s).
     void balance_species() {
         std::vector<int> counts;
         for (int i : ilist) {

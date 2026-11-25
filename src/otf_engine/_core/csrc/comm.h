@@ -1,8 +1,8 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Comm: a group of ranks and the collectives they meet in, which the
-   fits, error_table and a MaxVol search run over, SPMD. ThreadComm's
-   ranks are threads of one process, MPIComm's the processes of an MPI
-   communicator.
+   Comm is a group of ranks and their collectives. The fits, error_table
+   and MaxVol::maximize_volume run SPMD over a Comm. The ranks of a
+   ThreadComm are threads of one process, and those of an MPIComm are the
+   processes of an MPI communicator.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -29,35 +29,35 @@ class Comm {
     template <class T>
     void bcast(T* data, int count, int root) { bcast_bytes(data, count * sizeof(T), root); }
 
-    // Combines in [count] of every rank into out [count], on root or on every rank.
+    // Reduces in [count] over the ranks into out [count]: on root for reduce, on every rank for allreduce.
     virtual void reduce(const double* in, double* out, int count, ReduceOp op, int root) = 0;
     virtual void allreduce(const double* in, double* out, int count, ReduceOp op) = 0;
     virtual void allreduce(const int* in, int* out, int count, ReduceOp op) = 0;
 
-    // Stops the other ranks after an exception on this one alone, which leaves them waiting in a collective: MPI ends
-    // the job, and the other threads raise CommAborted.
+    // Stops the other ranks after an exception on this rank alone. MPIComm ends the job, and the other threads of a
+    // ThreadComm raise CommAborted.
     virtual void abort() = 0;
 
   protected:
     virtual void bcast_bytes(void* data, size_t bytes, int root) = 0;
 };
 
-// Raised in every rank waiting on a group another rank has aborted.
+// The exception a ThreadGroup barrier raises in every rank once a rank has aborted the group.
 class CommAborted : public std::exception {
   public:
     const char* what() const noexcept override { return "thread group aborted"; }
 };
 
-// The threads of one process that are a group's ranks, and the buffers they publish to meet.
+// The ranks of a ThreadComm, which are threads of one process, and the buffers they publish in a collective.
 class ThreadGroup {
   public:
     explicit ThreadGroup(int size) : size(size), slots(size) {}
 
     const int size;
-    std::vector<const void*> slots;    // one buffer per rank, published before a barrier
+    std::vector<const void*> slots;    // [size] the buffer each rank publishes before a barrier
 
     void barrier();
-    // Releases every waiting rank, and every later barrier, with CommAborted.
+    // Makes every waiting barrier and every later one raise CommAborted.
     void abort();
 
   private:
@@ -68,8 +68,7 @@ class ThreadGroup {
     bool aborted = false;
 };
 
-// A rank of a ThreadGroup. Reductions combine the ranks in rank order, so a result depends on the group size and
-// not on scheduling.
+// A rank of a ThreadGroup. Reductions combine the ranks in rank order.
 class ThreadComm : public Comm {
   public:
     ThreadComm(ThreadGroup& group, int rank) : group(group), me(rank) {}
@@ -90,7 +89,7 @@ class ThreadComm : public Comm {
     const int me;
 };
 
-// This process's rank of an MPI communicator.
+// The rank of this process in an MPI communicator.
 class MPIComm : public Comm {
   public:
     explicit MPIComm(MPI_Comm comm);

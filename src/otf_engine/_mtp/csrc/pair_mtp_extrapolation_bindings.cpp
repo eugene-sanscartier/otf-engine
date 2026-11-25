@@ -5,8 +5,6 @@
 #include "pair_mtp_bindings.h"
 #include "pair_mtp_extrapolation.h"
 
-// --- ported from PairMTPExtrapolation --------------------------------------
-
 static py::dict compute(PairMTPExtrapolation& self, const PyNeighbors& nb) {
     py::dict result = compute_results(self, nb);
     result["max_grade"] = self.get_max_grade();
@@ -16,21 +14,18 @@ static py::dict compute(PairMTPExtrapolation& self, const PyNeighbors& nb) {
 }
 
 void bind_pair_mtp_extrapolation(py::module_& m) {
-    auto cls = py::class_<PairMTPExtrapolation, PairMTP>(m, "PairMTPExtrapolation", "An MTP potential that also grades configurations against a MaxVol active set.");
+    auto cls = py::class_<PairMTPExtrapolation, PairMTP>(m, "PairMTPExtrapolation", "MTP potential that grades configurations against a MaxVol active set.");
     def_pair_mtp_init(cls);
 
-    // ---- ported from PairMTPExtrapolation ----
     def_neighbors(cls, "compute", &compute,
                   R"doc(
-PairMTP.compute's results, graded against the active set set by set_active_set().
+Compute the results of PairMTP.compute and grade the structure against the active set of set_active_set().
 
-Adds "max_grade", the largest neighborhood grade or the configuration grade,
-and in neighborhood mode "nbh_grades" (n_atoms).
+Returns:
+    the dict of PairMTP.compute with "max_grade", the largest neighborhood grade or the
+    configuration grade, and in neighborhood mode "nbh_grades" (n_atoms).
 )doc");
 
-    // ---- no counterpart in the reference ----
-    // The reference reads the active set from the file's #MVS_v1.1 block;
-    // almtp_io.py parses and writes that block, and hands invA in here.
     cls.def("set_active_set",
             [](PairMTPExtrapolation& self, DoubleArray invA, bool configuration_mode, int weight_scaling) {
                 const int n = self.coeff_count();
@@ -39,7 +34,7 @@ and in neighborhood mode "nbh_grades" (n_atoms).
                 self.set_active_set(invA.data(), configuration_mode, weight_scaling);
             },
             py::arg("invA"), py::arg("configuration_mode") = false, py::arg("weight_scaling") = 2,
-            "Install the MaxVol inverse active set, its mode and its weight_scaling, used by compute().")
+            "Set the MaxVol inverse active set, its mode and its weight_scaling for compute().")
         .def_property_readonly("has_active_set", &PairMTPExtrapolation::has_active_set)
         .def_property_readonly("configuration_mode", &PairMTPExtrapolation::get_configuration_mode);
 }

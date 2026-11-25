@@ -37,7 +37,6 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         left_f = prev_f = curr_f;
         left_g = prev_g = curr_g;
         curr_x = right_x;
-        // mlip-3 writes its warnings to the terminal; here the fit logs message
         if (curr_g > 0) {
             message = format_text("f'(0) = %.2e > 0", curr_g);
             return false;
@@ -56,7 +55,6 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         right_g = curr_g;
     }
 
-    // update the bounds
     if (right_g < 0 && right_f < left_f) {
         if (curr_x > right_x) {
             left_x = right_x; left_f = right_f; left_g = right_g;
@@ -109,7 +107,6 @@ bool LineSearch::iterate(double curr_f, double curr_g) {
         return true;
     }
 
-    // secant step
     const double new_x = curr_x - curr_g * (curr_x - prev_x) / (curr_g - prev_g);
     prev_x = curr_x; prev_f = curr_f; prev_g = curr_g;
     curr_x = new_x;
@@ -160,15 +157,11 @@ bool BFGS::iterate(double f, const std::vector<double>& g) {
     double p_dot_g = dot(g, p);
     bool loss_decrease = true;
 
-    // the line search can settle on the line's minimum where the sufficient decrease from the start fails, and stall
-    // there; a minimum that lowers the loss is taken as the step, where mlp spins to its line search limit
     const bool line_minimum = f < f_start && std::fabs(p_dot_g) <= 1e-4 * std::fabs(p_dot_g_start);
     if (!line_minimum && (f > f_start + wolfe_c1 * linesearch.x() * p_dot_g_start || std::fabs(p_dot_g) > wolfe_c2 * std::fabs(p_dot_g_start))) {
-        // the loss increased or decreased too little: continue the line search
         in_linesearch_ = true;
         loss_decrease = linesearch.iterate(f, p_dot_g);
     } else {
-        // Toggled rather than cleared, so the caller cannot be caught in an infinite cycle.
         in_linesearch_ = !in_linesearch_;
         alpha_ = linesearch.x();
 
@@ -209,7 +202,7 @@ void BFGS::update_inv_hess(const std::vector<double>& g) {
     for (int i = 0; i < size; i++)
         py += alpha * p[i] * delta_grad[i];
 
-    // the very first iteration
+    // py is 0 on the first iteration
     if (py == 0) return;
 
     double yCy = 0.0;

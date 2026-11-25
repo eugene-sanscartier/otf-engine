@@ -11,12 +11,10 @@
 #define EIGEN_DONT_PARALLELIZE
 #include <Eigen/Core>
 
-// The number of equations grade multiplies by invA^T in one product
+// Equations per product with invA^T in grade_rows
 constexpr int grade_block_rows = 1024;
 
-// ---------------------------------------------------------------------------
 // Equations
-// ---------------------------------------------------------------------------
 
 Equations::Equations(int coeff_count, double energy_weight, double force_weight, double stress_weight, double site_en_weight, int weight_scaling)
     : coeff_count(coeff_count), energy_weight(energy_weight), force_weight(force_weight), stress_weight(stress_weight), site_en_weight(site_en_weight), weight_scaling(weight_scaling) {}
@@ -54,7 +52,7 @@ void Equations::add(const NeighList& list, const double* site_energy_grad, const
     if (forces)
         for (int r = 0; r < 3 * n_atoms; r++) append(&force_grad[(size_t) r * cc], force_weight, s, 1 + r);
     if (stress) {
-        // mlip-3 stores the full 3x3 stress, not its 6 Voigt components
+        // the 9 components of the 3x3 stress, row-major
         for (int q = 0; q < 9; q++) append(&virial_grad[(size_t) VIRIAL_INDEX[q / 3][q % 3] * cc], stress_weight / scale, s, 1 + 3 * n_atoms + q);
     }
     if (site_en_weight != 0.0)
@@ -69,9 +67,7 @@ Equations Equations::subset(const bool* keep) const {
     return kept;
 }
 
-// ---------------------------------------------------------------------------
 // MaxVol
-// ---------------------------------------------------------------------------
 
 MaxVol::MaxVol(int n, double init_scale, double threshold, std::optional<double> threshold_swap)
     : n(n), threshold(threshold), threshold_swap(threshold_swap), A((size_t) n * n, 0.0), invA((size_t) n * n, 0.0), active_pool_ids(n, -1), active_structure_indices(n, -1), active_eqn_indices(n, -1), w(n), dv(n), buf3(n), row_k(n) {
@@ -103,23 +99,23 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_s
     const int count = pool.size();
     sweep_grades.resize(count);
 
-    // An equation's position in the whole pool, its structure then its place among that structure's
-    // equations, breaks ties between equal grades as the first in pool order wins on one rank.
+    // position of each equation in the whole pool: structure number * 1e7 + place within the structure.
+    // The lowest position wins a tie between equal grades.
     std::vector<double> positions(count);
     for (int r = 0, k = 0; r < count; r++) {
         k = r > 0 && pool.structure_indices[r] == pool.structure_indices[r - 1] ? k + 1 : 0;
         positions[r] = pool.structure_indices[r] * 1e7 + k;
     }
 
-    // The pool rows each swap overwrote, to put back when the search ends
+    // pool rows that the swaps overwrote, restored at the end
     struct Replaced {
         int row, structure_index, eqn_index;
         std::vector<double> grad;
     };
     std::vector<Replaced> replaced;
     std::vector<double> v(n), displaced(n);
-    int provenance[3];    // the entering equation's pool, structure and equation
-    // A displaced equation keeps its own pool, as mlip-3 swaps an equation's link to its configuration with it
+    int provenance[3];    // pool, structure and equation of the entering equation
+    // pool of each row of pool; a displaced equation keeps its own
     std::vector<int> pool_ids(count, pool_id);
 
     for (int swaps = 0; swaps < max_swaps; swaps++) {
@@ -132,7 +128,7 @@ void MaxVol::maximize_volume(Equations& pool, int pool_id, Comm& comm, int max_s
                 best_position = positions[r];
                 best = r;
             }
-        // the best grade of every rank, the lowest position among equal grades, and the rank holding it
+        // best grade over the ranks, the lowest position among equal grades, and the rank that holds it
         double grade = best_grade, position = best_position;
         comm.allreduce(&grade, &best_grade, 1, ReduceOp::max);
         position = grade == best_grade ? position : HUGE_VAL;
@@ -181,7 +177,7 @@ void MaxVol::restore_active(const int* structure_indices, const int* eqn_indices
 }
 
 bool MaxVol::try_swap(const double* v, double bound, int pool_id, int structure_index, int eqn_index, double* displaced, int& displaced_pool_id, int& displaced_structure_index, int& displaced_eqn_index) {
-    // w = invA v, the grade elements; row k of A is the one v replaces
+    // w = invA v; v replaces row k of A, where |w[k]| is largest
     for (int i = 0; i < n; i++) {
         double s = 0.0;
         for (int j = 0; j < n; j++) s += invA[(size_t) i * n + j] * v[j];

@@ -28,7 +28,7 @@ from .launchers import Launcher, JobTimedOut, JobOutOfMemory
 logger = logging.getLogger(__name__)
 
 OTF_STATE_FILE = "otf_state.json"
-DEFERRED_EVALS_FILE = "deferred_evals.extxyz"  # beside the cycle directories: the evaluations a cycle resubmits from the one before
+DEFERRED_EVALS_FILE = "deferred_evals.extxyz"  # beside the cycle directories: the evaluations that the previous cycle deferred
 _STATE_LOCK = threading.Lock()
 
 
@@ -44,7 +44,10 @@ def _load_state():
 
 
 def _save_state(state):
-    """Replace OTF_STATE_FILE with state, one writer at a time: the launcher saves from evaluation threads."""
+    """Replace OTF_STATE_FILE with *state* under _STATE_LOCK.
+
+    The launcher calls this function from the evaluation threads.
+    """
     with _STATE_LOCK:
         with open(f"{OTF_STATE_FILE}.tmp", "w") as f:
             json.dump(state, f, indent=2)
@@ -55,9 +58,10 @@ MAX_STRUCTURES_PER_DUMP = 10000
 
 
 def grade_dump(dump, potential_path, species=None):
-    """Parse one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures, and grade them on one thread.
+    """Read one extrapolative dump, keep at most MAX_STRUCTURES_PER_DUMP of its structures at random, and grade them on one thread.
 
-    species : the element of each LAMMPS type, in type order
+    Args:
+        species: Element of each LAMMPS type, in type order.
     """
     with open(dump) as dump_file:
         structures = ase.io.lammpsrun.read_lammps_dump_text(dump_file, index=slice(None), specorder=species)
@@ -71,9 +75,10 @@ def grade_dump(dump, potential_path, species=None):
 
 
 def grade_extrapolative_dumps(potential_path, extrapolative_dumps, species=None):
-    """Grade every extrapolative dump on a process pool, one dump per task and one worker per core.
+    """Grade the extrapolative dumps on a process pool, one dump per task and one worker per core.
 
-    Returns the graded structures by dump, in the order the dumps finished.
+    Returns:
+        The graded structures of each dump, in the order the dumps finished.
     """
     n_workers = min(os.process_cpu_count(), len(extrapolative_dumps))
     logger.info(f"Grading {len(extrapolative_dumps)} dumps on {n_workers} workers")
@@ -89,20 +94,26 @@ def max_force(atoms):
 
 @dataclass
 class OTFCycle:
-    """One OTF-MTP update cycle, from extrapolative dumps to a retrained model, stepped through by its caller.
+    """One OTF update cycle, from the extrapolative dumps to a retrained potential, stepped through by its caller.
 
-    Inside `with`, the caller brings the active set up to date with `active_set_update`, then grades each
-    dump with grade_dump against it, passes the result through preselect, selects with `selection`, evaluates
-    the selected with evaluate, trains with `training`, and calls replace_potential. `active_set_update`,
-    `selection(candidates)` and `training` are the keyword arguments of otf_pool's update_active_set,
-    select_add and train_potential. Entering logs the otf_engine package into cycle_dir's LOG_FILE, and only
-    there, and loads the OTF state and the training set; leaving records the cycle in the state's history and
-    archives the cycle in cycle_dir, as failed, and re-raising, if the block raised.
+    Inside `with`, the caller updates the active set with `active_set_update`, grades each dump against
+    it with grade_dump, and passes the result to preselect. The caller then selects with `selection`,
+    evaluates the selected structures with evaluate, trains with `training` and calls replace_potential.
+    `active_set_update`, `selection(candidates)` and `training` return the keyword arguments of
+    update_active_set, select_add and train_potential in otf_pool.
 
-    extrapolative_dumps and the options up to force_threshold are `python -m otf_engine`'s, under the same names.
-    evaluator_fn : evaluator_fn(structure) labels one structure in-process; without it, or under SlurmLauncher,
-                   ./evaluator.py's evaluator(structure) runs on each structure through `python -m otf_engine.evaluate`
-    cycle_dir    : by default the next one under otf_cycles/
+    Entering the block sends the logs of the otf_engine package to LOG_FILE in cycle_dir, and only there.
+    It also loads the OTF state and the training set. Leaving the block records the cycle in the state
+    history and archives the cycle in cycle_dir. If the block raised, the cycle is archived as failed
+    and the exception propagates.
+
+    The fields from extrapolative_dumps to force_threshold are the options of `python -m otf_engine`,
+    under the same names.
+
+    Args:
+        evaluator_fn: Function that labels one structure in-process. Without it, or under SlurmLauncher,
+            evaluator(structure) of ./evaluator.py runs on each structure through `python -m otf_engine.evaluate`.
+        cycle_dir: Cycle directory, by default the next one under otf_cycles/.
     """
 
     extrapolative_dumps: list
@@ -132,11 +143,11 @@ class OTFCycle:
         package_logger.setLevel(logging.INFO)
         package_logger.propagate = False
 
-        # What preselect and evaluate find, for this cycle's entry in the state's history
+        # Counts and gammas from preselect and evaluate, for the entry of this cycle in the state history
         self.record = dict(selection_branch="none", n_preselected=0, n_selected=0, n_evaluated=0, n_deferred=0, n_failed=0, active_set_size=None, gammas_candidates=[], gammas_selected=[], gammas_evaluated=[], max_forces_evaluated=[])
         try:
             self.state = _load_state()
-            # The launcher's callbacks then only replace these keys, never add one while another thread saves.
+            # Create the keys that the launcher callbacks replace.
             self.state.setdefault("timing", {})
             self.state.setdefault("memory", {})
             self.launcher.configure_timing(self.state, _save_state)
@@ -153,11 +164,11 @@ class OTFCycle:
     def __exit__(self, exc_type, exc, tb):
         package_logger = logging.getLogger(__package__)
         try:
-            # An interrupted cycle is neither recorded nor archived, so its dumps stay as they are.
+            # Leave an interrupted cycle unrecorded and unarchived.
             if exc is not None and not isinstance(exc, Exception): return False
             if isinstance(exc, JobTimedOut): logger.error("Training exhausted retries and timed out.")
             if isinstance(exc, JobOutOfMemory): logger.error("Training exhausted retries and ran out of memory.")
-            # A cycle that reached its training is recorded, whether training succeeded or ran out of retries.
+            # Record a cycle that reached training, whether training succeeded or ran out of retries.
             if exc is None or isinstance(exc, (JobTimedOut, JobOutOfMemory)):
                 self._record_history(exc)
                 _save_state(self.state)
@@ -171,7 +182,7 @@ class OTFCycle:
         return False
 
     def _record_history(self, exc):
-        """Append this cycle's entry to the state's history and add its counts to the totals."""
+        """Append the entry of this cycle to the state history and add its counts to the totals."""
         state, record = self.state, self.record
         state["n_selected_total"] = state.get("n_selected_total", 0) + record["n_selected"]
         state["n_evaluated_total"] = state.get("n_evaluated_total", 0) + record["n_evaluated"]
@@ -199,12 +210,12 @@ class OTFCycle:
         })
 
     def preselect(self, graded):
-        """Reduce the graded structures to the candidates for selection: the gamma policy, then a random cap.
+        """Reduce the graded structures to the candidates for selection by the gamma policy, then a random cap.
 
-        graded : the structures grade_dump returned, by dump
+        Args:
+            graded: Structures that grade_dump returned, by dump.
         """
         state = self.state
-        # The size of the active set the dumps were graded against, recorded with the cycle
         self.record["active_set_size"] = len(read_mvs_state(self.potential_path)[2])
         candidates = []
         for k, (dump, structures) in enumerate(graded.items(), 1):
@@ -215,8 +226,8 @@ class OTFCycle:
         self.record["gammas_candidates"] = gammas.tolist()
         branch = "none"
 
-        # The gamma policy: of the candidates above gamma_tolerance, those below gamma_max ("normal"), or else
-        # the lowest, when it lies below gamma_max0 ("intermediate") or extremes are still allowed ("extreme").
+        # Gamma policy: keep the candidates above gamma_tolerance, then those below gamma_max ("normal").
+        # Else keep the lowest, if it lies below gamma_max0 ("intermediate") or extremes are still allowed ("extreme").
         if self.preselection_filtering:
             above = gammas > self.gamma_tolerance
             candidates, gammas = [atoms for atoms, a in zip(candidates, above) if a], gammas[above]
@@ -247,12 +258,12 @@ class OTFCycle:
                     else:
                         logger.warning(f"Skipping selection: {consecutive_non_extreme} consecutive non-extreme iterations reached limit of {self.extreme_lock_after_ntimes}")
 
-                # After extreme_lock_after_ntimes cycles in a row without an extreme one, extremes are never selected again.
+                # After extreme_lock_after_ntimes cycles in a row without an extreme one, stop selecting extremes for good.
                 if branch in ("normal", "intermediate"):
                     state["consecutive_non_extreme"] = state.get("consecutive_non_extreme", 0) + 1
                     if state["consecutive_non_extreme"] >= self.extreme_lock_after_ntimes: state["extreme_allowed"] = False
 
-                # gamma_max0 is the mean of the last 10 lowest gammas recorded here, and never below gamma_max.
+                # gamma_max0 is the mean of the last 10 recorded lowest gammas, and at least gamma_max.
                 if numpy.all(gammas > self.gamma_max) and min_gamma < self.gamma_max_cap:
                     history = (state.get("gamma_max0_history", []) + [float(min_gamma)])[-10:]
                     state["gamma_max0_history"] = history
@@ -262,7 +273,6 @@ class OTFCycle:
 
                 logger.info(f"Post-preselection: {len(candidates)} structures selected")
 
-        # A random cap on the total
         if 0 < self.max_structures < len(candidates):
             kept = numpy.random.choice(len(candidates), size=self.max_structures, replace=False)
             candidates = [candidates[i] for i in kept]
@@ -274,15 +284,21 @@ class OTFCycle:
 
     @property
     def active_set_update(self):
-        """The active-set update the dumps must be graded after, as otf_pool.update_active_set's keyword arguments."""
+        """Return the keyword arguments of otf_pool.update_active_set for this cycle.
+
+        Grade the dumps after this update.
+        """
         return dict(potential_path=self.potential_path, training_set_path=self.training_set_path)
 
     def selection(self, candidates):
-        """The selection from the candidates of those that extend the active set, as otf_pool.select_add's keyword arguments."""
+        """Return the keyword arguments of otf_pool.select_add, which selects the candidates that extend the active set."""
         return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, candidates=candidates)
 
     def evaluate(self, selected):
-        """Evaluate the selected structures and those the previous cycle deferred, add those that succeed to the training set, log the potential's errors on them before training, and return their count."""
+        """Evaluate the selected structures and those that the previous cycle deferred, and return the count of successes.
+
+        The function appends each success to the training set and logs the errors of the potential on them before training.
+        """
         deferred_file = self.cycle_dir.parent / DEFERRED_EVALS_FILE
         resubmitted = []
         if deferred_file.is_file():
@@ -293,7 +309,6 @@ class OTFCycle:
         parallel = self.launcher.concurrent_eval and n > 1
         logger.info(f"Evaluating {n} structures {'concurrently' if parallel else 'sequentially'}.")
         evaluated, deferred, gammas_evaluated = [],[],[]
-        # One thread per structure: max_workers=None caps the pool at process_cpu_count() + 4.
         with concurrent.futures.ThreadPoolExecutor(max_workers=n if parallel else 1) as executor:
             futures = {executor.submit(self._evaluate_one, i, s): i for i, s in enumerate(structures)}
             for k, future in enumerate(concurrent.futures.as_completed(futures), 1):
@@ -317,7 +332,12 @@ class OTFCycle:
         return len(evaluated)
 
     def _evaluate_one(self, i, structure):
-        """Evaluate one structure: ("ok", result), ("skipped", None) above force_threshold, ("failed", None), or ("deferred", None) when it timed out or ran out of memory at most launcher.max_retries times."""
+        """Evaluate one structure.
+
+        Returns:
+            ("ok", result), ("skipped", None) above force_threshold, ("failed", None), or ("deferred", None)
+            when the evaluation timed out or ran out of memory at most launcher.max_retries times.
+        """
         eval_dir = self.cycle_dir / f"eval_{i:03d}"
         try:
             result = self.launcher.call_evaluator(self.evaluator_fn, structure, eval_dir, timed_out_at_s=structure.info.get("eval_timed_out_at_s"))
@@ -345,20 +365,23 @@ class OTFCycle:
 
     @property
     def training(self):
-        """The training this cycle needs, as otf_pool.train_potential's keyword arguments."""
+        """Return the keyword arguments of otf_pool.train_potential for this cycle."""
         return dict(potential_path=self.potential_path, training_set_path=self.training_set_path, save_path=f"tmp_{self.potential_path}", options={"iteration_limit": self.iteration_limit, "log": TRAIN_LOG})
 
     def replace_potential(self):
-        """Replace the potential with the one training wrote, and log its errors on the evaluated structures."""
+        """Replace the potential with the one that training wrote, and log its errors on the evaluated structures."""
         os.replace(self.training["save_path"], self.potential_path)
         if self.evaluated: logger.info(errors(self.potential_path, self.evaluated, "Errors on the evaluated structures after training:", first=len(self.training_set) + 1))
         logger.info(f"OTF-MTP update cycle complete. New potential saved to {self.potential_path}.")
 
 
 def run_cycle(extrapolative_dumps, launcher: Launcher, *, mlp_command, **options):
-    """Run one OTFCycle as `python -m otf_engine` does: grading on a process pool, training with mlp_command's `mlp train` through the launcher.
+    """Run one OTFCycle for `python -m otf_engine`.
 
-    options : OTFCycle's
+    The cycle grades on a process pool and trains through the launcher with `mlp train` of *mlp_command*.
+
+    Args:
+        options: Fields of OTFCycle.
     """
     with OTFCycle(extrapolative_dumps, launcher, **options) as cycle:
         train_eqns = update_active_set(cycle.potential_path, cycle.training_set)

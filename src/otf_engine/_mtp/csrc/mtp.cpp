@@ -8,8 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-// Accumulate the virial components of a pair force's direction d, as
-// PairMTP::compute tallies them.
+// Adds the virial terms -r_a f_d, a <= d, of force component d to column col of virial_grad.
 static inline void accumulate_virial_grad(double* virial_grad, int width, int d, int col, double contrib, const std::array<double, 3>& r) {
     virial_grad[d * width + col] -= r[d] * contrib;
     if (d == 1) {
@@ -20,9 +19,7 @@ static inline void accumulate_virial_grad(double* virial_grad, int width, int d,
     }
 }
 
-/* ----------------------------------------------------------------------
-   Basis values per central atom, before the linear coefficients are applied
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 void MTP::eval_basis(const NeighList& list, double* basis_out) {
     int nbr_offset = 0;
 
@@ -36,7 +33,7 @@ void MTP::eval_basis(const NeighList& list, double* basis_out) {
 
         std::fill(atom_moment_vals.begin(), atom_moment_vals.end(), 0.0);
 
-        // ------------ Calculate Basic Moments ------------
+        // Basic moments
         for (int jj = 0; jj < jnum; jj++) {
             const int j = nbrs[jj];
             const int jtype = list.types[j];
@@ -67,7 +64,7 @@ void MTP::eval_basis(const NeighList& list, double* basis_out) {
             }
         }
 
-        // ------------ Construct Composite Moment Values  ------------
+        // Composite moments
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
             atom_moment_vals[term[3]] +=
@@ -94,11 +91,11 @@ void MTP::grow_neighbor_rows(int jnum) {
 }
 
 /* ----------------------------------------------------------------------
-   The site-energy gradient is PairMTPExtrapolation::compute's per-neighbour
-   contraction of the basic moments' adjoints into the radial coefficients.
-   The force gradient carries each basic moment's derivative w.r.t. its
-   neighbour's displacement (the moment Jacobian) forward through the
-   products. The angular monomials' derivatives follow the shared tree, with
+   The site-energy gradient contracts the adjoints of the basic moments with
+   the radial basis, neighbor by neighbor. The force gradient carries the
+   moment Jacobian, the derivative of each basic moment with respect to the
+   neighbor displacement, forward through the products. The derivatives of
+   the angular monomials follow the monomial tree, with
    du_b/dr_a = (delta_ab - u_a u_b) / |r|.
 ------------------------------------------------------------------------- */
 void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool radial) {
@@ -106,7 +103,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
     const int n_radial = radial_coeff_count;
     const int n_linear = alpha_scalar_count;
 
-    // Column offsets of each coefficient block within a row of width `width`.
+    // Column offsets of the coefficient blocks in a row of width `width`
     const int rad_off = 0;
     const int sp_off = n_radial;
     const int lin_off = n_radial + species_count;
@@ -124,7 +121,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         }
     }
 
-    // The radial force gradient needs the basic moments' derivatives w.r.t. the radial coefficients.
+    // The radial force gradient takes the derivatives of the basic moments with respect to the radial coefficients.
     const bool need_radial_jacobian = radial && force_grad;
     if (need_radial_jacobian) {
         radial_jacobian.resize((size_t) alpha_index_basic_count * species_count * radial_coeff_count_per_pair);
@@ -159,7 +156,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         if (need_radial_jacobian)
             std::fill(radial_jacobian.begin(), radial_jacobian.end(), 0.0);
 
-        // ------------ The neighbors within the cutoff: unit displacement and radial basis ------------
+        // Unit displacement and radial basis of the neighbors within the cutoff
         double* u[3] = {neighbor_units.data(), neighbor_units.data() + N, neighbor_units.data() + 2 * N};
         double* inv_dists = neighbor_units.data() + 3 * N;
         for (int jj = 0; jj < jnum; jj++) {
@@ -182,7 +179,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         }
         const int V = valid_count;
 
-        // ------------ The angular monomials, their derivatives w.r.t. r for the force passes, and the radial functions ------------
+        // Angular monomials, their derivatives with respect to r for the force passes, and the radial functions
         double* ang = neighbor_angulars.data();
         for (int jj = 0; jj < V; jj++) ang[jj] = 1.0;
         for (int k = 1; k < angular_count; k++) {
@@ -225,7 +222,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             }
         }
 
-        // ------------ Basic moments, their Jacobian and their radial Jacobian ------------
+        // Basic moments, their Jacobian and their radial Jacobian
         for (int mu = 0; mu < radial_func_count; mu++) {
             const double* val = radial_funcs + (size_t) 2 * mu * N;
             const double* der = val + N;
@@ -253,14 +250,14 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             }
         }
 
-        // ------------ Construct Composite Moment Values  ------------
+        // Composite moments
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
             atom_moment_vals[term[3]] +=
                 term[2] * atom_moment_vals[term[0]] * atom_moment_vals[term[1]];
         }
 
-        // =========== Begin Backpropagation, for the radial columns ===========
+        // Backpropagation, for the radial columns
         if (radial) {
             for (int k = 0; k < alpha_scalar_count; k++)
                 atom_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
@@ -280,7 +277,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 basic_ders_by_mu[t] = atom_energy_ders_wrt_moments[basic_by_mu[t]];
         }
 
-        // ---- Per-atom site energy gradient ----
+        // Site-energy gradient
         if (site_e_grad) {
             double* row = site_e_grad + (size_t) ii * width;
             for (int s = 0; s < n_linear; s++)
@@ -307,10 +304,10 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         if (!force_grad)
             continue;
 
-        // ---- Linear force / virial gradient ----
-        // dF/dbeta_s is the derivative of basis value s w.r.t. the displacements,
-        // carried forward from the basic moments' Jacobian through the products.
-        // the basic rows of moment_ders hold the moment Jacobian; the first product into a moment sets its row
+        // Linear force and virial gradient
+        // dF/dbeta_s is the derivative of basis value s with respect to the displacements.
+        // The products carry it forward from the moment Jacobian in the basic rows of moment_ders.
+        // The first product into a moment sets its row, and the later ones add to it.
         const int n_ders = valid_count * 3;
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
@@ -326,7 +323,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
                 for (int q = 0; q < n_ders; q++) D_a3[q] += mul * (D_a0[q] * M_a1 + M_a0 * D_a1[q]);
         }
 
-        // the basis values' derivatives by displacement component, each a row over the linear columns
+        // Row d * V + jj of scalar_ders holds the derivatives of the basis values with respect to component d of displacement jj.
         scalar_ders.resize((size_t) n_ders * n_linear);
         for (int s = 0; s < n_linear; s++) {
             const double* D = moment_ders.data() + (size_t) alpha_moment_mapping[s] * ders_stride;
@@ -359,9 +356,9 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
         if (!radial)
             continue;
 
-        // ---- Radial force / virial gradient ----
-        // radial_jacobian into dM_dc, whose columns are global radial coefficient indices, where radial_jacobian's
-        // are per-pair ones within the row of the central species
+        // Radial force and virial gradient
+        // Copies radial_jacobian into dM_dc. The columns of dM_dc are global radial coefficient indices.
+        // The columns of radial_jacobian are per-pair indices in the row of the central species.
         std::fill(dM_dc.begin(), dM_dc.begin() + (size_t) alpha_moment_count * n_radial, 0.0);
         for (int k = 0; k < alpha_index_basic_count; k++)
             for (int jtype = 0; jtype < species_count; jtype++) {
@@ -400,7 +397,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             }
         }
 
-        // Term 2: the radial basis itself depends on the coefficients.
+        // Term 2: dE/dM_k times the derivative of the moment Jacobian with respect to the coefficients
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const int jtype = list.types[j];
@@ -429,7 +426,7 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
             }
         }
 
-        // Term 1: the moment Jacobian is weighted by coefficient-dependent dG.
+        // Term 1: the moment Jacobian times dG
         for (int jj = 0; jj < valid_count; jj++) {
             const int j = cached_j[jj];
             const auto& r = valid_dr[jj];
@@ -455,16 +452,16 @@ void MTP::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 
 /* ----------------------------------------------------------------------
    Per site, the loss is a E_i + sum_j w_j . dE_i/dr_ij with a = dL/dE and
-   w_j = dL/dF_i - dL/dF_j - S r_ij, where S[b][a] = dL/dvirial_ab, since
-   virial_ab sums -r_a f_b over the pairs. The forward pass carries each
-   moment's derivative along w (its tangent) beside its value. Backward, the
-   tangents' adjoints are nbh_energy_ders_wrt_moments, and the values'
-   adjoints pick up the tangents through the products. The angular factors
-   are the monomials of the unit displacement u, built through PairMTP's
-   shared tree, and their tangents follow the same tree along
+   w_j = dL/dF_i - dL/dF_j - S r_ij, where S[b][a] = dL/dvirial_ab and
+   virial_ab = -sum r_a f_b over the pairs. The forward pass carries the
+   tangent of each moment, its derivative along w, beside its value. In the
+   backward pass, nbh_energy_ders_wrt_moments holds the adjoints of the
+   tangents, and moment_adjoints, the adjoints of the values, picks up the
+   tangents through the products. The angular monomials of the unit
+   displacement u and their tangents follow the monomial tree along
    v = (w - (w.u) u) / |r|, the tangent of u. The central atoms go in
-   chunks, as in PairMTP::compute, and a linear coefficient's gradient sums
-   over the chunk's atoms.
+   chunks, and the gradient of a linear coefficient sums over the atoms of
+   the chunk.
 ------------------------------------------------------------------------- */
 void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int n_radial = radial_coeff_count;
@@ -472,7 +469,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
     const int lin_off = n_radial + species_count;
     const double a = dloss_denergy;
 
-    // dL/dvirial as a matrix over the components PairMTP::compute tallies
+    // S[b][a] = dL/dvirial_ab for a <= b
     double S[3][3] = {};
     if (dloss_dvirial) {
         S[0][0] = dloss_dvirial[0];
@@ -489,11 +486,10 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
 
     grow_chunk_cache(list);
     grow_neighbor_rows(chunk_size * atom_cache_size);
-    const int N = atom_cache_size;    // a row of the neighbor arrays, in each atom's block
+    const int N = atom_cache_size;    // a row of the neighbor arrays in an atom block
 
     int nbr_offset = 0;
 
-    // Loop over all provided neighbourhoods, a chunk of them at a time
     for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
         const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
@@ -517,7 +513,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             double* radial_vals = neighbor_radial_vals.data() + (size_t) atom * radial_basis_size * N;
             double* radial_ders = neighbor_radial_ders.data() + (size_t) atom * radial_basis_size * N;
 
-            // ------------ The neighbors within the cutoff: unit displacement, its tangent and radial basis ------------
+            // Unit displacement, its tangent and radial basis of the neighbors within the cutoff
             double* u[3] = {units, units + N, units + 2 * N};
             double* v[3] = {unit_tangents, unit_tangents + N, unit_tangents + 2 * N};
             double* w_dot_unit_r = unit_tangents + 3 * N;
@@ -536,7 +532,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 std::copy(radial_basis->radial_basis_vals.begin(), radial_basis->radial_basis_vals.end(), radial_vals + (size_t) valid_count * radial_basis_size);
                 std::copy(radial_basis->radial_basis_ders.begin(), radial_basis->radial_basis_ders.end(), radial_ders + (size_t) valid_count * radial_basis_size);
 
-                // The loss weight of this displacement
+                // Loss weight w of this displacement
                 double w[3] = {0.0, 0.0, 0.0};
                 if (dloss_dforces)
                     for (int d = 0; d < 3; d++) w[d] = dloss_dforces[i * 3 + d] - dloss_dforces[j * 3 + d];
@@ -553,7 +549,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             const int V = valid_count;
             cached_counts[atom] = valid_count;
 
-            // ------------ The angular monomials, their tangents and the radial functions ------------
+            // Angular monomials, their tangents and the radial functions
             double* ang = neighbor_angulars.data() + (size_t) atom * angular_count * N;
             double* tangents = neighbor_angular_tangents.data() + (size_t) atom * angular_count * N;
             for (int jj = 0; jj < V; jj++) {
@@ -589,7 +585,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 }
             }
 
-            // ------------ Basic moments and their tangents ------------
+            // Basic moments and their tangents
             for (int mu = 0; mu < radial_func_count; mu++) {
                 const double* val = radial_funcs + (size_t) 2 * mu * N;
                 const double* der = val + N;
@@ -608,7 +604,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             }
         }
 
-        // ------------ Composite moments and their tangents ------------
+        // Composite moments and their tangents
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int a0 = alpha_index_times[k][0], a1 = alpha_index_times[k][1];
             const int mul = alpha_index_times[k][2], a3 = alpha_index_times[k][3];
@@ -617,7 +613,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             moment_tensor_vals[a3] += mul * moment_tensor_vals[a0] * moment_tensor_vals[a1];
         }
 
-        // =========== Backpropagation of values and tangents ===========
+        // Backpropagation of values and tangents
         for (int s = 0; s < alpha_scalar_count; s++) {
             nbh_energy_ders_wrt_moments[alpha_moment_mapping[s]] = linear_coeffs[s];
             moment_adjoints[alpha_moment_mapping[s]] = a * linear_coeffs[s];
@@ -636,7 +632,7 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             nbh_energy_ders_wrt_moments[a0] += mul * G_a3 * moment_tensor_vals[a1];
         }
 
-        // ---- Linear coefficients, summed over the chunk's atoms ----
+        // Linear coefficients, summed over the atoms of the chunk
         for (int s = 0; s < alpha_scalar_count; s++)
             loss_grad[lin_off + s] += a * sum_over_atoms(moment_tensor_vals[alpha_moment_mapping[s]]) + sum_over_atoms(moment_tangents[alpha_moment_mapping[s]]);
 
@@ -652,10 +648,9 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             const double* radial_vals = neighbor_radial_vals.data() + (size_t) atom * radial_basis_size * N;
             const double* radial_ders = neighbor_radial_ders.data() + (size_t) atom * radial_basis_size * N;
 
-            // ---- Species coefficients ----
             loss_grad[sp_off + itype] += a;
 
-            // ---- Radial coefficients ----
+            // Radial coefficients
             for (int t = 0; t < alpha_index_basic_count; t++) {
                 basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]][atom];
                 basic_adjoints_by_mu[t] = moment_adjoints[basic_by_mu[t]][atom];
@@ -668,7 +663,6 @@ void MTP::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 const double* basis_ders = radial_ders + (size_t) jj * radial_basis_size;
                 double* row = loss_grad + (size_t) (itype * species_count + jtype) * radial_coeff_count_per_pair;
                 for (int mu = 0; mu < radial_func_count; mu++) {
-                    // adjoints of the radial function's value and derivative
                     double value_adjoint = 0.0, der_adjoint = 0.0;
                     for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
                         const double angular = ang[(size_t) angular_by_mu[t] * N + jj];

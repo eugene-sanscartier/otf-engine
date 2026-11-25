@@ -17,7 +17,7 @@
 
 namespace {
 
-// A multi-index over {0, 1, 2}^dim, incremented on its last digit first, as mlip-4's.
+// A multi-index over {0, 1, 2}^dim. Incrementing advances its last digit first.
 class Multiindex3 : public std::vector<int> {
   public:
     Multiindex3() = default;
@@ -148,7 +148,7 @@ int MTP_Basis_Function_Ext::BestOps(const std::set<MTP_Basis_Function_Ext>& basi
             }
         }
 
-        // increment a subset
+        // next subset
         int i = size_ - 1;
         int zeroth_subset_grew_by = 0;
         for (; subset[i] == 1; i--) {
@@ -202,7 +202,7 @@ void MTP_Basis_Function_Ext::ConstructSubBasisFunctions(MTP_Basis_Function sub_b
                     temp_perm[i_perm++] = i;
     }
 
-    // Canonize sub_basis_function[w], compose perm according to canonizing permutation
+    // Canonize each sub_basis_function[w] and compose perm with the canonizing permutation
     for (int w = 0; w < 2; w++) {
         const int offset = (w == 0 ? 0 : subset_size[0]);
         const std::vector<int> p = sub_basis_function[w].Canonize();
@@ -215,7 +215,7 @@ MTP_Basis::MTP_Basis(const std::vector<std::vector<int>>& functions) {
     if (functions.empty())
         throw std::runtime_error("MTP basis: no basis functions");
 
-    // mlip-4's MTP_Basis takes a std::set, so the functions are added in its order
+    // Add the functions in std::set order
     std::set<MTP_Basis_Function> sorted;
     for (size_t f = 0; f < functions.size(); f++) {
         const MTP_Basis_Function b(functions[f]);
@@ -243,11 +243,10 @@ std::set<MTP_Basis_Function_Ext>::iterator MTP_Basis::AddBasisFunction(const MTP
     auto where = basis_functions.emplace(b);
     for (int i = 0; i < b.size(); i++)
         radial_function_count_ = std::max(radial_function_count_, 1 + b(i));
-    if (!where.second) return where.first;  // check if already exists
+    if (!where.second) return where.first;  // b is already in the set
     if (where.first->is_elementary()) return where.first;
 
-    // now find out the most efficient way to compute the current function
-    // and add the two auxiliary basis functions recursively
+    // Find the cheapest split of b and add its two sub-functions recursively
     where.first->BestOps(basis_functions);
     MTP_Basis_Function sub[2];
     where.first->ConstructSubBasisFunctions(sub);
@@ -256,11 +255,10 @@ std::set<MTP_Basis_Function_Ext>::iterator MTP_Basis::AddBasisFunction(const MTP
     return where.first;
 }
 
-// mlip-4 composes these elements into its program; here each composite element is a sum of
-// products of two earlier elements, rows of alpha_index_times.
+// Writes each composite element as a sum of products of two earlier elements, the rows of alpha_index_times.
 void MTP_Basis::ProcessBasisFunctions() {
-    // Elementary basis functions: the components of one moment tensor, each the moment
-    // (mu, px, py, pz) of its index counts
+    // Elementary basis functions. Each component of one moment tensor is the basic moment (mu, px, py, pz),
+    // where px, py and pz count the axes in its index.
     auto basis_iter = basis_functions.begin();
     for (; basis_iter != basis_functions.end() && basis_iter->size() == 1; ++basis_iter) {
         const auto& b = *basis_iter;
@@ -278,8 +276,8 @@ void MTP_Basis::ProcessBasisFunctions() {
         }
     }
 
-    // Composite basis functions. A tensor component with the same terms as an earlier one is
-    // that element; a scalar basis function keeps an element of its own (see PairMTP::compute).
+    // Composite basis functions. A tensor component with the same terms as an earlier component reuses its element.
+    // A scalar basis function keeps an element of its own.
     int element_count = (int) alpha_index_basic.size();
     std::map<std::map<std::pair<int, int>, int>, int> element_of_terms;
     for (; basis_iter != basis_functions.end(); ++basis_iter) {
@@ -289,11 +287,11 @@ void MTP_Basis::ProcessBasisFunctions() {
         const MTP_Basis_Function_Ext& sub_0 = *b.from[0];
         const MTP_Basis_Function_Ext& sub_1 = *b.from[1];
         const int dim_sub[2] = {sub_0.Dimension(), sub_1.Dimension()};
-        const int codim = (dim_sub[0] + dim_sub[1] - dim) / 2;  // codimension
+        const int codim = (dim_sub[0] + dim_sub[1] - dim) / 2;
         const int tot_dim = dim_sub[0] + dim_sub[1];           // total dimension, before taking contraction
 
-        // effective dimension after the two subbasis functions are computed (but not contracted).
-        // Sum of reduced_dim is tot_dim. The i-th moment has reduced_dim[i] indices.
+        // reduced_dim[i] is the index count of moment i after the two sub-functions are computed, before their contraction.
+        // The entries of reduced_dim sum to tot_dim.
         std::vector<int> reduced_dim(b.size());
         for (int i = 0; i < b.size(); i++)
             reduced_dim[i] = b(i, i);
@@ -314,7 +312,7 @@ void MTP_Basis::ProcessBasisFunctions() {
                     ind_map[0][i][j] = ind_count++;
             }
 
-            // Based on the offdiag elements, remove some indices from ind_map[0] and add to ind_map[1]
+            // Move the indices that the off-diagonal entries contract from ind_map[0] to ind_map[1]
             const int offset = sub_0.size();
             for (int i = 0; i < sub_0.size(); i++)
                 for (int j = 0; j < sub_1.size(); j++)
@@ -361,7 +359,7 @@ void MTP_Basis::ProcessBasisFunctions() {
             for (int a = 0; a < dim; a++)
                 sub_mi[ind_map_set[a][0]][ind_map_set[a][1]] = mi[a];
 
-            // mlip-4's MultElement: the count of each product, its two elements in increasing order
+            // terms: the count of each product, keyed by its two elements in increasing order
             std::map<std::pair<int, int>, int> terms;
             for (Multiindex3 mj(codim); mj.is_valid(); ++mj) {
                 for (int c = 0; c < codim; c++) {
@@ -389,7 +387,7 @@ void MTP_Basis::ProcessBasisFunctions() {
     }
     alpha_moment_count = element_count;
 
-    // The scalar basis functions, in the set's order: mlip-4's order of the basis coefficients
+    // Scalar basis functions in set order, the order of the linear coefficients
     for (const auto& b : basis_functions)
         if (b.Dimension() == 0)
             alpha_moment_mapping.push_back(b.element_inds[0]);

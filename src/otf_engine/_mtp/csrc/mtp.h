@@ -11,14 +11,12 @@ class MTP : public PairMTP {
   public:
     using PairMTP::PairMTP;
 
-    // Scalar moment values per central atom: [inum * alpha_scalar_count].
-    // Row ii holds the basis values for ilist[ii]; dot with linear_coeffs and
-    // add species_coeffs for the site energy.
+    // Computes the basis values of each central atom into basis_out [inum * alpha_scalar_count].
+    // Row ii belongs to ilist[ii]. Its dot product with linear_coeffs, plus species_coeffs, gives the site energy.
     void eval_basis(const NeighList& list, double* basis_out);
 
-    // d(E_i, F, virial)/dc. Any output may be null; the force-gradient passes
-    // run only when force_grad is given. With radial false, the radial
-    // columns are left zero and cost nothing.
+    // Computes d(E_i, F, virial)/dc. Any output may be null.
+    // The force passes run only when force_grad is given. With radial false, the radial columns stay zero and are not computed.
     //
     //   site_energy_grad : [inum * coeff_count]      per-atom dE_i/dc
     //   force_grad       : [n_atoms * 3 * coeff_count]
@@ -26,24 +24,25 @@ class MTP : public PairMTP {
     void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad, bool radial);
     void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad) override { eval_grad(list, site_energy_grad, force_grad, virial_grad, true); }
 
-    // Adds dL/dc to loss_grad [coeff_count], for a loss L whose derivatives
-    // with respect to the energy, forces and virial of this structure are
-    // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
+    // Adds dL/dc to loss_grad [coeff_count], given the derivatives of L with respect to the structure's energy, forces and virial.
+    // dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
   private:
-    // Per neighbor, the radial basis at its distance
+    // Radial basis at the distance of each neighbor
     std::vector<double> neighbor_radial_vals;               // [neighbor * radial_basis_size]
     std::vector<double> neighbor_radial_ders;               // [neighbor * radial_basis_size]
 
     // Grows the neighbor rows to jnum neighbors.
     void grow_neighbor_rows(int jnum);
 
-    // The neighbors of the current atom, or of each atom of eval_loss_grad's chunk in a block of its own with rows of
-    // atom_cache_size, each array in rows over the neighbors: the unit displacement's three
-    // components and the inverse distance, the angular monomials, the radial functions' values and derivatives;
-    // eval_loss_grad's tangents of the unit displacement along the loss weight, with that weight's radial component,
-    // and the monomials' tangents; and for eval_grad's force passes the monomials' derivatives w.r.t. the displacement
+    // Neighbor rows: each array holds one row per quantity, with one entry per neighbor.
+    // eval_grad fills them for the current atom. eval_loss_grad gives each atom of its chunk a block with rows of atom_cache_size.
+    // neighbor_units: rows u_x, u_y, u_z of the unit displacement, then the inverse distance.
+    // neighbor_angulars, neighbor_angular_tangents: angular monomials of u and their tangents.
+    // neighbor_radial_funcs: value and derivative of each radial function.
+    // neighbor_unit_tangents: rows v_x, v_y, v_z of the tangent of u along the loss weight w, then w . u.
+    // neighbor_angular_grads: derivatives of the monomials with respect to the displacement, for the force passes of eval_grad.
     int rows_size = 0, jac_size = 0;
     std::vector<double> neighbor_units;              // [4 * rows_size]
     std::vector<double> neighbor_angulars;           // [angular_count * rows_size]
@@ -52,15 +51,17 @@ class MTP : public PairMTP {
     std::vector<double> neighbor_angular_tangents;   // [angular_count * rows_size]
     std::vector<double> neighbor_angular_grads;      // [angular_count * 3 * jac_size]
 
-    std::vector<double> radial_jacobian; // [alpha_index_basic_count * species_count * radial_coeff_count_per_pair] ders of basic moments wrt radial coeffs
+    std::vector<double> radial_jacobian; // [alpha_index_basic_count * species_count * radial_coeff_count_per_pair] derivatives of the basic moments with respect to the radial coefficients
     std::vector<double> dM_dc;      // [alpha_moment_count * radial_coeff_count]
     std::vector<double> dG;         // [alpha_moment_count * radial_coeff_count]
-    std::vector<double> moment_ders;  // [alpha_moment_count * jac_size * 3] d(moment)/d(displacement) by component, then neighbor; the basic rows the moment Jacobian
-    std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] the basis values' rows of moment_ders, transposed
+    // [alpha_moment_count * 3 * jac_size] derivative of moment k with respect to component a of neighbor jj at k * 3 * jac_size + a * V + jj, V neighbors within the cutoff.
+    // The basic rows hold the moment Jacobian.
+    std::vector<double> moment_ders;
+    std::vector<double> scalar_ders;  // [neighbor * 3 * alpha_scalar_count] rows of moment_ders for the basis values, transposed
     std::vector<char> first_product;  // [alpha_index_times_count] whether the product is the first to add to its moment
 
-    // eval_loss_grad: per moment, the tangent and the adjoint of the moment value, for its chunk.
+    // Tangent and adjoint of each moment value over the chunk of eval_loss_grad
     std::vector<Lanes> moment_tangents;                     // [alpha_moment_count]
     std::vector<Lanes> moment_adjoints;                     // [alpha_moment_count]
-    std::vector<double> basic_adjoints_by_mu;               // [alpha_index_basic_count] moment_adjoints of the basic moments, grouped
+    std::vector<double> basic_adjoints_by_mu;               // [alpha_index_basic_count] moment_adjoints of the basic moments, in basic_by_mu order
 };

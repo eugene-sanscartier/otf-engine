@@ -8,18 +8,14 @@ from ._core.neighbors import species_indices
 
 
 def read_cfg(fileobj: IO[str], species: list[str] | dict[int, str] | dict[str, int] | None = None):
-    """Read one or more CFG structures.
+    """Read the CFG structures of *fileobj*.
 
-    Parameters
-    ----------
-    fileobj : file-like
-    species : list[str] or dict[int, str] or dict[str, int] or None
-        Maps 0-indexed MTP type integers to element symbols.  Accepted forms:
-        an ordered list (``["Al", "Cu"]``), a forward dict (``{0: "Al", 1: "Cu"}``),
-        or an inverse dict (``{"Al": 0, "Cu": 1}``).  When provided, chemical
-        symbols are set from this mapping.  When absent, atomic numbers are set
-        to ``type_index + 1`` as a placeholder and the ``type_index`` array on
-        each Atoms carries the authoritative 0-indexed type.
+    Each structure holds the 0-based species index of each atom in its ``type_index`` array.
+
+    Args:
+        species: Element of each species index: a list (``["Al", "Cu"]``), a dict
+            (``{0: "Al", 1: "Cu"}``) or its inverse (``{"Al": 0, "Cu": 1}``).
+            Without it, each atom gets the atomic number ``type_index + 1``.
     """
     if isinstance(species, dict) and species and isinstance(next(iter(species)), str):
         species = {v: k for k, v in species.items()}
@@ -139,12 +135,12 @@ def write_cfg(fileobj: IO[str], structures: list[ase.Atoms]):
             output += [" Energy", f"    {atoms.calc.results['energy']:12.6f}"]
 
         if atoms.calc is not None and "stress" in atoms.calc.results:
-            # PlusStress is -stress * volume, in ASE's Voigt order xx yy zz yz xz xy
+            # PlusStress is -stress * volume, in the ASE Voigt order xx yy zz yz xz xy
             plus_stress = -numpy.asarray(atoms.calc.results["stress"]) * atoms.get_volume()
             output += [" PlusStress:  " + "   ".join(["xx", "yy", "zz", "yz", "xz", "xy"])]
             output += ["    " + " ".join(f"{x:12.6f}" for x in plus_stress)]
 
-        # MV_grade is the largest neighborhood grade, as read_cfg sets it
+        # MV_grade is the largest neighborhood grade
         features = dict(atoms.info.get("features", {}))
         if has_nbh: features["MV_grade"] = numpy.max(nbh)
         for feature_name, feature_value in features.items():

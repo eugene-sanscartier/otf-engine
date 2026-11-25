@@ -46,9 +46,7 @@ void PairMTP::set_species_count(int n) {
     radial_coeff_count = n * n * radial_coeff_count_per_pair;
 }
 
-/* ----------------------------------------------------------------------
-   Main Computation Function
-   ---------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 void PairMTP::compute(const NeighList& list) {
     int nbr_offset = 0;
 
@@ -59,11 +57,9 @@ void PairMTP::compute(const NeighList& list) {
 
     grow_chunk_cache(list);
 
-    // Loop over all provided neighbourhoods, a chunk of them at a time
     for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
         const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
-        // Clear moment and derivative arrays
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), Lanes());
         std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), Lanes());
 
@@ -78,7 +74,7 @@ void PairMTP::compute(const NeighList& list) {
 
             select_atom_cache(ii - ii_begin);
 
-            // ------------ Calculate Basic Moments ------------
+            // Basic moments
             for (int jj = 0; jj < jnum; jj++) {
                 const int j = nbrs[jj];
                 const int jtype = list.types[j];
@@ -100,11 +96,11 @@ void PairMTP::compute(const NeighList& list) {
                 const double* basis_vals = radial_basis->radial_basis_vals.data();
                 const double* basis_ders = radial_basis->radial_basis_ders.data();
 
-                // Evaluate each shared angular monomial once.
+                // Angular monomials of the unit displacement
                 for (int k = 1; k < angular_count; k++)
                     angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
 
-                // Compute the radial basis values and derivatives
+                // Radial function values and derivatives
                 const int pair_offset = itype * species_count + jtype;
                 for (int mu = 0; mu < radial_func_count; mu++) {
                     double val = 0;
@@ -118,7 +114,6 @@ void PairMTP::compute(const NeighList& list) {
                     vals[mu] = val;
                     ders[mu] = der;
 
-                    // Accumulate into the basic moment elements
                     for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
                         const int k = basic_by_mu[t];
                         moment_tensor_vals[k][ii - ii_begin] += val * angular_vals[angular_by_mu[t]];
@@ -129,17 +124,17 @@ void PairMTP::compute(const NeighList& list) {
             cached_counts[ii - ii_begin] = valid_count;
         }
 
-        // ------------ Construct Composite Moment Values  ------------
+        // Composite moments
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
             moment_tensor_vals[term[3]] +=
                 term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
         }
 
-        // ------------ Compute Basis Set From Alpha Map ------------
+        // Site energies from the basis values
         Lanes nbh_energy;
         for (int ii = ii_begin; ii < ii_end; ii++)
-            nbh_energy[ii - ii_begin] = species_coeffs[list.types[list.ilist[ii]]];    // Essentially the reference point energy per species
+            nbh_energy[ii - ii_begin] = species_coeffs[list.types[list.ilist[ii]]];
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy += linear_coeffs[k] * moment_tensor_vals[alpha_moment_mapping[k]];
 
@@ -148,12 +143,12 @@ void PairMTP::compute(const NeighList& list) {
             energy += nbh_energy[ii - ii_begin];
         }
 
-        // =========== Begin Backpropagation ===========
-        //------------ NBH energy derivative is the corresponding linear combination------------
+        // Backpropagation
+        // The derivative of the site energy with respect to a basis value is its linear coefficient
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
 
-        //------------ Propagate chain rule through the composite moment elements times to the basics ------------
+        // Chain rule through the composite moments down to the basic moments
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
             const int* term = alpha_index_times[k].data();
             const int a0 = term[0];
@@ -174,7 +169,7 @@ void PairMTP::compute(const NeighList& list) {
             for (int t = 0; t < alpha_index_basic_count; t++)
                 basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]][ii - ii_begin];
 
-            //------------ Compute forces from basic moment derivatives ------------
+            // Forces from the derivatives with respect to the basic moments
             for (int jj = 0; jj < valid_count; jj++) {
                 const int j = cached_j[jj];
                 const auto& r = valid_dr[jj];
@@ -203,7 +198,7 @@ void PairMTP::compute(const NeighList& list) {
                     radial_force += ders[mu] * radial_sum;
                 }
 
-                // Reverse the shared angular products
+                // Backpropagate through the tree of angular monomials
                 for (int k = angular_count - 1; k > 0; k--) {
                     const int parent = angular_parent[k];
                     const int axis = angular_axis[k];
@@ -223,7 +218,7 @@ void PairMTP::compute(const NeighList& list) {
                 forces[j * 3 + 1] -= temp_force[1];
                 forces[j * 3 + 2] -= temp_force[2];
 
-                // Accumulate virial stress as the reference's ev_tally_xyz, whose del is -r
+                // Virial terms -r_a f_b of the pair
                 virial[0] -= r[0] * temp_force[0];    //xx
                 virial[1] -= r[1] * temp_force[1];    //yy
                 virial[2] -= r[2] * temp_force[2];    //zz
@@ -236,14 +231,14 @@ void PairMTP::compute(const NeighList& list) {
 }
 
 /* ----------------------------------------------------------------------
-   MTP file parsing. Includes allocation. Excludes the radial basis
-   hyperparameters, which the radial basis constructor reads.
+   Parses an MTP file and allocates the coefficients. read_radial_basis
+   parses the radial basis hyperparameters.
 ------------------------------------------------------------------------- */
 void PairMTP::read_file(std::istream& is) {
     TextFileReader tfr(is);
 
-    // An untrained potential may omit the species count, the radial coeffs
-    // and the linear coeffs; mlip-3's MLMTPR::Load gives them defaults.
+    // An untrained potential may omit the species count, the radial coefficients
+    // and the linear coefficients; reset_coeffs gives them defaults.
     read_header(tfr, "MTP", "1.1.0");
 
     read_radial_basis(tfr);
@@ -262,8 +257,7 @@ void PairMTP::read_file(std::istream& is) {
     const bool has_radial_coeffs = tfr.keyword() == "radial_coeffs";
     std::vector<double> radial_coeffs_read(has_radial_coeffs ? pairs_count * coeffs_per_pair : 0);
     for (int i = 0; has_radial_coeffs && i < pairs_count; i++) {
-        // pair-type label "0-1"; '-' is a separator only on this line, since
-        // the coefficient lines below carry negative numbers
+        // pair-type label "0-1"; '-' is a separator on this line only
         if (!tfr.next_line("-"))
             throw std::runtime_error("PairMTP: unexpected end of file in radial_coeffs");
         int type1, type2;
@@ -276,7 +270,7 @@ void PairMTP::read_file(std::istream& is) {
         const int pair_offset = (type1 * species_count + type2) * coeffs_per_pair;
         for (int j = 0; j < radial_func_count; j++) {
             tfr.advance();
-            // The whole line is coefficients — there is no leading keyword.
+            // The line holds only coefficients, without a keyword.
             std::istringstream ss(tfr.line());
             for (int k = 0; k < radial_basis_size; k++)
                 if (!(ss >> radial_coeffs_read[pair_offset + j * radial_basis_size + k]))
@@ -295,7 +289,6 @@ void PairMTP::read_file(std::istream& is) {
     if (alpha_index_basic_count < 1 || alpha_index_basic_count > alpha_moment_count)
         throw std::runtime_error("PairMTP: MTP alpha index basic count is out of range");
 
-    // Read the basic alphas
     tfr.expect("alpha_index_basic");
     alpha_index_basic.resize(alpha_index_basic_count);
     {
@@ -311,7 +304,7 @@ void PairMTP::read_file(std::istream& is) {
                 throw std::runtime_error("PairMTP: negative angular exponent in alpha_index_basic");
             radial_func_max = std::max(radial_func_max, alpha_index_basic[i][0]);
         }
-        if (radial_func_max != radial_func_count - 1)    //Index validity check
+        if (radial_func_max != radial_func_count - 1)
             throw std::runtime_error("PairMTP: wrong number of radial functions specified");
     }
 
@@ -368,7 +361,7 @@ void PairMTP::read_file(std::istream& is) {
 
     prepare_basis();
 
-    // mlip-3's MLMTPR::Load fills in what the file omits
+    // reset_coeffs fills in what the file omits
     trained = has_radial_coeffs && has_species_coeffs;
     if (!trained) reset_coeffs();
     if (has_radial_coeffs) radial_basis_coeffs = radial_coeffs_read;
@@ -418,13 +411,12 @@ void PairMTP::prepare_basis() {
     atom_moment_vals.resize(alpha_moment_count);
     atom_energy_ders_wrt_moments.resize(alpha_moment_count);
 
-    //Find the maximum alpha basic index
+    // Largest tensor rank of a basic moment, plus 1
     max_alpha_index_basic = 0;
     for (int i = 0; i < alpha_index_basic_count; i++)
         max_alpha_index_basic = std::max(max_alpha_index_basic, alpha_index_basic[i][1] + alpha_index_basic[i][2] + alpha_index_basic[i][3]);
-    max_alpha_index_basic++;    // Add 1 to account for zeroth order indicies
+    max_alpha_index_basic++;
 
-    // Set working buffers
     prepare_angular();
     mu_offsets.assign(radial_func_count + 1, 0);
     basic_by_mu.resize(alpha_index_basic_count);
@@ -438,8 +430,8 @@ void PairMTP::prepare_basis() {
     for (int t = 0; t < alpha_index_basic_count; t++)
         angular_by_mu[t] = basic_to_angular[basic_by_mu[t]];
 
-    // Check the contraction graph: basic moments own [0, alpha_index_basic_count)
-    // and no term may read a moment that has not been produced yet.
+    // Check the contraction graph: the basic moments occupy [0, alpha_index_basic_count),
+    // and a term reads only moments already produced.
     std::vector<char> produced(alpha_moment_count, 0);
     std::fill(produced.begin(), produced.begin() + alpha_index_basic_count, 1);
     for (int k = 0; k < alpha_index_times_count; k++) {
@@ -452,8 +444,8 @@ void PairMTP::prepare_basis() {
 }
 
 /* ----------------------------------------------------------------------
-   Share angular monomials across radial channels. Lexicographic exponent
-   order puts every parent before its child.
+   Builds the tree of angular monomials the radial functions share.
+   Lexicographic exponent order puts each parent before its child.
 ------------------------------------------------------------------------- */
 void PairMTP::prepare_angular() {
     using Powers = std::array<int, 3>;

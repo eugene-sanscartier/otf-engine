@@ -30,13 +30,11 @@ void Pair::read_header(TextFileReader& tfr, const std::string& model, const std:
 
     tfr.advance();
 
-    // Read the potential name (optional field)
     if (tfr.keyword() == "potential_name") {
         tfr.rest() >> potential_name;
         tfr.advance();
     }
 
-    // Check the scaling
     if (tfr.keyword() == "scaling") {
         tfr.rest() >> scaling;
         tfr.advance();
@@ -49,7 +47,7 @@ void Pair::read_header(TextFileReader& tfr, const std::string& model, const std:
         tfr.advance();
     }
 
-    // The element of each species index
+    // potential_tag: the element of each species index
     if (tfr.keyword() == "potential_tag") {
         auto words = tfr.rest();
         species.clear();
@@ -64,17 +62,15 @@ void Pair::read_radial_basis(TextFileReader& tfr) {
     std::string type;
     tfr.rest() >> type;
 
-    // A scaling line in the basis block is accepted and ignored: the potential's scaling applies
+    // skips a scaling line in the basis block; the scaling of the potential applies
     tfr.advance();
     if (tfr.keyword() == "scaling") tfr.advance();
 
-    // Lower cutoff — accepts both 'min_dist' and 'min_val'
     if (tfr.keyword() != "min_val" && tfr.keyword() != "min_dist")
         throw std::runtime_error("potential file: expected min_dist, got '" + tfr.keyword() + "'");
     double min_dist = 0;
     tfr.rest() >> min_dist;
 
-    // Upper cutoff — accepts both 'max_dist' and 'max_val'
     tfr.advance();
     if (tfr.keyword() != "max_val" && tfr.keyword() != "max_dist")
         throw std::runtime_error("potential file: expected max_dist, got '" + tfr.keyword() + "'");

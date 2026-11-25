@@ -1,7 +1,10 @@
-"""Evaluate one structure with an evaluator file: python -m otf_engine.evaluate EVALUATOR INPUT OUTPUT.
+"""Evaluate one structure with an evaluator file.
 
-EVALUATOR is a Python file defining evaluator(structure), which labels the structure and returns it.
-INPUT and OUTPUT are extxyz files holding the structure before and after.
+Usage: python -m otf_engine.evaluate EVALUATOR INPUT OUTPUT
+
+    EVALUATOR  Python file that defines evaluator(structure), which labels the structure and returns it
+    INPUT      extxyz file that holds the structure
+    OUTPUT     extxyz file that receives the labelled structure
 """
 import argparse
 import importlib.util
@@ -11,10 +14,11 @@ import ase.io.extxyz
 
 
 def command(binary):
-    """The command that runs *binary* as the launcher sets it up for this evaluation.
+    """Return the command that runs *binary* under the launcher of this evaluation.
 
-    Prefixes binary with ``COMMAND_PREFIX``: ``"mpirun [runner_args]"`` (NestedLauncher),
-    ``"srun [runner_args]"`` (SlurmLauncher, default runner_exec), ``""`` (ForkLauncher).
+    The command prefixes *binary* with ``COMMAND_PREFIX``: ``"mpirun [runner_args]"``
+    under NestedLauncher, ``"srun [runner_args]"`` under SlurmLauncher with the
+    default runner_exec, and ``""`` under ForkLauncher.
     """
     full_command = f"{os.environ.get('COMMAND_PREFIX', '')} {binary}".strip()
     return full_command

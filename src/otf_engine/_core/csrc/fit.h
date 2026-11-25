@@ -1,8 +1,8 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   What MTPFit and ETNFit share.
+   Fit, the base of MTPFit and ETNFit.
 
-   A fit is SPMD: every rank of a Comm holds a copy of the potential
-   and a share of the structures, and the Comm's collectives combine them.
+   A fit runs SPMD over a Comm. Each rank holds a copy of the potential and
+   a share of the structures, and the collectives of the Comm combine them.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -29,12 +29,12 @@ struct FitOptions {
     double energy_weight = 1.0;
     double force_weight = 0.01;
     double stress_weight = 0.001;
-    bool balance_species = true;         // weigh each force by N / (k n_s), so every species of a structure has an equal share of its force weight
-    double varpro_fraction = 0.25;       // < 1: varpro's system in the fit's evaluations from this fraction of the structures, weights divided by it
-    bool no_mindist_update = false;      // keep min_dist rather than setting it to 0.99 of the shortest training distance
-    std::vector<std::string> species;    // the species' names in the error tables
+    bool balance_species = true;         // weighs each force of species s by N / (k n_s), for N atoms of k species and n_s of species s
+    double varpro_fraction = 0.25;       // below 1, VarPro builds its system from this fraction of the structures, with weights divided by it
+    bool no_mindist_update = false;      // keeps min_dist; otherwise the fit sets it to 0.99 of the shortest training distance
+    std::vector<std::string> species;    // names of the species in the error tables
 
-    // The weights and balance_species, the loss weights' line of the log's options.
+    // Returns the options line of the log that gives the loss weights and balance_species.
     std::string loss_weights() const {
         std::ostringstream text;
         text << "energy_weight " << energy_weight << ", force_weight " << force_weight << ", stress_weight " << stress_weight << (balance_species ? ", balance_species" : "");
@@ -42,23 +42,24 @@ struct FitOptions {
     }
 };
 
-// The fewest structures varpro_fraction may draw on average; a smaller draw takes every structure.
+// Minimum average number of structures that varpro_fraction draws. Below it, the fit takes every structure.
 constexpr int VARPRO_MIN_DRAWN = 32;
 
-// The optional columns of a phase's step lines: the MTP's penalty, the loss after a linear fit, the inverse Hessian set.
+// Optional columns of the step lines of a phase: the MTP penalty, the loss after a linear fit, the inverse Hessian set.
 struct StepColumns {
     bool penalty, linear, inv_hess;
 };
 
-// Potential is MTP or ETN, Options its fit's options.
+// A fit of PotentialT (MTP or ETN) with the options OptionsT.
 template <class PotentialT, class OptionsT>
 class Fit {
   public:
     using Potential = PotentialT;
     using Options = OptionsT;
 
-    // log receives the fit log on the rank given one; checkpoint saves the potential, which then
-    // holds the coefficients. Throws on every rank together when no rank has a structure.
+    // Sets up the fit of potential on the share of structures of this rank.
+    // log: the stream of the fit log, or null. checkpoint: saves the potential once it holds coeffs, or null.
+    // Throws on every rank together when no rank has a structure.
     Fit(Potential& potential, std::vector<FitStructure> structures, const Options& options, Comm& comm, std::ostream* log, std::function<void()> checkpoint)
         : potential(potential), structures(std::move(structures)), options(options), comm(comm), rank(comm.rank()), size(comm.size()), log(log), checkpoint(std::move(checkpoint)) {
         if (options.balance_species)
@@ -74,13 +75,13 @@ class Fit {
     }
 
   protected:
-    // Sets coeffs to the potential's coefficients.
+    // Copies the coefficients of the potential into coeffs.
     void load_coeffs() {
         coeffs.resize(potential.coeff_count());
         potential.get_coeffs(coeffs.data());
     }
 
-    // Logs the fit of model (MTP, ETN): its structures, ranks and options.
+    // Logs model (MTP, ETN), the structure and rank counts, and the options.
     void log_header(const char* model) {
         log_event(log, "fit", "%s, %d structures, %d ranks", model, structure_count, size);
         for (const std::string& line : options.summary())
@@ -95,7 +96,7 @@ class Fit {
         if (new_spec > old_spec) log_event(log, "species", "added%s", added.c_str());
     }
 
-    // Logs the column names of log_step and sets the phase's columns: the optional ones the phase can fill.
+    // Sets the optional columns of the phase and logs the column names of log_step.
     void log_step_header(StepColumns phase_columns) {
         columns = phase_columns;
         if (!log) return;
@@ -108,9 +109,10 @@ class Fit {
         *log << line << std::endl;
     }
 
-    // Logs an accepted step in the phase's columns: its loss, the energy, force, stress and penalty terms of terms with their
-    // share of the loss, its step length alpha, its loss evaluations nalpha, the loss after a linear fit at the step
-    // (- if NaN), and what BFGS set the inverse Hessian to in the step, inv_hess (- if "").
+    // Logs an accepted step in the columns of the phase.
+    // terms: the energy, force, stress and penalty terms, each logged with its share of loss.
+    // alpha: the step length. nalpha: the loss evaluations. linear: the loss after a linear fit at the step, - if NaN.
+    // inv_hess: what BFGS set the inverse Hessian to in the step, - if empty.
     void log_step(int step, double loss, const double* terms, double alpha, int nalpha, double linear, const char* inv_hess) {
         if (!log) return;
         char line[200];
@@ -123,7 +125,7 @@ class Fit {
         *log << line << std::endl;
     }
 
-    // Logs the steps a phase took since start, and their time.
+    // Logs the time of a phase since start, its step count and its time per step.
     void log_phase_time(int steps, std::chrono::steady_clock::time_point start) {
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         log_event(log, "timing", "%.3g s @ %d steps, %.2g s / step", seconds, steps, seconds / std::max(steps, 1));
@@ -135,10 +137,10 @@ class Fit {
         log_event(log, "timing", "%.3g s for the fit", seconds);
     }
 
-    // The training set's species count, over every rank, as mlip-3's AddSpecies checks it: species run from 0,
-    // each present in the training set, and a trained potential's species are all present. Throws on every rank together.
+    // Returns the species count of the training set over every rank. Throws on every rank together unless the species
+    // run from 0 to N-1, each present in the training set, and every species of a trained potential is present.
     int training_species_count() {
-        // the species count, and minus the lowest species when it is negative, so that every rank raises together
+        // [0] the species count, [1] minus the lowest species when it is negative
         int local[2] = {0, 0}, global[2] = {0, 0};
         for (const FitStructure& s : structures)
             for (int t : s.types) {
@@ -189,8 +191,8 @@ class Fit {
         }
     }
 
-    // varpro_fraction: draws each of this rank's structures into varpro_subset with probability varpro_fraction, from
-    // random_seed, draw and its number. Throws on every rank together when no rank draws one.
+    // Draws each structure of this rank into varpro_subset with probability varpro_fraction, seeded by random_seed,
+    // draw and the structure number. Throws on every rank together when no rank draws a structure.
     void draw_varpro_subset(int draw) {
         varpro_subset.assign(structures.size(), false);
         int local = 0, total = 0;
@@ -205,7 +207,7 @@ class Fit {
             throw std::runtime_error("varpro_fraction " + std::to_string(options.varpro_fraction) + " draws no structure");
     }
 
-    // Hands the potential at coeffs to checkpoint, on the rank given one.
+    // Sets the potential to coeffs and calls checkpoint, if this rank has one.
     void save_checkpoint() {
         if (!checkpoint) return;
         potential.set_coeffs(coeffs.data());
@@ -221,9 +223,9 @@ class Fit {
     std::ostream* log;
     std::function<void()> checkpoint;
 
-    std::vector<double> coeffs;           // what potential holds, in its coefficient order
-    StepColumns columns;                  // the optional columns of the current phase's step lines
-    double loss_terms[3] = {};            // the energy, force and stress terms of the last loss_grad on this rank
+    std::vector<double> coeffs;           // current coefficients, in the order of get_coeffs
+    StepColumns columns;
+    double loss_terms[3] = {};            // energy, force and stress terms of the last loss_grad on this rank
     std::vector<double> dloss_dforces;    // per-structure scratch
-    std::vector<bool> varpro_subset;      // varpro_fraction: whether each of this rank's structures is in the draw
+    std::vector<bool> varpro_subset;      // [structures.size()] whether each structure of this rank is in the draw
 };

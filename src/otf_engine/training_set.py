@@ -1,4 +1,4 @@
-"""Reading and appending a training set file, .cfg or extxyz."""
+"""Read a training set file, .cfg or extxyz, and append structures to it."""
 
 import ase.io.extxyz
 

@@ -1,14 +1,13 @@
-"""Source wrapper for the compiled extension shared by the MTP and the ETN.
+"""Load the compiled extension that the MTP and the ETN share.
 
-The binary implementation lives in otf_engine._core._core_ext, which _mtp_ext
-and _etn_ext import for Pair and NeighList.
+otf_engine._core._core_ext holds the classes. _mtp_ext and _etn_ext import Pair and NeighList from it.
 
-    NeighList      the neighbor list a Pair's compute takes
-    Pair           the base of PairMTP and PairETN: coefficients, gradients, accessors
-    FitStructure   a structure to fit, which fit_structure.py builds from an ASE structure
-    error_table    a potential's errors on structures, as fit_mtp and fit_etn log them
-    Equations      the MaxVol equations of structures, from an MTP's or ETN's gradients
-    MaxVol         an active set, graded against and searched
+    NeighList      neighbor list that Pair.compute takes
+    Pair           base class of PairMTP and PairETN: coefficients, gradients, accessors
+    FitStructure   structure to fit, built from an ASE structure in fit_structure.py
+    error_table    errors of a potential on structures, as fit_mtp and fit_etn log them
+    Equations      MaxVol equations of structures, from the gradients of an MTP or ETN
+    MaxVol         active set, to grade against and to search
 """
 
 from importlib import import_module as _import_module

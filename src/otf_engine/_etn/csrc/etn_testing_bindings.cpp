@@ -1,7 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   The _etn_testing module: an ETN fit with the loss of each of its
-   evaluations, and its objective, for the tests. The package never
-   imports it.
+   The _etn_testing module: an ETN fit with the loss at each evaluation,
+   and the fit objective. The package never imports it.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
@@ -17,7 +16,7 @@ static py::tuple fit_etn_steps(const std::string& filename, py::iterable structu
     return py::make_tuple(potential, step_losses);
 }
 
-// An ETNFit on one thread, whose objective the tests evaluate at any coefficients; the ridge stays the first call's.
+// Evaluates the objective of an ETNFit on one thread at given coefficients. The ridge stays that of the first call.
 class ETNObjective {
   public:
     ETNObjective(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options) : potential(filename), process("ETNObjective", 1, py::none()) {
@@ -39,15 +38,18 @@ class ETNObjective {
 };
 
 PYBIND11_MODULE(_etn_testing, m) {
-    m.doc() = "An ETN fit with its losses, and its objective, for the tests.";
+    m.doc() = "ETN fit with its losses, and its objective, for the tests.";
     py::module_::import("otf_engine._etn._etn_ext");    // registers ETN and FitStructure
 
     m.def("fit_etn_steps", &fit_etn_steps, py::arg("filename"), py::arg("structures"), py::arg("options"), py::arg("ranks") = 1, py::arg("comm") = py::none(), R"doc(
-fit_etn's fit, returning the trained potential and, on rank 0, the loss at each evaluation of each step, a list per
-step over every phase of the fit; other ranks get no steps.
+Run the fit of fit_etn and return the trained potential with the losses of its steps.
+
+Returns:
+    (potential, step_losses). On rank 0, step_losses holds one list per step over all phases
+    of the fit, with the loss at each evaluation. On the other ranks it is empty.
 )doc");
 
-    py::class_<ETNObjective>(m, "ETNObjective", "ETNFit's objective on one thread over the structures, called at coefficients for (loss, gradient).")
+    py::class_<ETNObjective>(m, "ETNObjective", "Objective of ETNFit on one thread over the structures; a call at coefficients returns (loss, gradient).")
         .def(py::init<const std::string&, py::iterable, const std::map<std::string, std::string>&>(), py::arg("filename"), py::arg("structures"), py::arg("options"))
         .def("__call__", &ETNObjective::operator(), py::arg("coeffs"));
 }

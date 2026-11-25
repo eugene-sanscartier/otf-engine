@@ -100,7 +100,7 @@ void ETNFit::run() {
     }
     if (options.init_species && !potential.is_trained()) fit_species_energies();
 
-    // mlip-4's pre-training keeps tolerance and rescale, and takes the other settings' defaults
+    // The pre-training keeps tolerance and rescale, and takes the defaults of the other options
     if (!options.skip_preinit) {
         log_event(log, "phase", "pre-training, iteration_limit 75");
         ETNFitOptions pretraining;
@@ -122,9 +122,9 @@ void ETNFit::run() {
 }
 
 /* ----------------------------------------------------------------------
-   mlip-4's Train: rank 0 steps BFGS on the loss and gradient reduced onto
-   it, and broadcasts the coefficients with the step count and the stop and
-   rescale flags at the top of every loop.
+   Rank 0 steps BFGS on the loss and gradient reduced onto it. At the top
+   of each loop, it broadcasts the coefficients with the step count and the
+   stop and rescale flags.
 ------------------------------------------------------------------------- */
 void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
     const auto start = std::chrono::steady_clock::now();
@@ -153,17 +153,17 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
     int num_func_eval = 0;
     double linf = 9e99;
     double bfgs_f = 0.0, bfgs_terms[3] = {};
-    double kept_f = 0.0, kept_terms[3] = {};    // the loss at the point BFGS keeps, which a stalled step returns to
+    double kept_f = 0.0, kept_terms[3] = {};    // the loss at the point that BFGS keeps, where a stalled step returns
     const char* inv_hess = "";                  // what the fit set the inverse Hessian to before the next step
     bool attempted_rescale = false;
     bool is_new_step = true;
     int convergence_check_delay = 0;
     const bool rescales = o.rescale && !options.varpro;
-    // varpro_redraw_every: the main fit's draw at each step, the last one kept over the last 20% of its steps
+    // varpro_redraw_every: the draw at each step of the main fit; the last draw holds over the last 20% of its steps
     const int redraw_every = &o == &options && options.varpro && options.varpro_fraction < 1.0 ? options.varpro_redraw_every : 0;
     auto varpro_draw_at = [&](int step) { return redraw_every > 0 ? std::min(step, (int) std::ceil(0.8 * o.iteration_limit) - 1) / redraw_every : 0; };
     int varpro_drawn = 0;
-    if (rank == 0) rescale_flag = num_iter == 0;    // ETN::rescale_this_iter
+    if (rank == 0) rescale_flag = num_iter == 0;
 
     while (true) {
         comm.bcast(shared.data(), 3 + n, 0);
@@ -201,8 +201,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
         if (rank != 0) continue;
 
         const double inv_cfg_count = 1.0 / structure_count;
-        // Under varpro BFGS minimises the loss plus the ridge, whose minimum over the linear coefficients
-        // solve_linear finds, so that the gradient without their part is the reduced loss's
+        // Under varpro, BFGS minimises the loss plus the ridge, whose minimum over the linear coefficients solve_linear finds
         double ridge_term = 0.0;
         for (int a = 0; a < (int) linear.size(); a++) ridge_term += ridge[a] * coeffs[linear[a]] * coeffs[linear[a]];
         bfgs_f = (total[0] + ridge_term) * inv_cfg_count;
@@ -214,7 +213,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             std::copy(bfgs_terms, bfgs_terms + 3, kept_terms);
         }
 
-        // Under varpro, which does not rescale, the first step moves the other coefficients by 1% of their norm
+        // Under varpro, the first step moves the nonlinear coefficients by 1% of their norm
         if (options.varpro && num_func_eval == 1) {
             double x_norm = 0.0, g_norm = 0.0;
             for (int i = 0; i < n; i++)
@@ -237,7 +236,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
         }
 
         if (!bfgs.in_linesearch() && !break_flag) {
-            if (num_iter == 0) log_step_header({false, false, true});    // after the first step's rescaling
+            if (num_iter == 0) log_step_header({false, false, true});    // after the rescaling of the first step
             if (bfgs.alpha() != 0.0) {
                 kept_f = bfgs_f;
                 std::copy(bfgs_terms, bfgs_terms + 3, kept_terms);
@@ -254,8 +253,8 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
                 convergence_check_delay = std::max(convergence_check_delay, 300);
             }
 
-            // A new varpro draw restarts BFGS's line search from this point, under the new loss; otherwise a normal
-            // step unless this step rescales
+            // A new varpro draw restarts the BFGS line search from this point on the new loss.
+            // Otherwise BFGS takes a normal step, unless this step rescales.
             if (varpro_draw_at((int) num_iter) != varpro_draw_at((int) num_iter - 1))
                 bfgs.set_x(bfgs.x().data(), n);
             else if (!rescales || !rescale_flag)
@@ -277,7 +276,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
                 break_flag = 1;
                 log_event(log, "stop", "iteration_limit %d", o.iteration_limit);
             }
-            // Checked only between line searches, as mlip-4 checks it
+            // Checked only between line searches
             if (num_func_eval > o.max_func_eval && !break_flag) {
                 break_flag = 1;
                 log_event(log, "stop", "max_func_eval %d", o.max_func_eval);
@@ -286,7 +285,7 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
             save_checkpoint();
         }
 
-        // The step that met a stopping rule is dropped
+        // The fit drops the step that met a stopping rule
         if (!break_flag) std::copy(bfgs.x().begin(), bfgs.x().end(), shared.begin() + 3);
     }
     if (options.varpro) solve_linear();
@@ -294,9 +293,9 @@ void ETNFit::fit_nonlinear(const ETNFitOptions& o) {
 }
 
 /* ----------------------------------------------------------------------
-   ETN::Rescale: from alpha = 0, mlip-4's line search along the coefficients
-   x0 as they are, its sign chosen to descend, on the loss summed over the
-   structures, for at most 20 trials or until alpha moves by under 1e-5.
+   Runs WolfeLineSearch from alpha = 0 along the coefficients x0, with the
+   sign that descends, on the loss summed over the structures. The search
+   stops after 20 trials or when alpha moves by less than 1e-5.
 ------------------------------------------------------------------------- */
 void ETNFit::rescale() {
     const int n = (int) coeffs.size();
@@ -346,18 +345,18 @@ void ETNFit::rescale() {
 }
 
 /* ----------------------------------------------------------------------
-   mlip-4's LossCfg over this rank's structures: the weighted squared
-   residuals of the energy, the virial (xx, yy, zz, yz, xz, xy, the last
-   three doubled) and the forces, in that order, and their gradient.
+   Sums over the structures of this rank the weighted squared residuals of
+   the energy, the virial (xx, yy, zz, yz, xz, xy, the last three doubled)
+   and the forces, in that order, and their gradient.
 ------------------------------------------------------------------------- */
 double ETNFit::loss_grad(std::vector<double>& grad) {
-    static constexpr int STRESS_ORDER[6] = {0, 1, 2, 5, 4, 3};    // mlip-4's stress order, as virial indices
+    static constexpr int STRESS_ORDER[6] = {0, 1, 2, 5, 4, 3};    // xx yy zz yz xz xy, as virial indices
     potential.set_coeffs(coeffs.data());
     std::fill(grad.begin(), grad.end(), 0.0);
     std::fill(loss_terms, loss_terms + 3, 0.0);
     double loss = 0.0;
 
-    // varpro's last solve kept each structure's columns at these coefficients but the linear ones: the outputs are their product with them
+    // If the last varpro solve built the columns at these coefficients, linear ones aside, the outputs are the columns times the linear coefficients
     std::vector<int> linear;
     bool from_rows = false;
     if (!linear_rows_at.empty() && linear_rows.size() == structures.size()) {
@@ -427,11 +426,12 @@ double ETNFit::loss_grad(std::vector<double>& grad) {
 }
 
 /* ----------------------------------------------------------------------
-   Under varpro_fraction, x(theta) minimizes the fraction's loss and the
-   loss takes every structure, so dL/dx is not zero: its path through the
-   solve is -d/dtheta of sum w (J x - y) . J mu over the fraction, at fixed
-   x and mu = A^-1 dL/dx, with w the solve's weights. Each structure's rows
-   give J x - y and J mu, and eval_loss_grad the derivative of each factor.
+   Under varpro_fraction, x(theta) minimizes the loss over the fraction,
+   while the loss sums over all structures: dL/dx is nonzero. The path of
+   the gradient through the solve is -d/dtheta of sum w (J x - y) . J mu
+   over the fraction, at fixed x and mu = A^-1 dL/dx, where w are the
+   weights of the solve. The rows of each structure give J x - y and J mu,
+   and eval_loss_grad gives the derivative of each factor.
 ------------------------------------------------------------------------- */
 double ETNFit::reduced_loss_grad(std::vector<double>& grad) {
     const bool subset = options.varpro && options.varpro_fraction < 1.0;
@@ -554,7 +554,7 @@ void ETNFit::solve_linear(bool subset) {
     potential.set_coeffs(coeffs.data());
 
     std::vector<double> local(m * m + m, 0.0), total(m * m + m);    // [J^T W J | J^T W y]
-    // the columns are kept for loss_grad, at the coefficients they were built at
+    // Keeps the columns for loss_grad, with the coefficients they were built at
     linear_rows.assign(structures.size(), {});
     linear_rows_at = coeffs;
     for (int k : columns) linear_rows_at[k] = 0.0;
@@ -564,7 +564,7 @@ void ETNFit::solve_linear(bool subset) {
         if (subset && !varpro_subset[index]) continue;
         const NeighList list = s.list();
         const int n3 = list.n_atoms * 3;
-        // rows: energy, virial (6), forces (n3), each column's outputs at a unit coefficient, from one eval_grad
+        // rows: outputs of each column at a unit coefficient, energy, virial (6) and forces (n3), from one eval_grad
         std::vector<double> rows((size_t) m * (7 + n3), 0.0);
         site_energy_grad.resize((size_t) list.inum * width);
         force_grad.resize((size_t) n3 * width);

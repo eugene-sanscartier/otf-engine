@@ -13,8 +13,8 @@
 #include <set>
 #include <vector>
 
-// A basis function: a vector of n radial indices and an n x n symmetric contraction matrix,
-// whose diagonal entry is a moment's tensor rank and off-diagonal entry the indices two moments share.
+// A basis function: n radial indices and an n x n symmetric contraction matrix.
+// Diagonal entry (i, i) is the tensor rank of moment i. Entry (i, j) is the number of indices moments i and j contract.
 class MTP_Basis_Function {
   public:
     MTP_Basis_Function() = default;
@@ -30,9 +30,9 @@ class MTP_Basis_Function {
     int& operator()(int i, int j) { return elem_[size_ + size_ * i + j]; }
     int operator()(int i, int j) const { return elem_[size_ + size_ * i + j]; }
 
-    // Permutes the moments to the canonical order, the least under operator<, and returns the permutation.
+    // Permutes the moments into canonical order, the least under operator<, and returns the permutation.
     std::vector<int> Canonize();
-    // The tensor rank: the sum of the diagonal minus the off-diagonal entries.
+    // Returns the tensor rank, the sum of the diagonal entries minus the off-diagonal ones.
     int Dimension() const;
 
   protected:
@@ -43,7 +43,7 @@ class MTP_Basis_Function {
     std::vector<int> elem_;
 };
 
-// A basis function with the split into two that computes it, and the elements of its tensor.
+// A basis function with its split into two sub-functions and the elements of its tensor.
 class MTP_Basis_Function_Ext : public MTP_Basis_Function {
   public:
     MTP_Basis_Function_Ext(const MTP_Basis_Function& b) : MTP_Basis_Function(b) {}
@@ -52,7 +52,7 @@ class MTP_Basis_Function_Ext : public MTP_Basis_Function {
 
     // Chooses the split with the fewest operations, preferring sub-functions already in basis_functions.
     int BestOps(const std::set<MTP_Basis_Function_Ext>& basis_functions) const;
-    // The two sub-functions of subset, canonized, with perm mapping their moments back.
+    // Builds the two canonized sub-functions of subset and sets perm, which maps their moments back.
     void ConstructSubBasisFunctions(MTP_Basis_Function sub_basis_function[2]) const;
 
     mutable std::vector<int> subset;       // 0 or 1 for each moment
@@ -64,10 +64,10 @@ class MTP_Basis_Function_Ext : public MTP_Basis_Function {
     mutable std::vector<int> element_inds;  // [3^Dimension()] element of each tensor component
 };
 
-// The moments and contractions of a set of scalar basis functions, in PairMTP's form.
+// Moments and contractions of a set of scalar basis functions, in the form of the PairMTP members.
 class MTP_Basis {
   public:
-    // functions: each an MTP_Basis_Function's entries, a scalar whose every index is contracted.
+    // functions: the entries of each MTP_Basis_Function, a scalar with every index contracted.
     explicit MTP_Basis(const std::vector<std::vector<int>>& functions);
 
     int radial_function_count() const { return radial_function_count_; }
@@ -87,5 +87,5 @@ class MTP_Basis {
     std::map<std::array<int, 4>, int> moment_to_id;
 };
 
-// The basis functions of an MTP level, 6 to 28, from mlip-4's mtp_levels.h.
+// Returns the basis functions of an MTP level, 6 to 28.
 std::vector<std::vector<int>> level_basis_functions(int level);

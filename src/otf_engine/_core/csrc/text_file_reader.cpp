@@ -1,7 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Line reader for MTP potential files.
-   Stands in for LAMMPS TextFileReader + ValueTokenizer, which the reference
-   uses to parse the same format.
+   Line reader for the MTP and ETN potential files.
 ------------------------------------------------------------------------- */
 
 #include "text_file_reader.h"
@@ -70,6 +68,6 @@ double TextFileReader::next_double(const std::string& keyword) {
 std::string TextFileReader::next_string(const std::string& keyword) {
     expect(keyword);
     std::string value;
-    rest() >> value; // optional fields may be empty
+    rest() >> value; // empty when the line has no value
     return value;
 }

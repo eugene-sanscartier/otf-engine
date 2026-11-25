@@ -1,19 +1,18 @@
-"""Source wrapper for the compiled ETN extension.
+"""Load the compiled ETN extension.
 
-The binary implementation lives in otf_engine._etn._etn_ext, whose classes derive
-from _core_ext's Pair.
+otf_engine._etn._etn_ext holds the classes, which derive from the Pair of _core_ext.
 
-    PairETN          energy, forces, virial (a Pair)
+    PairETN               energy, forces, virial (a Pair)
     PairETNExtrapolation  + extrapolation grades against an active set (a PairETN)
-    ETN              + each atom's input and bond vectors, and derivatives of site energies
-                       and of a loss w.r.t. the coefficients
-    fit_etn          fits an ETN with ETNFit
-    real_harmonics   the real spherical harmonics the input vector is built on
-    wigner_3j        3-j symbols of complex harmonics
-    real_wigner_3j   3-j symbols of real harmonics, which the cores carry
+    ETN                   + input and bond vectors of each atom, derivatives of the site
+                            energies and of a loss w.r.t. the coefficients
+    fit_etn               fit an ETN with ETNFit
+    real_harmonics        real spherical harmonics that build the input vector
+    wigner_3j             3-j symbols of complex harmonics
+    real_wigner_3j        3-j symbols of real harmonics, which the cores carry
 
-PairETN and ETN load an .etn file or build the untrained ETN of a shape given by the file's fields.
-PairETN carries what the training calls for every ETN: write and fit (fit_etn).
+PairETN and ETN load an .etn file, or build an untrained ETN from the fields of the file.
+PairETN carries the write and fit (fit_etn) methods that the training calls.
 """
 
 from importlib import import_module as _import_module
@@ -30,7 +29,7 @@ real_harmonics = _ext.real_harmonics
 wigner_3j = _ext.wigner_3j
 real_wigner_3j = _ext.real_wigner_3j
 
-PairETN.write = write_etn                                  # potential.write(path)
+PairETN.write = write_etn
 PairETN.fit = staticmethod(fit_etn)
 
 __all__ = ["PairETN", "PairETNExtrapolation", "ETN", "fit_etn", "real_harmonics", "wigner_3j", "real_wigner_3j"]

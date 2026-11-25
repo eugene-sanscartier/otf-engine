@@ -1,9 +1,8 @@
-"""Cycle directory management for otf-engine runs.
+"""Create and archive the cycle directories of otf-engine runs.
 
-Each OTF cycle archives its inputs, outputs, and consumed dump
-files into ./otf_cycles/cycle_N/, where N is the current highest cycle index,
-writes its log to ./otf_cycles/cycle_N/otf.log, and records the outcome in
-./otf_cycles/cycle_N/status.
+Each OTF cycle has the directory ./otf_cycles/cycle_N/, N one above the highest
+existing index. The cycle writes its log to otf.log there, archives its inputs,
+outputs and consumed dump files there, and records its outcome in the file status.
 """
 from __future__ import annotations
 
@@ -29,13 +28,13 @@ def _cycle_indices(base_dir: Path = CYCLE_BASE) -> list[int]:
 
 
 def _last_cycle_number(base_dir: Path = CYCLE_BASE) -> int:
-    """Return the highest cycle index found under *base_dir*, or -1 if none exist."""
+    """Return the highest cycle index under *base_dir*, or -1 if there is none."""
     indices = _cycle_indices(base_dir)
     return max(indices) if indices else -1
 
 
 def last_successful_cycle_dir(base_dir: Path = CYCLE_BASE) -> Path | None:
-    """Return the highest-numbered cycle directory that completed successfully, or None."""
+    """Return the highest-numbered cycle directory whose status is ok, or None."""
     for index in sorted(_cycle_indices(base_dir), reverse=True):
         cycle_dir = base_dir / f"{CYCLE_PREFIX}{index}"
         status = cycle_dir / STATUS_FILE
@@ -51,17 +50,15 @@ def next_cycle_dir(base_dir: Path = CYCLE_BASE) -> Path:
 
 
 def archive_cycle(cycle_dir: Path, potential_path: str, training_set_path: str, dump_files: list[str], ok: bool) -> None:
-    """Archive one OTF cycle's artifacts into *cycle_dir* and record whether the cycle succeeded.
+    """Archive the files of one OTF cycle into *cycle_dir* and record whether the cycle succeeded.
 
-    - Creates *cycle_dir*.
-    - Copies *potential_path* and *training_set_path* as snapshots (input and post-run state).
-    - Moves _CYCLE_ARTIFACTS_MOVE from cwd into *cycle_dir* (if they exist).
-    - Copies _CYCLE_ARTIFACTS_COPY from cwd into *cycle_dir* (if they exist).
-    - Copies each file in *dump_files* into *cycle_dir* and truncates the
-      original in place so long-lived LAMMPS dump handles keep writing to the
-      same pathname; entries that are not files are skipped.
-    - Writes STATUS_FILE last, so a cycle interrupted before or during archiving
-      leaves none and is never mistaken for a completed one.
+    - Create *cycle_dir*.
+    - Copy *potential_path* and *training_set_path*.
+    - Move the files of _CYCLE_ARTIFACTS_MOVE that exist from the working directory into *cycle_dir*.
+    - Copy the files of _CYCLE_ARTIFACTS_COPY that exist from the working directory into *cycle_dir*.
+    - Copy each file of *dump_files* into *cycle_dir* and truncate the original in place.
+      Skip the entries that are not files.
+    - Write STATUS_FILE last.
     """
     cycle_dir.mkdir(parents=True, exist_ok=True)
 

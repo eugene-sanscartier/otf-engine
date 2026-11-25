@@ -1,4 +1,4 @@
-"""Execution backends for otf-engine: mpirun (nested), fork (direct), and slurm (sbatch --wait)."""
+"""Execution backends of otf-engine: mpirun (nested), fork (direct) and Slurm (sbatch --wait)."""
 from __future__ import annotations
 
 import logging
@@ -20,35 +20,31 @@ logger = logging.getLogger(__name__)
 
 
 class JobTimedOut(subprocess.CalledProcessError):
-    """Raised by SlurmLauncher when sbatch exits non-zero due to a Slurm TIME LIMIT.
+    """Error that SlurmLauncher raises when sbatch exits non-zero after a Slurm time limit.
 
-    time_limit_s : the limit the job was submitted with, set by call_evaluator
+    Attributes:
+        time_limit_s: Limit that the job was submitted with, set by call_evaluator.
     """
 
     time_limit_s: float | None = None
 
 
 class JobOutOfMemory(subprocess.CalledProcessError):
-    """Raised by SlurmLauncher when a job was OOM-killed and a larger ``--mem`` can still be requested."""
+    """Error that SlurmLauncher raises when a job was OOM-killed and it can still request a larger ``--mem``."""
 
 # ---------------------------------------------------------------------------
 # Environment utilities
 # ---------------------------------------------------------------------------
 
-# Variables that prevent nested mpirun from working (parent's MPI job leaks in).
-# These three are the set is known to work on a coumpute canada cluster with OpenMPI.
+# Variables of the parent MPI job that break a nested mpirun under OpenMPI.
 _MPIRUN_DELETE_VARS = frozenset({
     "OMPI_MCA_ess",
     "OMPI_MCA_ess_base_jobid",
     "OMPI_UNIVERSE_SIZE",
 })
 
-# Additional variables removed for fork mode (no mpirun wrapper).
-# Job/session identity vars and parent rank vars are deleted so the child
-# starts fresh without inheriting a stale rank or trying to rejoin the
-# parent's MPI session.  Transport config vars (OMPI_MCA_btl, etc.) are
-# intentionally kept.  This list is empirical — extend it when testing
-# reveals additional problematic variables for your MPI implementation.
+# Variables removed in fork mode: the job, session and rank of the parent MPI process.
+# The transport settings (OMPI_MCA_btl, ...) stay.
 _FORK_REMOVE_VARS = frozenset({
     # Job / session identity
     "OMPI_MCA_ess",
@@ -57,7 +53,7 @@ _FORK_REMOVE_VARS = frozenset({
     "SLURM_PROCID",
     "SLURM_LOCALID",
     "SLURM_STEPID",
-    # Rank vars — child must not inherit parent's rank
+    # Rank of the parent process
     "OMPI_COMM_WORLD_RANK",
     "OMPI_COMM_WORLD_LOCAL_RANK",
     "OMPI_COMM_WORLD_NODE_RANK",
@@ -67,16 +63,16 @@ _FORK_REMOVE_VARS = frozenset({
 
 
 def _env_for_nested(env: dict) -> dict:
-    """Return env with nested-mpirun-breaking variables removed."""
+    """Return *env* without the variables that break a nested mpirun."""
     return {k: v for k, v in env.items() if k not in _MPIRUN_DELETE_VARS}
 
 
 def _env_for_fork(size: int, env: dict) -> dict:
-    """Return env for a forked process in a fresh MPI universe of *size* peers.
+    """Return the environment of a forked process in a new MPI universe of *size* peers.
 
-    Removes parent MPI context and rank assignment, then sets universe-size
-    variables.  The MPI rank is NOT set — the library determines it via its
-    rendezvous mechanism (shared memory files, PMI, etc.).
+    The function removes the MPI context and rank of the parent, then sets the
+    universe size. The MPI library assigns the rank at rendezvous (shared memory
+    files, PMI, ...).
     """
     base = {k: v for k, v in env.items() if k not in _FORK_REMOVE_VARS}
     base["OMPI_UNIVERSE_SIZE"] = str(size)
@@ -86,24 +82,18 @@ def _env_for_fork(size: int, env: dict) -> dict:
     return base
 
 
-# A new job must not inherit variables tied to an instance of the submitter
-# (its job, srun step, mpirun launch, rank or process); it must keep those
-# describing the compute environment (cluster, Slurm config, modules, user
-# settings).  sbatch cannot do this itself: SLURM_* are propagated under
-# every --export mode, and NONE/NIL also drop the loaded modules.
+# A new Slurm job drops the variables of one instance of the submitter (its job, srun
+# step, mpirun launch, rank or process). It keeps those of the compute environment
+# (cluster, Slurm config, modules, user settings).
 
 _SBATCH_REMOVE_VAR_PREFIXES = (
-    # Launch / rank scope.  PMIx and PMI: connection to one server and this process's
-    # identity in it.  Open MPI: world/universe layout and launch markers.
+    # Launch and rank scope: the PMIx and PMI server connection and process identity,
+    # the Open MPI world layout and launch markers.
     "PMIX_", "PMI_", "OMPI_COMM_WORLD_", "OMPI_WORLD_",
-    # OMPI_MCA_* is a config namespace (btl, pml, plm_slurm_args ... are kept), but the
-    # launcher also passes per-launch runtime state through it: daemon URIs, session
-    # dirs, per-job transport key, jobid/vpid, size, cwd, binding state.
+    # Per-launch runtime state in OMPI_MCA_*: daemon URIs, session dirs, transport key,
+    # jobid/vpid, size, cwd, binding state. The settings (btl, pml, plm_slurm_args, ...) stay.
     "OMPI_MCA_orte_", "OMPI_MCA_ess", "OMPI_MCA_prte_",
-    # Job and step scope: everything Slurm sets for one allocation or srun step.  A new
-    # job gets fresh values for what applies to it, but leftovers are never unset and
-    # srun reads them as input (e.g. MEM_PER_CPU next to MEM_PER_NODE is fatal,
-    # CPU_BIND masks of another step make task launch fail).
+    # Job and step scope: the variables that Slurm sets for one allocation or srun step.
     "SLURM_", "SLURMD_", "SRUN_DEBUG",
 )
 _SBATCH_REMOVE_VARS = frozenset({
@@ -113,16 +103,16 @@ _SBATCH_REMOVE_VARS = frozenset({
     "OMPI_MCA_pmix", "OMPI_MCA_num_procs", "OMPI_MCA_initial_wdir", "OMPI_MCA_mpi_oversubscribe",
     "OMPI_MCA_hwloc_base_binding_policy", "OMPI_MCA_cpu_type", "OMPI_MCA_shmem_RUNTIME_QUERY_hint",
     "OMPI_MCA_PREFIXES",
-    # Process scope: defaults MPI_Init sets for each process; every new process derives them again.
+    # Process scope: defaults that MPI_Init sets for each process.
     "PSM2_DEVICES", "HFI_NO_BACKTRACE", "IPATH_NO_BACKTRACE", "ZES_ENABLE_SYSMAN", "HOSTNAME",
     "LOCAL_SCRATCH", "XDG_RUNTIME_DIR", "ENVIRONMENT",
 })
-# Cluster properties living in the SLURM_ namespace.
+# Cluster properties in the SLURM_ namespace, which stay.
 _SLURM_ENVIRONMENT_NAMES = frozenset({"SLURM_MPI_TYPE", "SLURM_CONF"})
 
 
 def _env_for_sbatch(env: dict) -> dict:
-    """Return env for a new Slurm job: the submitter's env without its job/step/launch/rank/process state."""
+    """Return the environment of a new Slurm job: *env* without the job, step, launch, rank and process state of the submitter."""
     return {k: v for k, v in env.items() if k in _SLURM_ENVIRONMENT_NAMES or not (k.startswith(_SBATCH_REMOVE_VAR_PREFIXES) or k in _SBATCH_REMOVE_VARS)}
 
 
@@ -132,7 +122,7 @@ def _physical_cpu_count() -> int:
 
 
 def _default_n_procs() -> int:
-    """Best-effort process count: Slurm allocation first, then physical CPU cores."""
+    """Return the task count of the Slurm allocation, else the physical core count."""
     for var in ("SLURM_NTASKS", "SLURM_NPROCS"):
         val = os.environ.get(var)
         if val:
@@ -148,7 +138,7 @@ def _join(parts: list[str]) -> str:
     return " ".join(parts)
 
 
-# Used to strip task/node parallelism options from batch_args for a single_rank slurm job.
+# Parses the task and node options to strip from batch_args for a single_rank Slurm job.
 _sbatch_parser = argparse.ArgumentParser(add_help=False)
 _sbatch_parser.add_argument("--ntasks", "-n")
 _sbatch_parser.add_argument("--ntasks-per-node")
@@ -170,7 +160,7 @@ def _seconds_to_hms(s: float) -> str:
 
 
 def _hms_to_seconds(t: str) -> float | None:
-    """Parse a Slurm time string (M, M:S, H:M:S, D-H, D-H:M, D-H:M:S) into seconds; None for any other."""
+    """Parse a Slurm time string (M, M:S, H:M:S, D-H, D-H:M, D-H:M:S) into seconds, or None for any other form."""
     try:
         days, _, clock = t.strip().rpartition("-")
         parts = [int(p) for p in clock.split(":")]
@@ -207,7 +197,7 @@ def _is_slurm_timeout(log_path) -> bool:
 
 _MEM_UNITS = {"K": 1.0 / 1024.0, "M": 1.0, "G": 1024.0, "T": 1024.0 ** 2}
 
-# --mem-per-cpu is parsed only to be stripped: sbatch rejects it alongside --mem.
+# Parses --mem, and --mem-per-cpu to strip it where --mem is set.
 _smem_parser = argparse.ArgumentParser(add_help=False)
 _smem_parser.add_argument("--mem")
 _smem_parser.add_argument("--mem-per-cpu")
@@ -228,9 +218,7 @@ def _mem_to_mb(s: str) -> float | None:
 def _parse_mem_to_mb(batch_args: str) -> float | None:
     """Parse the ``--mem`` ceiling out of sbatch arguments, in MB.
 
-    ``--mem=0`` requests all memory on the node and is therefore no ceiling.
-    ``--mem-per-cpu`` sets no ceiling: it cannot be converted without knowing
-    the job's CPU count.
+    ``--mem=0``, all the memory of the node, sets no ceiling, and neither does ``--mem-per-cpu``.
     """
     parsed, _ = _smem_parser.parse_known_args(shlex.split(batch_args))
 
@@ -251,15 +239,12 @@ def _is_slurm_oom(log_path) -> bool:
 
 
 def _sacct_job(job_id: str) -> tuple[bool, float | None]:
-    """Query sacct for *job_id*: whether any step was killed OUT_OF_MEMORY, and its peak memory in MB.
+    """Query sacct for *job_id*: whether a step was killed OUT_OF_MEMORY, and the peak memory in MB.
 
-    Plain per-step MaxRSS badly undercounts jobs launched via mpirun inside
-    --wrap (its child processes aren't reflected there); TRESUsageInTot is the
-    cgroup-aggregated total memory for the step — the same source seff uses.
-    --parsable avoids sacct's column-width truncation of these fields.
-
-    Accounting can lag the completion of ``sbatch --wait``, in which case the
-    state and the usage are both reported as unknown.
+    The peak is TRESUsageInTot, the cgroup total of each step, which counts the
+    child processes of an mpirun inside --wrap. --parsable keeps the fields
+    untruncated. When the accounting lags behind ``sbatch --wait``, the state
+    and the usage come back unknown.
     """
     try:
         out = subprocess.run(["sacct", "-j", job_id, "--format=State,TRESUsageInTot", "--noheader", "--parsable"], capture_output=True, text=True, check=True).stdout
@@ -295,7 +280,7 @@ class TimingState:
 
     @classmethod
     def load(cls, data: dict, initial_time_s: float | None = None, on_record=None) -> TimingState:
-        """Load the observations in *data*; cycle_times() covers only what the new instance records."""
+        """Load the observations in *data*. cycle_times() covers only what the new instance records."""
         return cls({kind: data[kind] for kind in ("eval", "train") if kind in data}, initial_time_s=initial_time_s, on_record=on_record)
 
     @synchronized
@@ -347,7 +332,7 @@ class TimingState:
 
     @synchronized
     def cycle_times(self) -> dict:
-        """The longest evaluation and the last training recorded since loading, with the limits they were given."""
+        """Return the longest evaluation and the last training recorded since loading, with the limits they were given."""
         return {"eval_time_s": None, "eval_time_alloc_s": None, "train_time_s": None, "train_time_alloc_s": None, **self._last_eval, **self._last_train}
 
     def _compute_estimates(self):
@@ -381,16 +366,12 @@ class TimingState:
 
 
 class MemoryState:
-    """Thread-safe store of the peak memory (MB) seen so far per job *kind* ("eval", "train").
+    """Thread-safe store of the peak memory in MB seen so far per job *kind* ("eval", "train").
 
-    Estimates are just ``max_seen * safety`` — no windowing, no regression —
-    capped at ``ceiling_mb``.  Before any observation the estimate is
-    ``ceiling_mb`` itself, so a job is only ever submitted without ``--mem``
-    when neither an observation nor a ceiling exists.  Used by SlurmLauncher to
-    size ``--mem`` for future job submissions.
-
-    Unlike TimingState, whose estimates are means and can fall, max_seen only
-    ever rises — hence the ceiling.
+    The estimate is ``max_seen * safety``, capped at ``ceiling_mb``. Before any
+    observation the estimate is ``ceiling_mb`` itself, so a job goes without
+    ``--mem`` only when there is neither an observation nor a ceiling.
+    SlurmLauncher uses the estimate to size ``--mem`` of the next jobs.
     """
 
     safety = 1.5
@@ -433,9 +414,8 @@ class MemoryState:
 class Launcher(ABC):
     """Abstract execution backend.
 
-    Subclasses implement ``_run_impl()`` and optionally ``_child_env()`` and ``_run_evaluator()``.
-    The public ``run()`` and ``call_evaluator()`` are concrete template methods that
-    handle timing instrumentation via an optional ``TimingState``.
+    Subclasses implement ``_run_impl()``, and optionally ``_child_env()`` and ``_run_evaluator()``.
+    ``run()`` and ``call_evaluator()`` time the jobs through an optional ``TimingState``.
     """
 
     timing: TimingState | None = None
@@ -443,7 +423,7 @@ class Launcher(ABC):
     max_retries: int = 0
 
     def configure_timing(self, state: dict, save_state_fn) -> None:
-        """Load timing from *state* and wire auto-save so timeouts are always persisted."""
+        """Load the timing from *state*, and save *state* through *save_state_fn* after each record."""
 
         def _on_record(timing_dict):
             state["timing"] = timing_dict
@@ -452,7 +432,10 @@ class Launcher(ABC):
         self.timing = TimingState.load(state.get("timing", {}), initial_time_s=getattr(self, "_initial_time_s", None), on_record=_on_record)
 
     def configure_memory(self, state: dict, save_state_fn) -> None:
-        """Load memory usage from *state* and wire auto-save. Only acted on by SlurmLauncher."""
+        """Load the memory usage from *state*, and save *state* through *save_state_fn* after each record.
+
+        Only SlurmLauncher uses the memory usage.
+        """
 
         def _on_record(memory_dict):
             state["memory"] = memory_dict
@@ -461,14 +444,13 @@ class Launcher(ABC):
         self.memory = MemoryState.load(state.get("memory", {}), ceiling_mb=getattr(self, "_mem_ceiling_mb", None), on_record=_on_record)
 
     def run(self, command: str, log_file: str, single_rank: bool = False, training_set_size: int | None = None, _backoff: int | None = None) -> None:
-        """Execute *command* with optional timing instrumentation and retry on timeout or OOM.
+        """Run *command* with optional timing, and retry it on a timeout or OOM.
 
-        Parameters
-        ----------
-        command:            mlp binary + subcommand + args (no runner prefix).
-        log_file:           Append combined stdout/stderr here.
-        single_rank:        Run the command as one rank (one MPI process, one Slurm task) instead of the launcher's full parallelism.
-        training_set_size:  Number of training structures — used for time estimation.
+        Args:
+            command: mlp binary, subcommand and arguments, without the runner prefix.
+            log_file: File that receives the combined stdout and stderr.
+            single_rank: Run the command as one rank (one MPI process, one Slurm task) instead of the full parallelism of the launcher.
+            training_set_size: Number of training structures, for the time estimate.
         """
         if _backoff is None: _backoff = self.max_retries
         time_s = self.timing.estimate_train(training_set_size) if self.timing else None
@@ -479,7 +461,7 @@ class Launcher(ABC):
             self._run_impl(command, log_file, single_rank, time_limit_s=time_s)
         except JobTimedOut:
             elapsed = time.monotonic() - t0
-            # Without a --time of its own the job died at the partition's limit, which elapsed bounds from above.
+            # Without its own --time, the job died at the partition limit, and elapsed stands for that limit.
             limit_s = time_s or elapsed
             logger.warning(f"Training timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s) if time_s else 'the partition default'} allocated)")
             if self.timing:
@@ -499,26 +481,31 @@ class Launcher(ABC):
 
     @abstractmethod
     def _run_impl(self, command: str, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
-        """Backend-specific command execution."""
+        """Run *command* on this backend."""
 
     def command_prefix(self, _single_rank: bool = False) -> str:
-        """Full command prefix injected as ``COMMAND_PREFIX`` before calling the evaluator."""
+        """Return the command prefix that the evaluator gets as ``COMMAND_PREFIX``."""
         return ""
 
     def batch_prefix(self, _chdir: str, _log_file: str, _single_rank: bool = False, _time_limit_s: float | None = None, _mem_mb: float | None = None) -> str:
-        """Batch submission prefix: everything before ``--wrap="cmd"``."""
+        """Return the batch submission prefix: everything before ``--wrap="cmd"``."""
         return ""
 
     def _child_env(self, _single_rank: bool = False) -> dict:
-        """Environment of a process this launcher starts."""
+        """Return the environment of a process that this launcher starts."""
         return dict(os.environ)
 
     def call_evaluator(self, evaluator_fn, structure, eval_dir: Path, timed_out_at_s: float | None = None, single_rank: bool = False):
-        """Evaluate *structure* inside *eval_dir* with optional timing instrumentation, once; a timeout or OOM raises.
+        """Evaluate *structure* inside *eval_dir* once, with optional timing.
 
-        evaluator_fn   : called in-process when given; without it ./evaluator.py runs on the structure
-        timed_out_at_s : the limit this structure last timed out at; it is given at least ``timeout_f`` times that
-        single_rank    : run the evaluator's program as one rank
+        Args:
+            evaluator_fn: Function called in-process. Without it, ./evaluator.py runs on the structure.
+            timed_out_at_s: Limit at which this structure last timed out. The job gets at least ``timeout_f`` times that limit.
+            single_rank: Run the program of the evaluator as one rank.
+
+        Raises:
+            JobTimedOut: The evaluation hit its time limit.
+            JobOutOfMemory: The evaluation ran out of memory.
         """
         time_s = self.timing.estimate_eval() if self.timing else None
         if timed_out_at_s: time_s = max(time_s or 0.0, TimingState.timeout_f * timed_out_at_s)
@@ -529,7 +516,7 @@ class Launcher(ABC):
             result = self._call_evaluator_impl(evaluator_fn, structure, eval_dir, single_rank, time_limit_s=time_s)
         except JobTimedOut as e:
             elapsed = time.monotonic() - t0
-            # Without a --time of its own the job died at the partition's limit, which elapsed bounds from above.
+            # Without its own --time, the job died at the partition limit, and elapsed stands for that limit.
             limit_s = time_s or elapsed
             logger.warning(f"Eval timed out ({_seconds_to_hms(elapsed)} elapsed vs {_seconds_to_hms(time_s) if time_s else 'the partition default'} allocated)")
             if self.timing:
@@ -542,7 +529,10 @@ class Launcher(ABC):
         return result
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None):
-        """Call evaluator_fn on structure inside eval_dir, or without one run ./evaluator.py's evaluator on it there in a process of its own, with ``COMMAND_PREFIX`` set."""
+        """Evaluate *structure* inside *eval_dir* with ``COMMAND_PREFIX`` set.
+
+        With *evaluator_fn*, call it in-process. Without it, run evaluator() of ./evaluator.py in a process of its own.
+        """
         import ase.io.extxyz
         eval_dir.mkdir(parents=True, exist_ok=True)
         if evaluator_fn is None:
@@ -565,24 +555,24 @@ class Launcher(ABC):
             os.environ.update(saved)
 
     def _run_evaluator(self, command: str, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None) -> None:
-        """Run the evaluator script's *command* inside eval_dir, appending its output to eval.log."""
+        """Run the evaluator *command* inside *eval_dir* and append its output to eval.log."""
         env = {**self._child_env(single_rank), "COMMAND_PREFIX": self.command_prefix(single_rank)}
         with open(eval_dir / "eval.log", "a") as log_f:
             subprocess.run(command, shell=True, cwd=eval_dir, env=env, text=True, stdout=log_f, stderr=subprocess.STDOUT, check=True)
 
     @property
     def concurrent_eval(self) -> bool:
-        """Whether eval_structures should submit evaluations concurrently via ThreadPoolExecutor."""
+        """Whether OTFCycle.evaluate runs the evaluations concurrently on a ThreadPoolExecutor."""
         return False
 
 
 # ---------------------------------------------------------------------------
-# NestedLauncher  (current behaviour, default)
+# NestedLauncher  (default)
 # ---------------------------------------------------------------------------
 
 
 class NestedLauncher(Launcher):
-    """Wrap mlp calls with ``mpirun``; passes ``-n 1`` for a ``single_rank`` call."""
+    """Launcher that wraps mlp calls with ``mpirun``, with ``-n 1`` for a ``single_rank`` call."""
 
     def __init__(self, runner_exec: str = "mpirun", runner_args: str = ""):
         if any(t in ("-n", "-np") for t in runner_args.split()):
@@ -610,16 +600,14 @@ class NestedLauncher(Launcher):
 
 
 # ---------------------------------------------------------------------------
-# ForkLauncher  (direct exec, no mpirun wrapper)
+# ForkLauncher  (direct exec without mpirun)
 # ---------------------------------------------------------------------------
 
 
 class ForkLauncher(Launcher):
-    """Run binaries directly without mpirun, constructing a fresh MPI universe
-    via environment variables.
+    """Launcher that runs binaries without mpirun, in a new MPI universe set up by environment variables.
 
-    The number of peer processes is taken from the current Slurm allocation
-    when available, otherwise from ``os.cpu_count()``.
+    The peer count is the task count of the Slurm allocation, else the physical core count.
     """
 
     def _child_env(self, single_rank: bool = False) -> dict:
@@ -643,45 +631,40 @@ class ForkLauncher(Launcher):
 
 
 class SlurmLauncher(Launcher):
-    """Submit mlp calls and evaluator jobs via ``sbatch --wait --wrap="cmd"``.
+    """Launcher that submits mlp calls and evaluator jobs with ``sbatch --wait --wrap="cmd"``.
 
-    Each ``launcher.run()`` call submits one Slurm batch job and blocks until
-    it finishes (``--wait``).  Structure evaluations always run ``evaluator.py``'s
-    ``evaluator(structure)`` through ``python -m otf_engine.evaluate``; an
-    ``evaluator_fn`` is not called.
+    Each ``run()`` call submits one Slurm batch job and blocks until it finishes.
+    A structure evaluation runs ``evaluator(structure)`` of ``evaluator.py`` through
+    ``python -m otf_engine.evaluate``, and never calls an ``evaluator_fn``.
 
-    Structure evaluations are submitted concurrently by default
-    (``concurrent_eval=True``): all sbatch jobs are submitted simultaneously
-    from separate threads, each blocking on ``--wait``.  MPI parallelism is
-    controlled by the job's resource allocation via ``batch_args``.
+    With ``concurrent_eval``, the launcher submits all evaluation jobs at once from
+    separate threads, each blocking on ``--wait``. ``batch_args`` sets the resources
+    of each job, and with them its MPI parallelism.
 
-    ``COMMAND_PREFIX`` (``runner_exec``, default ``"srun"``) is set on each
-    evaluation job's command line — ``evaluator.py`` reads it via ``otf_engine.evaluate.command()``.
+    The command line of each evaluation job sets ``COMMAND_PREFIX`` to ``runner_exec``
+    and ``runner_args``. ``evaluator.py`` reads it through ``otf_engine.evaluate.command()``.
 
-    **Python environment requirement**: ``sys.executable`` must be on a shared
-    filesystem accessible from all compute nodes (NFS/Lustre, /home, /project).
+    ``sys.executable`` must be on a filesystem that all compute nodes share (NFS/Lustre, /home, /project).
 
-    **Memory sizing**: after each job, ``sacct`` is queried for peak memory and
-    the running max (per eval/train) is stored via ``MemoryState``. Subsequent
-    jobs request ``--mem=`` set to ``1.5 x`` that max, capped at the ``--mem``
-    given in ``batch_args``, which acts as a hard ceiling rather than a starting
-    point. Until a job has completed once, the ceiling itself is requested.
-    ``--mem-per-cpu`` in ``batch_args`` is dropped when ``--mem`` is substituted
-    and sets no ceiling.
+    Memory sizing: after each job, the launcher queries ``sacct`` for the peak memory
+    and stores the running maximum per kind (eval, train) in ``MemoryState``. The next
+    jobs request ``--mem`` at 1.5 times that maximum, capped at the ``--mem`` of
+    ``batch_args``. Until a job has completed once, they request the ceiling itself.
+    The launcher drops ``--mem-per-cpu`` from ``batch_args`` when it sets ``--mem``,
+    and ``--mem-per-cpu`` sets no ceiling.
 
-    **Out-of-memory recovery**: the request an OOM-killed job died at is recorded
-    as a lower bound on its demand, so the next job asks for more. A training job
-    is resubmitted at once (up to ``max_retries``); an evaluation raises
-    ``JobOutOfMemory`` for its cycle to defer. Once the request reaches the
-    ceiling a larger one cannot be made, so the job fails instead.
+    Out-of-memory recovery: the launcher records the request at which a job was
+    OOM-killed as a lower bound on its demand, and the next job asks for more. A
+    training job is resubmitted at once, up to ``max_retries`` times. An evaluation
+    raises ``JobOutOfMemory``, and its cycle defers it. Once the request reaches the
+    ceiling, the job fails.
 
-    Parameters
-    ----------
-    batch_exec:        Path to sbatch binary (default: ``"sbatch"``).
-    batch_args:        Extra sbatch options, e.g. ``"--account=myaccount --partition=gpu --time=01:00:00"``.
-    concurrent_eval:   Submit evaluations concurrently (default: True).
-    runner_exec:       Command prefix for evaluator jobs, set as ``COMMAND_PREFIX`` (default: ``"srun"``).
-    runner_args:       Extra arguments appended to ``runner_exec``, e.g. ``"--bind-to core"``.
+    Args:
+        batch_exec: Path to the sbatch binary.
+        batch_args: Extra sbatch options, e.g. ``"--account=myaccount --partition=gpu --time=01:00:00"``.
+        concurrent_eval: Submit the evaluations concurrently.
+        runner_exec: Command prefix of evaluator jobs, set as ``COMMAND_PREFIX``.
+        runner_args: Extra arguments appended to ``runner_exec``, e.g. ``"--bind-to core"``.
     """
 
     def __init__(self, batch_exec: str = "sbatch", batch_args: str = "", concurrent_eval: bool = True, runner_exec: str = "srun", runner_args: str = "", max_retries: int = TimingState.n_bootstrap):
@@ -723,18 +706,16 @@ class SlurmLauncher(Launcher):
         return _join(batch_parts)
 
     def _submit_and_wait(self, submit_cmd: str) -> tuple[subprocess.CompletedProcess, str | None]:
-        """Run an sbatch --wait command, returning (proc, job_id) parsed from 'Submitted batch job N'."""
+        """Run an sbatch --wait command and return (proc, job_id), with job_id parsed from 'Submitted batch job N'."""
         proc = subprocess.run(submit_cmd, shell=True, env=_env_for_sbatch(os.environ), text=True, capture_output=True)
         job_id = next((line.rsplit(" ", 1)[-1] for line in proc.stdout.splitlines() if line.startswith("Submitted batch job")), None)
         if proc.returncode != 0 and proc.stderr: sys.stderr.write(proc.stderr)
         return proc, job_id
 
     def _escalate_mem(self, kind: str, request_mb: float | None, used_mb: float | None) -> bool:
-        """Record an OOM-killed job's demand and report whether a larger ``--mem`` can still be requested.
+        """Record the demand of an OOM-killed job and return whether the launcher can still request a larger ``--mem``.
 
-        The job needed more than it was given, so the request itself is a lower
-        bound on its demand — a firmer one than sacct's sampled peak, which for
-        a killed job can come back low, missing, or below what is already stored.
+        The demand is the larger of the request and the peak that sacct reported.
         """
         if self.memory is None: return False
         demand_mb = max(request_mb or 0.0, used_mb or 0.0)
@@ -750,9 +731,12 @@ class SlurmLauncher(Launcher):
         return False
 
     def _submit(self, kind: str, command: str, chdir, log_file: str, single_rank: bool = False, time_limit_s: float | None = None) -> None:
-        """Submit *command* as one job of *kind* ("train" or "eval") and wait for it, recording its memory use.
+        """Submit *command* as one job of *kind* ("train" or "eval"), wait for it and record its memory use.
 
-        A timeout raises JobTimedOut, an OOM that a larger ``--mem`` can still fix JobOutOfMemory, any other failure CalledProcessError.
+        Raises:
+            JobTimedOut: The job hit its time limit.
+            JobOutOfMemory: The job ran out of memory, and a larger ``--mem`` remains possible.
+            CalledProcessError: The job failed otherwise.
         """
         mem_mb = self.memory.estimate(kind) if self.memory else None
         submit_cmd = f'{self.batch_prefix(chdir, log_file, single_rank, time_limit_s=time_limit_s, mem_mb=mem_mb)} --wrap="{command}"'
@@ -773,7 +757,7 @@ class SlurmLauncher(Launcher):
         self._submit("train", f"{self.command_prefix(single_rank)} {command}", os.getcwd(), log_file, single_rank, time_limit_s)
 
     def _call_evaluator_impl(self, evaluator_fn, structure, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None):
-        """Run ./evaluator.py as a job of its own; evaluator_fn is not called."""
+        """Run ./evaluator.py as a job of its own. This launcher ignores *evaluator_fn*."""
         return super()._call_evaluator_impl(None, structure, eval_dir, single_rank, time_limit_s)
 
     def _run_evaluator(self, command: str, eval_dir: Path, single_rank: bool = False, time_limit_s: float | None = None) -> None:

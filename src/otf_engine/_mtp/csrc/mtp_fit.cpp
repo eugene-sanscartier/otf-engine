@@ -18,7 +18,7 @@
 #include <stdexcept>
 #include <string>
 
-// Whether mlp's BFGS refits the linear coefficients before this step.
+// Returns whether BFGS refits the linear coefficients before this step.
 static bool linear_fit_step(int step) {
     return step == 25 || step == 70 || step == 100 || step == 150 || step == 250 || step == 400;
 }
@@ -28,11 +28,11 @@ MTPFit::MTPFit(MTP& potential, std::vector<FitStructure> structures, const MTPFi
     n_radial = potential.get_radial_coeff_count();
     n_linear = potential.get_species_count() + potential.get_alpha_scalar_count();
     reg_vector.assign(n_linear, options.reg_param);
-    // radial_only and bfgs_only step mlp's BFGS on a trained potential, without varpro or riemannian
+    // radial_only and bfgs_only run BFGS on a trained potential, without varpro or riemannian
     if (options.radial_only || options.bfgs_only) this->options.varpro = this->options.riemannian = false;
-    if (this->options.varpro) this->options.reg_once = true;    // a regularization that moved during BFGS would change the objective
+    if (this->options.varpro) this->options.reg_once = true;
 
-    // A basic moment has degree 1, a product the sum of its factors'.
+    // A basic moment has degree 1. A product has the sum of the degrees of its factors.
     std::vector<int> moment_degree(potential.get_alpha_moment_count(), 0);
     std::fill_n(moment_degree.begin(), potential.get_alpha_index_basic_count(), 1);
     for (const std::array<int, 4>& times : potential.get_alpha_index_times()) {
@@ -55,7 +55,6 @@ void MTPFit::run() {
     log_event(log, "coefficients", "%zu, %d radial, %d linear", coeffs.size(), n_radial, n_linear);
     if (options.varpro && options.varpro_fraction < 1.0) draw_varpro_subset(0);
 
-    // Every rank checks the same options and sizes, so every rank raises together.
     if ((options.radial_only || options.bfgs_only) && !potential.is_trained())
         throw std::runtime_error("fit_mtp: radial_only and bfgs_only need a trained potential");
     const int trained = options.radial_only || options.varpro ? n_radial : (int) coeffs.size();
@@ -63,7 +62,7 @@ void MTPFit::run() {
         throw std::runtime_error("fit_mtp: inverse_hessian must be " + std::to_string(trained) + " x " + std::to_string(trained) + " for the coefficients trained");
     if (options.riemannian && options.inverse_hessian_size != 0)
         throw std::runtime_error("fit_mtp: riemannian takes no inverse_hessian; pass riemannian=false");
-    log_errors("before training");    // the potential as given, before update_min_dist moves its radial basis
+    log_errors("before training");    // errors of the potential as given, before update_min_dist moves its radial basis
     update_min_dist();
 
     if (options.init_random && !potential.is_trained()) {
@@ -87,7 +86,7 @@ void MTPFit::run() {
         comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
     }
 
-    // pre-training, for the initial scaling
+    // pre-training sets the initial scaling
     if (!potential.is_trained() && options.iteration_limit > 0 && !options.skip_preinit) {
         log_event(log, "phase", "pre-training, iteration_limit 75");
         orthogonalize();
@@ -101,7 +100,7 @@ void MTPFit::run() {
     if (options.iteration_limit > 0) {
         log_event(log, "phase", "main, iteration_limit %d", options.iteration_limit);
         if (options.no_orthogonalize) orthogonalizing = false;
-        // the main fit's first linear solve rebuilds the regularization, which reg_once then keeps
+        // the first linear solve of the main fit rebuilds the regularization, and reg_once then keeps it
         if (options.reg_at_main) {
             reg_built = false;
             reg_init = true;
@@ -140,8 +139,7 @@ void MTPFit::add_species() {
         const int R = potential.get_radial_basis_size();
         const int KR = K * R;
 
-        // mlip-3's steps on its coefficient vector: the linear coefficients
-        // are shifted, then the radial block grows over them.
+        // Shift the linear coefficients, then grow the radial block over them.
         if (!potential.is_trained()) coeffs.resize(potential.get_alpha_scalar_count());
         const int old_radial_count = old_spec * old_spec * KR;
         const std::vector<double> old_radial(coeffs.begin(), coeffs.begin() + old_radial_count);
@@ -181,8 +179,8 @@ void MTPFit::add_species() {
 }
 
 /* ----------------------------------------------------------------------
-   BFGS over every coefficient. Rank 0 steps; the others evaluate their
-   share at the coefficients it broadcasts.
+   BFGS over the leading n coefficients. Rank 0 steps, and the other ranks
+   evaluate their share at the coefficients it broadcasts.
 ------------------------------------------------------------------------- */
 void MTPFit::fit_nonlinear(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
@@ -214,7 +212,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
     bool linear_fitted = false;    // the next evaluation is at the coefficients of a linear fit
     double linear_loss = NAN;      // the loss after this step's linear fit
     const char* inv_hess = "";     // what this step set the inverse Hessian to
-    std::string stop;              // why the fit stops, logged after its last step
+    std::string stop;              // reason the fit stops, logged after its last step
 
     while (!converge) {
         if (!linesearch) {
@@ -226,7 +224,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
                 fit_linear();
                 linear_fitted = true;
                 if (rank == 0) bfgs.set_x(coeffs.data(), n);
-                // a new regularization invalidates the inverse Hessian
+                // a new regularization resets the inverse Hessian
                 if (reg_init) {
                     if (rank == 0) bfgs.reset_hessian();
                     inv_hess = "I";
@@ -248,7 +246,7 @@ void MTPFit::fit_nonlinear(int max_iter) {
                 converge = true;
                 stop = "bfgs, " + bfgs.message();
             }
-            while (std::abs(bfgs.x(0) - coeffs[0]) > 0.5)    // prevents too large steps
+            while (std::abs(bfgs.x(0) - coeffs[0]) > 0.5)    // limits the step on the first coefficient
                 bfgs.reduce_step(0.25);
 
             linesearch = bfgs.in_linesearch();
@@ -304,13 +302,13 @@ void MTPFit::fit_nonlinear(int max_iter) {
 }
 
 /* ----------------------------------------------------------------------
-   Riemannian L-BFGS (Huang, Gallivan, Absil 2015, in the form of Boumal's
-   book) over the radial functions on the Stiefel manifold W W^T = I, with
-   the embedded metric: the gradient is the tangent projection of the
-   Euclidean one, the retraction is QR, vector transport is projection, and
-   the step is a backtracking Armijo search along the retraction curve.
-   Without varpro the linear block is a Euclidean factor, refitted at mlp's
-   steps. Every rank takes the same steps from the broadcast loss and gradient.
+   Riemannian L-BFGS (Huang, Gallivan, Absil 2015, as in Boumal's book) over
+   the radial functions on the Stiefel manifold W W^T = I, with the embedded
+   metric. The gradient is the tangent projection of the Euclidean one. The
+   retraction is QR, and vector transport is projection. Each step is a
+   backtracking Armijo search along the retraction curve. Without varpro, the
+   linear block is a Euclidean factor, refitted at the linear fit steps. All
+   ranks take the same steps from the broadcast loss and gradient.
 ------------------------------------------------------------------------- */
 void MTPFit::fit_riemannian(int max_iter) {
     const auto start = std::chrono::steady_clock::now();
@@ -328,7 +326,7 @@ void MTPFit::fit_riemannian(int max_iter) {
         return sum;
     };
 
-    // the loss at coeffs, and its Riemannian gradient into out, on every rank
+    // Returns the loss at coeffs and writes its Riemannian gradient into out, on all ranks
     auto evaluate_tangent = [&](std::vector<double>& out) {
         comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
         double loss = evaluate(out, n, false, terms);
@@ -338,7 +336,7 @@ void MTPFit::fit_riemannian(int max_iter) {
         return loss;
     };
 
-    // the start on the manifold, a lower-triangular change of the radial functions, with the linear coefficients refitted
+    // Retract onto the manifold by a lower-triangular change of the radial functions, then refit the linear coefficients
     retract(coeffs);
     if (!options.varpro) {
         fit_linear();
@@ -348,7 +346,7 @@ void MTPFit::fit_riemannian(int max_iter) {
 
     int num_step = 0;
     double linf = 9e99;    // the loss 50 steps ago
-    double t = 0.0;        // the step length of the last step, and its evaluations
+    double t = 0.0;        // length of the last step; halvings counts its halvings
     int halvings = 0;
     const char* inv_hess = "";    // what the last step set the inverse Hessian to
     while (true) {
@@ -361,7 +359,7 @@ void MTPFit::fit_riemannian(int max_iter) {
             fit_linear();
             f = evaluate_tangent(g);
             linear_loss = f;
-            // a new regularization invalidates the memory
+            // a new regularization clears the memory
             if (reg_init) {
                 s_memory.clear();
                 y_memory.clear();
@@ -432,7 +430,7 @@ void MTPFit::fit_riemannian(int max_iter) {
             break;
         }
 
-        // the step and the change of the gradient, with the old vectors transported by projection onto the new tangent space
+        // The step s and the gradient change y. Projection onto the new tangent space transports the old vectors.
         std::vector<double> s(n), y = g;
         for (int j = 0; j < n; j++) s[j] = t * p[j];
         project_tangent(coeffs.data(), s.data());
@@ -473,8 +471,7 @@ void MTPFit::fit_linear(bool subset) {
     broadcast_linear();
 }
 
-// Sums the upper triangle of the least-squares system over every rank's structures, into
-// lin_matrix and lin_vector on rank 0.
+// Sums the upper triangle of the least-squares system over the structures of all ranks into lin_matrix and lin_vector on rank 0.
 void MTPFit::assemble_linear(bool subset) {
     const int n = n_linear;
     const int width = (int) coeffs.size();
@@ -484,8 +481,8 @@ void MTPFit::assemble_linear(bool subset) {
     Eigen::Map<Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> matrix(lin_matrix.data(), n, n);
     Eigen::Map<Eigen::VectorXd> vector(lin_vector.data(), n);
 
-    // E, F and virial are linear in these coefficients, with the gradients as components: a structure's equations are
-    // the components of each value it has, and its references the values, each scaled by the square root of its weight
+    // E, F and virial are linear in these coefficients, and their gradients give the equations.
+    // A structure gives one equation per value it has, with the reference value on the right, both scaled by the square root of its weight.
     int most_atoms = 0;
     for (const FitStructure& s : structures) most_atoms = std::max(most_atoms, (int) s.ilist.size());
     Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> equations(1 + 3 * most_atoms + 9, n);
@@ -556,7 +553,7 @@ void MTPFit::assemble_linear(bool subset) {
     }
 }
 
-// Hands rank 0's linear coefficients and regularization to every rank.
+// Broadcasts the linear coefficients and regularization from rank 0.
 void MTPFit::broadcast_linear() {
     comm.bcast(coeffs.data(), (int) coeffs.size(), 0);
     comm.bcast(reg_vector.data(), n_linear, 0);
@@ -564,8 +561,8 @@ void MTPFit::broadcast_linear() {
     potential.set_coeffs(coeffs.data());
 }
 
-// Regularizes the upper triangle held in lin_matrix and solves it into the
-// linear coefficients, by LDLT under ldlt, else by Gaussian elimination without row swaps.
+// Regularizes the system whose upper triangle lin_matrix holds and solves it for the linear coefficients.
+// ldlt solves by LDLT, otherwise Gaussian elimination without row swaps solves it.
 void MTPFit::solve_linear() {
     const int n = n_linear;
     double* A = lin_matrix.data();
@@ -621,12 +618,12 @@ void MTPFit::solve_linear() {
 }
 
 /* ----------------------------------------------------------------------
-   Picks the scaling, among 5 around the current one, with the best-conditioned
-   linear fit. A basis function of degree d in the radial functions scales as
-   scaling^d, so each fit rescales the system last assembled, which is
-   reassembled only when orthogonalizing moves the radial functions.
-   Under reg_follows_scaling its regularization scales as scaling^(2d), so
-   the fitted potential and the loss do not depend on the scaling chosen.
+   Picks the scaling with the best-conditioned linear fit among 5 around the
+   current one. A basis function of degree d in the radial functions scales
+   as scaling^d. Each fit rescales the system last assembled, and reassembles
+   it only when orthogonalize moves the radial functions. Under
+   reg_follows_scaling, the regularization of its coefficient scales as
+   scaling^(2d).
 ------------------------------------------------------------------------- */
 void MTPFit::rescale() {
     double min_scaling = potential.get_scaling();
@@ -717,7 +714,7 @@ void MTPFit::rescale() {
 }
 
 double MTPFit::objective(const std::vector<double>& at, std::vector<double>& grad) {
-    // fixes the regularization at the potential's own radial coefficients, where BFGS's first evaluation fixes it
+    // Build the regularization at the radial coefficients of the potential, where the first BFGS evaluation builds it
     if (options.varpro && options.varpro_fraction < 1.0) draw_varpro_subset(0);
     if (options.varpro) fit_linear();
     std::copy(at.begin(), at.end(), coeffs.begin());
@@ -726,15 +723,15 @@ double MTPFit::objective(const std::vector<double>& at, std::vector<double>& gra
     double total = evaluate(grad, (int) grad.size(), !options.riemannian, terms);
     comm.bcast(&total, 1, 0);
     comm.bcast(grad.data(), (int) grad.size(), 0);
-    // the linear coefficients are a function of the radial ones: their partial gradient is zero at the optimum
+    // under varpro, the linear coefficients are a function of the radial ones, and their partial gradient is zero
     if (options.varpro) std::fill(grad.begin() + n_radial, grad.end(), 0.0);
-    // under riemannian, the Riemannian gradient at the radial functions in at, which must be orthonormal
+    // under riemannian, project onto the tangent space at the radial functions in at, which must be orthonormal
     if (options.riemannian) project_tangent(coeffs.data(), grad.data());
     return total;
 }
 
 double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double terms[4], bool solve_linear) {
-    // the linear coefficients at their optimum for these radial ones
+    // solve the linear coefficients at their optimum for these radial ones
     const bool subset = options.varpro && solve_linear && options.varpro_fraction < 1.0;
     if (options.varpro && solve_linear) fit_linear(subset);
     local_grad.resize(coeffs.size());
@@ -744,14 +741,14 @@ double MTPFit::evaluate(std::vector<double>& grad, int n, bool radial, double te
     if (rank == 0) add_penalty(loss, local_grad, radial);
     local_terms[3] = loss - local_terms[3];
 
-    // varpro_fraction: x minimizes the draw's loss and the loss takes every structure, so dL/dx is not zero. Its path
-    // through the solve is -d/dc of sum w (J x - y) . J mu over the draw, at fixed x and mu = A^-1 dL/dx, with w the
-    // solve's weights: each structure's rows give J x - y and J mu, and eval_loss_grad the derivative of each factor.
+    // Under varpro_fraction, x minimizes the loss of the draw, the loss sums over all structures, and dL/dx is nonzero.
+    // The path through the solve adds -d/dc of sum w (J x - y) . J mu over the draw, at fixed x and mu = A^-1 dL/dx,
+    // with w the weights of the solve. The rows of each structure give J x - y and J mu, and eval_loss_grad differentiates each factor.
     if (subset) {
         std::vector<double> slope(rank == 0 ? n_linear : 0), mu(n_linear);
         comm.reduce(local_grad.data() + n_radial, slope.data(), n_linear, ReduceOp::sum, 0);
         if (rank == 0) {
-            for (double& g : slope) g *= structure_count;    // of the summed loss, as the system is
+            for (double& g : slope) g *= structure_count;    // gradient of the summed loss, the scale of the system
             Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> matrix(linear_system.data(), n_linear, n_linear);
             Eigen::Map<Eigen::VectorXd>(mu.data(), n_linear) = matrix.ldlt().solve(Eigen::Map<const Eigen::VectorXd>(slope.data(), n_linear));
         }
@@ -840,11 +837,11 @@ double MTPFit::loss_grad(std::vector<double>& grad) {
         double dloss_dvirial[6] = {};
         double dloss_denergy = 0.0;
 
-        // the energy is added last, for less round-off
+        // the energy term comes last
         if (options.force_weight != 0 && s.has_forces)
             for (int ii = 0; ii < list.inum; ii++) {
                 const int i = list.ilist[ii];
-                const double wgt = force_weight(s, i, forces);    // mlp's loss weighs by the predicted force
+                const double wgt = force_weight(s, i, forces);
                 for (int a = 0; a < 3; a++) {
                     const double diff = forces[i * 3 + a] - s.forces[i * 3 + a];
                     loss += wgt * diff * diff;
@@ -906,9 +903,8 @@ void MTPFit::add_penalty(double& loss, std::vector<double>& grad, bool radial) {
         grad[n_radial + i] += 2 * coeffs[n_radial + i] * reg_vector[i];
 }
 
-// Gram-Schmidt over the radial functions, each a vector over species pairs
-// and basis functions. The projection divides by the squared norm of the
-// function being reduced, not of the one projected out.
+// Gram-Schmidt over the radial functions, each a vector over species pairs and basis functions.
+// The projection divides by the squared norm of the function being reduced.
 void MTPFit::orthogonalize() {
     if (!orthogonalizing) return;
 
@@ -976,7 +972,7 @@ void MTPFit::retract(std::vector<double>& c) const {
     const int K = potential.get_radial_func_count();
     const int R = potential.get_radial_basis_size();
 
-    // modified Gram-Schmidt, twice for orthonormality to rounding
+    // modified Gram-Schmidt in two passes, orthonormal to rounding
     for (int pass = 0; pass < 2; pass++)
         for (int k = 0; k < K; k++) {
             for (int k2 = 0; k2 < k; k2++) row_axpy(c.data(), k, -row_dot(c.data(), k, c.data(), k2), c.data(), k2);

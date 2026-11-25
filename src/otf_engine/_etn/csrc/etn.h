@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Input and bond vectors of an ETN, and derivatives of its site energies,
-   and of a loss built on its energy, forces and virial, with respect to
-   its coefficients.
+   An ETN potential with its input and bond vectors, and the gradients
+   with respect to its coefficients of its site energies and of a loss
+   on its energy, forces and virial.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -12,12 +12,13 @@ class ETN : public PairETN {
   public:
     using PairETN::PairETN;
 
-    // Per central atom, its input vector [inum * input_shape.size] and its bond vectors [inum * bonds_size];
-    // row ii for atom ilist[ii], laid out as get_input_shape() and get_bond_offset() give.
+    // Computes the input vector [inum * input_shape.size] and the bond vectors [inum * bonds_size] of each central atom.
+    // Row ii belongs to atom ilist[ii], laid out by get_input_shape() and get_bond_offset().
     void eval_bonds(const NeighList& list, double* inputs_out, double* bonds_out);
 
-    // d(E_i, F, virial)/dc. With nonlinear false, only the columns the energy is linear in, the last core's
-    // and the species', are filled; the other columns stay zero. force_grad throws with nonlinear true.
+    // Computes d(E_i, F, virial)/dc.
+    // With nonlinear false, it fills only the columns in which the energy is linear, those of the last core and of the species.
+    // The other columns stay zero. A non-null force_grad with nonlinear true throws.
     //
     //   site_energy_grad : [inum * coeff_count]      per-atom dE_i/dc, row ii for atom ilist[ii]
     //   force_grad       : [n_atoms * 3 * coeff_count], or null
@@ -25,22 +26,21 @@ class ETN : public PairETN {
     void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad, bool nonlinear);
     void eval_grad(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad) override { eval_grad(list, site_energy_grad, force_grad, virial_grad, true); }
 
-    // Adds dL/dc to loss_grad [coeff_count], for a loss L whose derivatives
-    // with respect to the energy, forces and virial of this structure are
-    // given; dloss_dforces [n_atoms * 3] and dloss_dvirial [6] may be null.
+    // Adds dL/dc to loss_grad [coeff_count], given the derivatives of L with respect to the energy,
+    // forces [n_atoms * 3] and virial [6] of this structure. dloss_dforces and dloss_dvirial may be null.
     void eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) override;
 
   private:
-    // eval_grad's kernel, A atoms per chunk; its linear path runs their backwards passes on a lane per atom.
+    // Runs eval_grad on chunks of A atoms. The linear path runs the backwards passes of a chunk with one lane per atom.
     template <int A>
     void eval_grad_lanes(const NeighList& list, double* site_energy_grad, double* force_grad, double* virial_grad, bool nonlinear);
 
     // Grows the neighbor rows to jnum neighbors.
     void grow_neighbor_rows(int jnum);
 
-    // The neighbors of the current atom, or of each atom of eval_loss_grad's chunk in blocks of atom_cache_size rows,
-    // each array in rows over the neighbors: the harmonics, the radial basis' values and derivatives; and
-    // eval_loss_grad's tangents of the harmonics and of the distance along the loss weight
+    // Rows over the neighbors of the current atom, or of each atom of the eval_loss_grad chunk in blocks of atom_cache_size rows:
+    // the harmonics, the values and derivatives of the radial basis, and in eval_loss_grad the tangents of the harmonics
+    // and of the distance along the loss weight
     int rows_size = 0;
     std::vector<double> neighbor_harmonics;          // [rows_size * l_count^2]
     std::vector<double> neighbor_radial_vals;        // [rows_size * radial_basis_size]
@@ -48,27 +48,27 @@ class ETN : public PairETN {
     std::vector<double> neighbor_harmonic_tangents;  // [rows_size * l_count^2]
     std::vector<double> neighbor_dist_tangents;      // [rows_size]
 
-    // eval_loss_grad: per entry of the input and bond vectors, the tangent and the adjoint of the value, for its chunk
+    // eval_loss_grad: the tangent and the adjoint of each entry of the input and bond vectors, one lane per atom of the chunk
     std::vector<Lanes> input_tangents;   // [input_shape.size]
     std::vector<Lanes> bond_tangents;    // [bonds_size]
     std::vector<Lanes> input_adjoints;   // [input_shape.size]
     std::vector<Lanes> bond_adjoints;    // [bonds_size]
     std::vector<Lanes> core_product_tangents;  // laid out as core_products
     std::vector<Lanes> core_product_adjoints;  // laid out as core_product_ders
-    // dL/dS_l of each species pair's radial mixing over the structure: [l], laid out as radial_mixing
+    // dL/dS_l per species pair, summed over the structure: [l], laid out as radial_mixing
     std::vector<std::vector<double>> radial_mixing_grad;
 
-    // eval_grad without the nonlinear columns: per entry of the input and bond vectors, and of one block's
-    // products, the adjoint each backwards pass carries, the passes innermost; then per entry of the input,
-    // the derivative of each last-core column's site energy, the columns innermost
+    // eval_grad without the nonlinear columns: the adjoint that each backwards pass carries per entry of the input,
+    // of the bond vectors and of the products of one block, passes innermost; then the derivative of the site energy
+    // of each last-core column per entry of the input, columns innermost
     std::vector<double> input_pass_ders;      // [input_shape.size * pass count]
     std::vector<double> bond_pass_ders;       // [bonds_size * pass count]
     std::vector<double> product_pass_ders;    // [atom_core_product_ders.size() * pass count]
     std::vector<double> input_column_ders;    // [input_shape.size * column count]
-    std::vector<double> column_pair_ders;     // [4 * column count] per column, dE_k/dr_ij's angular part (x, y, z), then its radial part
+    std::vector<double> column_pair_ders;     // [4 * column count] angular part (x, y, z) of dE_k/dr_ij per column, then its radial part
 
-    // eval_grad's linear path: the atoms per chunk of a structure that has as many, and per atom of the chunk, a lane
-    // innermost in the pass arrays above and in these
+    // Linear path of eval_grad: jacobian_chunk atoms per chunk in a structure of at least that many atoms.
+    // Each atom of the chunk has a lane, innermost in the pass arrays above and in these.
     static constexpr int jacobian_chunk = 16;
     std::vector<double> lane_input_vals;      // [input_shape.size * jacobian_chunk]
     std::vector<double> lane_core_products;   // [atom_core_products.size() * jacobian_chunk]

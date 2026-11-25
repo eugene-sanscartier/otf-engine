@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   The _mtp_testing module: MTPFit's stages one at a time, and BFGS on
-   the Rosenbrock function, for the tests. The package never imports it.
+   The _mtp_testing module for the tests: the stages of MTPFit one at a
+   time, and BFGS on the Rosenbrock function. The package does not import it.
 ------------------------------------------------------------------------- */
 
 #include "bindings_common.h"
@@ -9,7 +9,7 @@
 
 void add_option_fields(MTPFitOptions& o, OptionFields& fields);    // mtp_fit_bindings.cpp
 
-// An MTPFit on one thread, whose stages the tests call in any order.
+// An MTPFit on one thread. The tests call its stages in any order.
 class MTPFitStages {
   public:
     MTPFitStages(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options) : potential(filename), process("MTPFitStages", 1, py::none()) {
@@ -50,7 +50,7 @@ class MTPFitStages {
     std::unique_ptr<MTPFit> fit;
 };
 
-// The N-dimensional Rosenbrock function and its gradient, with the operations of mlip3_probe.cpp.
+// Returns the N-dimensional Rosenbrock function at x and writes its gradient into g.
 static double rosenbrock(const std::vector<double>& x, std::vector<double>& g) {
     const int n = (int) x.size();
     double f = 0.0;
@@ -65,8 +65,8 @@ static double rosenbrock(const std::vector<double>& x, std::vector<double>& g) {
     return f;
 }
 
-// BFGS on the n-dimensional Rosenbrock function from x_i = -1.2 (even i) and 1: x before each of steps calls to
-// iterate, and f, in_linesearch and iterate's result after it.
+// Runs BFGS on the n-dimensional Rosenbrock function from x_i = -1.2 for even i and 1 for odd i.
+// Returns x before each of the `steps` calls to iterate, and f, in_linesearch and the result of iterate after it.
 static py::tuple bfgs_rosenbrock(int n, int steps) {
     std::vector<double> x(n), g;
     for (int i = 0; i < n; i++) x[i] = i % 2 == 0 ? -1.2 : 1.0;
@@ -88,7 +88,7 @@ static py::tuple bfgs_rosenbrock(int n, int steps) {
     return py::make_tuple(xs, states);
 }
 
-// The fit's objective and its gradient at coeffs, with the structures dealt round-robin over `ranks` threads.
+// Returns the objective of the fit and its gradient at coeffs, with the structures dealt round-robin over `ranks` threads.
 static py::tuple objective_on_threads(const std::string& filename, py::iterable structures, const std::map<std::string, std::string>& options, const std::vector<double>& coeffs, int ranks) {
     std::string log_target;
     const MTPFitOptions o = parse_options<MTPFitOptions>("objective_on_threads", options, log_target);
@@ -111,7 +111,7 @@ static py::tuple objective_on_threads(const std::string& filename, py::iterable 
 }
 
 PYBIND11_MODULE(_mtp_testing, m) {
-    m.doc() = "MTPFit's stages and BFGS, for the tests.";
+    m.doc() = "Stages of MTPFit and BFGS, for the tests.";
     py::module_::import("otf_engine._mtp._mtp_ext");    // registers MTP and FitStructure
 
     py::class_<MTPFitStages>(m, "MTPFitStages")

@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   The errors of a potential on training structures, as MTPFit and
-   ETNFit log them.
+   The error table of a potential on training structures, which MTPFit
+   and ETNFit log.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -17,27 +17,22 @@
 #include <string>
 #include <vector>
 
-/* ----------------------------------------------------------------------
-   Errors as mlip-3's ErrorMonitor measures them: energies, energies per
-   atom, forces per atom, and the virial as the Frobenius norm of the 3x3.
-   Relative to the reference, as the ErrorMonitor's Max(diff)/Max(value)
-   and RMS(diff)/RMS(value), except for energies, whose reference is their
-   residual from per-species energies fitted to the structures by least
-   squares, and whose max |diff| is relative to the residuals' range.
-
-   The table is of the structures of every rank of comm, under title, with
-   a force row per species (named by species, or by index past its end) and
-   the structures with the largest energy and force errors; on rank 0, and
-   empty on the others.
-------------------------------------------------------------------------- */
+// Returns the error table of potential on the structures of every rank of comm, under title, on rank 0. Returns ""
+// on the other ranks.
+// Rows: the energy, the energy per atom, the force per atom, the force of each species (named from species, or
+// "type t" past its end), and the virial as the Frobenius norm of the 3x3 tensor.
+// Columns: n, MAE, RMSE, max |diff|, max |diff| / max |value| and RMSE / RMS(value).
+// The value of an energy is its residual after per-species energies fitted to the structures by least squares.
+// Its relative max divides by the range of the residuals.
+// The table ends with the structures of the largest energy-per-atom and force errors.
 inline std::string error_table(Pair& potential, const std::vector<FitStructure>& structures, const std::vector<std::string>& species, Comm& comm, const std::string& title) {
-    enum { ENE, EPA, FRC, VIR, KINDS };    // then the forces of each species
+    enum { ENE, EPA, FRC, VIR, KINDS };    // rows; the force row of species t is KINDS + t
     const int species_count = potential.get_species_count();
     const int rows = KINDS + species_count;
     const int C = species_count;
 
-    // the normal equations of the per-species energies: the sums of counts * counts and of counts * energy, and the
-    // number of energies
+    // normal equations of the per-species energies: [C * C] sum of counts counts^T, [C] sum of counts * energy,
+    // [1] number of energies
     std::vector<double> fit(C * C + C + 1, 0.0), total_fit(C * C + C + 1), counts(C);
     for (const FitStructure& s : structures) {
         if (!s.has_energy) continue;
@@ -52,7 +47,8 @@ inline std::string error_table(Pair& potential, const std::vector<FitStructure>&
     }
     comm.allreduce(fit.data(), total_fit.data(), (int) fit.size(), ReduceOp::sum);
 
-    // Gauss-Jordan, pivoting on the largest remaining diagonal; species beyond the independent compositions get no energy
+    // Gauss-Jordan elimination, pivoting on the largest remaining diagonal. Species past the independent
+    // compositions keep an energy of 0.
     double* G = total_fit.data();
     double* g = G + C * C;
     std::vector<int> pivots;
@@ -73,12 +69,13 @@ inline std::string error_table(Pair& potential, const std::vector<FitStructure>&
         }
     }
     for (int k : pivots) species_energy[k] = g[k] / G[k * C + k];
-    // with no more energies than independent compositions, the residuals vanish by construction
+    // false when the energies are no more than the independent compositions; every residual is then 0
     const bool residuals = total_fit[C * C + C] > (double) pivots.size();
 
-    // per row: the count, and the sums of |diff|, diff^2 and value^2; the maxima of |diff|, value and -value, where
-    // the value is the energy's residual, or the norm of the reference force or virial; and where the max |diff| is,
-    // as structure number * 1e6 + atom number
+    // sums [rows * 4]: count, sum |diff|, sum diff^2 and sum value^2 of each row
+    // maxima [rows * 3]: max |diff|, max value and max -value of each row
+    // at [rows]: the place of the max |diff|, structure number * 1e6 + atom number
+    // The value is the energy residual, or the norm of the reference force or virial.
     std::vector<double> sums(rows * 4, 0.0), maxima(rows * 3, -1e300), at(rows, 0.0);
     auto add = [&](int row, double dltsq, double value, double where) {
         double* sum = &sums[row * 4];
@@ -134,7 +131,7 @@ inline std::string error_table(Pair& potential, const std::vector<FitStructure>&
     std::vector<double> total_sums(rows * 4), total_maxima(rows * 3), total_at(rows);
     comm.reduce(sums.data(), total_sums.data(), rows * 4, ReduceOp::sum, 0);
     comm.allreduce(maxima.data(), total_maxima.data(), rows * 3, ReduceOp::max);
-    // the max |diff|'s place, the first in number among the ranks holding it
+    // at: the lowest place among the ranks that hold the max |diff|
     for (int r = 0; r < rows; r++)
         if (maxima[r * 3] != total_maxima[r * 3]) at[r] = 1e300;
     comm.reduce(at.data(), total_at.data(), rows, ReduceOp::min, 0);
@@ -152,7 +149,7 @@ inline std::string error_table(Pair& potential, const std::vector<FitStructure>&
         const double rmse = std::sqrt(sum[2] / sum[0]);
         const bool energy = r == ENE || r == EPA;
         const bool scaled = !energy || residuals;
-        // a relative error over a zero reference scale, as of energies with vanishing residuals, is shown as a dash
+        // formats value / scale, or a dash when scale is 0
         auto relative = [](double value, double scale) {
             char field[16];
             if (scale > 0) std::snprintf(field, sizeof field, " %9.2e", value / scale);

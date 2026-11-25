@@ -26,7 +26,7 @@ class WolfeLineSearch {
 
     double wolfe_c1 = 0.1;
     double wolfe_c2 = 0.5;
-    std::string message;    // why the last search failed, for the fit's log
+    std::string message;
 
   private:
     double curr_x;
@@ -35,9 +35,9 @@ class WolfeLineSearch {
     double prev_x, prev_f, prev_g;
 };
 
-// The caller evaluates f and its gradient at x() and passes them to iterate(),
-// which moves x(). Outside a line search, iterate() also updates the inverse
-// Hessian; make_nonlinesearch_iteration() takes a new direction.
+// BFGS with WolfeLineSearch. The caller evaluates f and its gradient at x() and
+// passes them to iterate(), which moves x(). Outside a line search, iterate() also
+// updates the inverse Hessian; make_nonlinesearch_iteration() takes a new direction.
 class WolfeBFGS {
   public:
     // Sets x and quits any line search. The inverse Hessian is kept unless n changes.
@@ -53,7 +53,7 @@ class WolfeBFGS {
 
     const std::vector<double>& x() const { return x_; }
     bool in_linesearch() const { return in_linesearch_; }
-    // The step length of the last accepted step along its direction, 0 for a stalled search's return to its start.
+    // Step length of the last accepted step along its direction; 0 when a stalled search returned to its start.
     double alpha() const { return alpha_; }
     // What the last accepted step set the inverse Hessian to: "diag", "mean" or "" for its update.
     const char* inv_hess_set() const { return inv_hess_set_; }

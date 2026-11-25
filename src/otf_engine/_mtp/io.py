@@ -1,4 +1,4 @@
-"""MTP file input/output helpers."""
+"""Writer of MTP potential files."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ from .._core.io import format_floats, format_ints, write_header, write_radial_ba
 
 
 def write_mtp(potential, path):
-    """Write an MTP potential to an .mtp file.
+    """Write an MTP potential to an .mtp file in the layout that PairMTP::read_file reads.
 
-    The file structure is the one PairMTP::read_file() expects. An untrained
-    potential is written without its species count and coefficients, as mlip-3 writes it.
+    The file of an untrained potential omits the species count and the coefficients.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

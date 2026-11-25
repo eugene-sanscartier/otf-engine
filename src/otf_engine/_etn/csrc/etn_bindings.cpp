@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Python bindings for ETN (see etn.h). Its eval_loss_grad is Pair's
-   binding.
+   Python bindings for ETN (see etn.h). The Pair binding covers
+   eval_loss_grad.
 ------------------------------------------------------------------------- */
 
 #include "etn.h"
@@ -41,26 +41,30 @@ static py::dict eval_bonds(ETN& self, const PyNeighbors& nb) {
 }
 
 void bind_etn(py::module_& m) {
-    auto cls = py::class_<ETN, PairETN>(m, "ETN", "An ETN potential that also gives its input and bond vectors, and differentiates site energies, and losses on its energy, forces and virial, w.r.t. its coefficients.");
+    auto cls = py::class_<ETN, PairETN>(m, "ETN", "An ETN potential that gives its input and bond vectors, and the gradients of its site energies and of a loss with respect to its coefficients.");
     def_pair_etn_init(cls);
 
     def_neighbors(cls, "eval_bonds", &eval_bonds,
                   R"doc(
-Each central atom's input and bond vectors.
+Compute the input and bond vectors of each central atom.
 
-Returns a dict with "inputs" (inum, input size), and "bonds" and "bonds_im",
-lists of (inum, bond size) arrays for bonds 0 .. core_count. A covariant vector
-holds entry (l, m, n) at offset(l) + (m + l) * rank(l) + n.
+Returns:
+    dict with "inputs" (inum, input size), and "bonds" and "bonds_im", lists of
+    (inum, bond size) arrays for bonds 0 .. core_count. Entry (l, m, n) of a
+    covariant vector is at offset(l) + (m + l) * rank(l) + n.
 )doc");
     def_neighbors(cls, "eval_grad", &eval_grad,
                   R"doc(
-d(E_i, F, virial)/dc, c as get_coeffs orders it.
+Compute d(E_i, F, virial)/dc, with c in the get_coeffs order.
 
-Without forces, returns site_energy_grad (inum, cc); row ii is dE_i/dc for
-atom ilist[ii]. With forces, returns (site_energy_grad (inum, cc),
-force_grad (n_atoms, 3, cc), virial_grad (6, cc)|None), which needs
-nonlinear False. With nonlinear False, only the last core's and the
-species' columns are filled.
+Args:
+    forces: also return the force and virial gradients; requires nonlinear False.
+    virial: return the virial gradient; requires forces.
+    nonlinear: if False, fill only the columns of the last core and of the species.
+
+Returns:
+    site_energy_grad (inum, cc), whose row ii is dE_i/dc for atom ilist[ii].
+    With forces, (site_energy_grad, force_grad (n_atoms, 3, cc), virial_grad (6, cc) or None).
 )doc",
                   py::arg("forces") = false, py::arg("virial") = false, py::arg("nonlinear") = true);
 }

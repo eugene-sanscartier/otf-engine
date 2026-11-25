@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _cgroup_cpus() -> set[int]:
-    """Return the CPUs this process's cgroup v2 cpuset allows."""
+    """Return the CPUs that the cgroup v2 cpuset of this process allows."""
     cgroup = Path("/proc/self/cgroup").read_text().split("0::", 1)[1].split()[0]
     text = Path(f"/sys/fs/cgroup{cgroup}/cpuset.cpus.effective").read_text()
     bounds = [[int(n) for n in part.split("-")] for part in text.strip().split(",")]
@@ -25,7 +25,6 @@ def _cgroup_cpus() -> set[int]:
 def main():
 
     parser =argparse.ArgumentParser(prog=None, description="Utility to select structures for training set based on D-optimality criterion")
-    # The cycle's options take their defaults from OTFCycle.
     defaults = {name: parameter.default for name, parameter in inspect.signature(OTFCycle).parameters.items()}
 
     parser.add_argument("--extrapolative_dumps", nargs='+', required=True, metavar="DUMP", dest="extrapolative_dumps", help="Extrapolative dump files (glob patterns allowed).", type=str)
@@ -71,17 +70,15 @@ def main():
         case "slurm":
             launcher = SlurmLauncher(batch_args=args.batch_args, concurrent_eval=args.concurrent_eval, runner_args=args.runner_args)
 
-    # Fails here, before grading, when evaluator.py is missing or broken; each evaluation runs it through otf_engine.evaluate.
     load_evaluator("evaluator.py")
 
     cycle_dir = next_cycle_dir()
     log_path = cycle_dir / LOG_FILE
 
-    # For records from outside the package: the cycle logs the package's there itself.
+    # Send the records of other packages to the cycle log. The cycle logs the otf_engine records itself.
     logging.basicConfig(level=logging.INFO, filename=log_path, filemode="a", format=LOG_FORMAT)
     print(f"{cycle_dir.name} running — {log_path}")
 
-    # The engine is often started by one MPI rank (pyKMC) and would inherit its binding to one core.
     try:
         os.sched_setaffinity(0, _cgroup_cpus())
     except Exception as e:

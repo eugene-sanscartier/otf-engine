@@ -38,13 +38,14 @@ static DoubleArray eval_loss_grad(Pair& self, const PyNeighbors& nb, double dlos
 
 void bind_core(py::module_& m) {
     py::class_<PyNeighbors>(m, "NeighList", R"doc(
-Neighbor list for one structure.
+Neighbor list of one structure.
 
-types         : ndarray int32   (n_atoms)         — 0-indexed species
-ilist         : ndarray int32   (inum)            — indices of central atoms
-numneigh      : ndarray int32   (inum)            — neighbor count per central atom
-firstneigh    : ndarray int32   (sum(numneigh))   — flat neighbor indices
-displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
+Args:
+    types: int32 (n_atoms), the 0-based species of each atom.
+    ilist: int32 (inum), the indices of the central atoms.
+    numneigh: int32 (inum), the neighbor count of each central atom.
+    firstneigh: int32 (sum(numneigh)), the flat neighbor indices.
+    displacements: float64 (sum(numneigh), 3), r_j - r_i corrected for periodic images.
 )doc")
         .def(py::init<IntArray, IntArray, IntArray, IntArray, DoubleArray>(),
              py::arg("types"), py::arg("ilist"), py::arg("numneigh"), py::arg("firstneigh"), py::arg("displacements"))
@@ -56,7 +57,7 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
         .def_property_readonly("firstneigh", &PyNeighbors::firstneigh)
         .def_property_readonly("displacements", &PyNeighbors::displacements);
 
-    py::class_<FitStructure>(m, "FitStructure", "A structure to fit: its neighbor list at the potential's cutoff and its reference values, which the fits and error_table take.")
+    py::class_<FitStructure>(m, "FitStructure", "A training structure: its neighbor list at the cutoff of the potential, and its reference values.")
         .def(py::init([](const PyNeighbors& nb, py::object energy, py::object forces, py::object virial, int number) {
                  const NeighList& list = nb.view();
                  const int n_pairs = std::accumulate(list.numneigh, list.numneigh + list.inum, 0);
@@ -89,11 +90,12 @@ displacements : ndarray float64 (sum(numneigh),3) — PBC-corrected r_j - r_i
                  s.number = number;
                  return s;
              }), py::arg("neighbors"), py::arg("energy") = py::none(), py::arg("forces") = py::none(), py::arg("virial") = py::none(), py::arg("number") = 0, R"doc(
-neighbors : NeighList at the potential's cutoff
-energy    : float | None
-forces    : (n_atoms, 3) | None
-virial    : (6) | None, mlip-3's PlusStress in eV, xx,yy,zz,xy,xz,yz
-number    : the number the error tables name it by
+Args:
+    neighbors: the NeighList at the cutoff of the potential.
+    energy: float or None.
+    forces: (n_atoms, 3) or None.
+    virial: (6) or None, in eV, ordered xx, yy, zz, xy, xz, yz.
+    number: the number of the structure in the error tables.
 )doc")
         .def_property_readonly("neighbors",
                                [](const FitStructure& s) {
@@ -104,37 +106,37 @@ number    : the number the error tables name it by
         .def_property_readonly("virial", [](const FitStructure& s) { return s.has_virial ? py::object(DoubleArray({6}, s.virial)) : py::none(); })
         .def_readonly("number", &FitStructure::number);
 
-    auto cls = py::class_<Pair>(m, "Pair", "The base of PairMTP and PairETN: what a potential gives whatever its kind.");
-    cls.def("get_coeff_count", &Pair::coeff_count, "Length of the coefficient vector get_coeffs gives.")
+    auto cls = py::class_<Pair>(m, "Pair", "The base of PairMTP and PairETN: the methods of a potential of either kind.");
+    cls.def("get_coeff_count", &Pair::coeff_count, "Return the length of the coefficient vector of get_coeffs.")
         .def("get_species_count", &Pair::get_species_count)
         .def("get_radial_basis_size", &Pair::get_radial_basis_size)
         .def("get_min_cutoff", &Pair::get_min_cutoff)
         .def("get_max_cutoff", &Pair::get_max_cutoff)
         .def("get_scaling", &Pair::get_scaling)
         .def("set_scaling", &Pair::set_scaling, py::arg("scaling"), "Set the global scaling parameter.")
-        .def("set_min_cutoff", &Pair::set_min_cutoff, py::arg("d"), "Set the radial basis's minimum distance.")
-        .def("is_trained", &Pair::is_trained, "False for a file without coefficients, which holds the reference code's initial values.")
+        .def("set_min_cutoff", &Pair::set_min_cutoff, py::arg("d"), "Set the minimum distance of the radial basis and rebuild it.")
+        .def("is_trained", &Pair::is_trained, "Return False for a potential without fitted coefficients, which holds initial values.")
         .def("set_trained", &Pair::set_trained, py::arg("trained"))
         .def("get_potential_name", &Pair::get_potential_name)
         .def("get_radial_basis_type", &Pair::get_radial_basis_type)
-        .def("get_species", &Pair::get_species, "The element of each species index.")
+        .def("get_species", &Pair::get_species, "Return the element of each species index.")
         .def("set_species", &Pair::set_species, py::arg("species"))
         .def("get_species_coeffs",
              [](const Pair& self) { return to_array(self.get_species_coeffs()); },
-             "ndarray float64 (species_count)  — per-species reference energies")
+             "Return the per-species reference energies, float64 (species_count).")
         .def("set_species_coeffs",
              [](Pair& self, DoubleArray arr) {
                  check_length(arr, self.get_species_count(), "set_species_coeffs");
                  self.set_species_coeffs(arr.data());
              },
-             py::arg("coeffs"), "Set per-species reference energies. Shape: (species_count,)")
+             py::arg("coeffs"), "Set the per-species reference energies, of shape (species_count,).")
         .def("get_coeffs",
              [](const Pair& self) {
                  auto out = zeros({self.coeff_count()});
                  self.get_coeffs(out.mutable_data());
                  return out;
              },
-             "Every coefficient as one vector, in the order of the potential's kind.")
+             "Return every coefficient as one vector, in the order of the potential.")
         .def("set_coeffs",
              [](Pair& self, DoubleArray arr) {
                  check_length(arr, self.coeff_count(), "set_coeffs");
@@ -153,19 +155,27 @@ number    : the number the error tables name it by
 
     def_neighbors(cls, "eval_grad", &eval_grad,
                   R"doc(
-d(E_i, F, virial)/dc, c as get_coeffs orders it; MTP and ETN only.
+Return d(E_i, F, virial)/dc, with c ordered as in get_coeffs. MTP and ETN only.
 
-Without forces, returns site_energy_grad (inum, cc); row ii is dE_i/dc for
-atom ilist[ii], the information vector extrapolation grades are taken from.
-With forces, returns (site_energy_grad (inum, cc), force_grad (n_atoms, 3, cc), virial_grad (6, cc)|None).
+Args:
+    forces: also return the force gradient.
+    virial: also return the virial gradient; requires forces.
+
+Returns:
+    Without forces, site_energy_grad (inum, cc). Row ii is dE_i/dc of atom ilist[ii],
+    the vector that extrapolation grades use.
+    With forces, (site_energy_grad (inum, cc), force_grad (n_atoms, 3, cc), virial_grad (6, cc) or None).
 )doc",
                   py::arg("forces") = false, py::arg("virial") = false);
 
     def_neighbors(cls, "eval_loss_grad", &eval_loss_grad,
                   R"doc(
-dL/dc (cc,) for a loss L with the given derivatives w.r.t. the energy,
-the forces (n_atoms, 3) and the virial (6, xx,yy,zz,xy,xz,yz); None is zero;
-MTP and ETN only.
+Return dL/dc (cc,) for a loss L with the given derivatives. MTP and ETN only.
+
+Args:
+    dloss_denergy: dL/dE.
+    dloss_dforces: dL/dF (n_atoms, 3), or None for zero.
+    dloss_dvirial: dL/dvirial (6), ordered xx, yy, zz, xy, xz, yz, or None for zero.
 )doc",
                   py::arg("dloss_denergy"), py::arg("dloss_dforces") = py::none(), py::arg("dloss_dvirial") = py::none());
 
@@ -175,15 +185,16 @@ MTP and ETN only.
         py::gil_scoped_release unlocked;
         return error_table(potential, share, species, process[0], title);
     }, py::arg("potential"), py::arg("structures"), py::arg("species"), py::arg("title"), R"doc(
-The errors of potential on the structures, as the table fit_mtp and fit_etn log, under title.
+Return the error table of potential on the structures under title, in the format of the fit_mtp and fit_etn logs.
 
-structures : iterable of FitStructure
-species    : the species' names
+Args:
+    structures: iterable of FitStructure.
+    species: the names of the species.
 )doc");
 }
 
 PYBIND11_MODULE(_core_ext, m) {
-    m.doc() = "What the MTP and ETN bindings share: NeighList, Pair, the error table, Equations and MaxVol.";
+    m.doc() = "The classes the MTP and ETN bindings share: NeighList, FitStructure, Pair, Equations and MaxVol, and error_table.";
 
     bind_core(m);
     bind_maxvol(m);

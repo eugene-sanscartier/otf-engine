@@ -1,6 +1,6 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   The constructors of PairMTP's Python classes, which PairMTPExtrapolation
-   and MTP share.
+   Constructors shared by the Python classes PairMTP, PairMTPExtrapolation
+   and MTP.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-// From an .mtp file, or the untrained MTP of a level or of basis functions.
+// Defines the constructors from an .mtp file, and of the untrained MTP of a level or of basis functions.
 template <class T, class... Options>
 void def_pair_mtp_init(py::class_<T, Options...>& cls) {
     cls.def(py::init<const std::string&>(), py::arg("filename"), "Load an MTP potential from a .mtp file (version 1.1.0).")
@@ -24,11 +24,14 @@ void def_pair_mtp_init(py::class_<T, Options...>& cls) {
              }),
              py::kw_only(), py::arg("level") = py::none(), py::arg("basis_functions") = py::none(), py::arg("species_count") = 0, py::arg("radial_basis_type") = "RBChebyshev", py::arg("min_dist"), py::arg("max_dist"), py::arg("radial_basis_size"),
              R"doc(
-The untrained MTP of a level, 6 to 28, or of basis_functions, as an untrained .mtp file gives it.
+Build the untrained MTP of a level, 6 to 28, or of basis_functions, with the defaults of an untrained .mtp file.
 
-A basis function is mlip-4's: n radial indices, then an n x n symmetric matrix row by row,
-whose diagonal entry is a moment's tensor rank and off-diagonal entry the indices two moments
-contract; every index is contracted. level_basis_functions(level) gives a level's.
-radial_funcs_count is 1 + the largest radial index. species_count 0 leaves the count to training.
+A basis function holds n radial indices, then an n x n symmetric matrix row by row.
+Entry (i, i) is the tensor rank of moment i, and entry (i, j) the number of indices
+moments i and j contract. Every index is contracted. level_basis_functions(level) gives
+the basis functions of a level. radial_funcs_count is 1 + the largest radial index.
+
+Args:
+    species_count: number of species; 0 leaves the count to training.
 )doc");
 }

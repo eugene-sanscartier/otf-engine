@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Standalone MTP radial basis — no LAMMPS dependency.
+   The MTP radial basis.
    Ported from lammps-mtp/src/ML-MTP/mtp_radial_basis.cpp
    Original author: Richard Meng, Queen's University at Kingston, 22.11.24
 ------------------------------------------------------------------------- */
@@ -18,7 +18,7 @@ RadialMTPBasis::RadialMTPBasis(double min_cutoff, double max_cutoff, int size) :
     radial_basis_ders.resize(size);
 }
 
-// calc_radial_basis_ders at each distance.
+// Calls calc_radial_basis_ders at each distance and stores the results in the rows.
 void RadialMTPBasis::calc_radial_basis_rows(int count, const double* dist) {
     row_count = count;
     rows_vals.resize((size_t) size * count);
@@ -32,7 +32,6 @@ void RadialMTPBasis::calc_radial_basis_rows(int count, const double* dist) {
     }
 }
 
-// ---------------------------------------------------------------------------
 void RBChebyshev::calc_radial_basis_ders(double dist) {
     const double delta = dist - max_cutoff;
     const double span = max_cutoff - min_cutoff;

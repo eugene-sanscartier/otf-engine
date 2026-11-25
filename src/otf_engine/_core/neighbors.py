@@ -25,11 +25,14 @@ def species_indices(atoms, species=()) -> ndarray:
 
 
 def neighbors(atoms, cutoff: float, types: ndarray | None = None) -> NeighList:
-    """Build the neighbor list for *atoms* within *cutoff*.
+    """Build the neighbor list of *atoms* within *cutoff*.
 
-    Every pair is listed in both directions — equivalent to LAMMPS REQ_FULL —
-    and the displacements carry the PBC shift, ``D = r_j - r_i + S @ cell``.
-    Any cell shape works, including triclinic cells and cells shorter than *cutoff*.
+    The list holds every pair in both directions. Each displacement includes the
+    periodic shift, ``D = r_j - r_i + S @ cell``. The cell may be triclinic or
+    shorter than *cutoff*.
+
+    Args:
+        types: Species index of each atom, species_indices(atoms) by default.
     """
     if types is None:
         types = species_indices(atoms)

@@ -1,4 +1,4 @@
-"""An ASE Calculator wrapping a Pair: an MTP or an ETN, plain or with its coefficient gradients (MTP, ETN)."""
+"""ASE calculator for any Pair: PairMTP, PairETN and their subclasses."""
 
 import numpy
 from numpy import float64
@@ -9,12 +9,10 @@ from .fit_structure import virial2stress
 
 
 class PairCalculator(Calculator):
-    """ASE Calculator for a Pair.
+    """ASE calculator that evaluates a Pair.
 
-    Parameters
-    ----------
-    potential
-        The potential object, with compute(neighbors) and get_max_cutoff().
+    Args:
+        potential: Pair with compute(neighbors) and get_max_cutoff().
     """
 
     implemented_properties = ["energy", "free_energy", "energies", "forces", "stress"]
@@ -25,7 +23,7 @@ class PairCalculator(Calculator):
         self.cutoff = self.potential.get_max_cutoff()
 
     def neighbors(self, atoms):
-        """Return the neighbor list for *atoms*."""
+        """Return the neighbor list of *atoms*."""
         return neighbors(atoms, self.cutoff, species_indices(atoms, self.potential.get_species()))
 
     def calculate(self, atoms=None, properties=None, system_changes=all_changes):

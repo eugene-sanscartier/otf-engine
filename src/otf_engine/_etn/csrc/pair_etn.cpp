@@ -35,9 +35,6 @@ PairETN::PairETN(std::vector<int> species_ranks, std::vector<int> radial_func_co
     reset_coeffs();
 }
 
-/* ----------------------------------------------------------------------
-   Main Computation Function
-   ---------------------------------------------------------------------- */
 void PairETN::compute(const NeighList& list) {
     const int l_count = (int) species_ranks.size();
     const int core_count = get_core_count();
@@ -52,11 +49,9 @@ void PairETN::compute(const NeighList& list) {
 
     grow_chunk_cache(list);
 
-    // Loop over all provided neighbourhoods, a chunk of them at a time
     for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
         const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
-        // Clear the input and bond vectors and their derivatives
         std::fill(input_vals.begin(), input_vals.end(), Lanes());
         std::fill(bond_vals.begin(), bond_vals.end(), Lanes());
         std::fill(input_energy_ders.begin(), input_energy_ders.end(), Lanes());
@@ -76,7 +71,7 @@ void PairETN::compute(const NeighList& list) {
             select_atom_cache(ii - ii_begin);
             calc_neighbor_rows(jnum, dr);
 
-            // ------------ Calculate the Input Vector ------------
+            // Input vector
             for (int jj = 0; jj < jnum; jj++) {
                 const int j = nbrs[jj];
                 const int jtype = list.types[j];
@@ -127,7 +122,7 @@ void PairETN::compute(const NeighList& list) {
             cached_counts[ii - ii_begin] = valid_count;
         }
 
-        // ------------ Tensor Train, Forwards ------------
+        // Tensor train, forwards
         for (int c = 0; c < core_count; c++) {
             const CovariantShape& left = bond_shapes[c];
             const CovariantShape& right = bond_shapes[c + 1];
@@ -174,7 +169,7 @@ void PairETN::compute(const NeighList& list) {
             energy += nbh_energy;
         }
 
-        // =========== Begin Backpropagation ===========
+        // Backpropagation
         bond_energy_ders[bond_offsets[core_count]] = 1.0;
         for (int c = core_count - 1; c >= 0; c--) {
             const CovariantShape& left = bond_shapes[c];
@@ -190,7 +185,7 @@ void PairETN::compute(const NeighList& list) {
                     const int m1_count = 2 * block.l1 + 1;
                     const Lanes* block_products = core_products.data() + t.products_offset + block.products_offset;
 
-                    // The input's derivatives, and the products' summed per m1
+                    // Derivatives of the input, and derivatives of the products summed per m1
                     std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, Lanes());
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
@@ -207,7 +202,7 @@ void PairETN::compute(const NeighList& list) {
                         }
                     }
 
-                    // The left bond's derivatives, once per m1
+                    // Derivatives of the left bond, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                         const int iu = left.index(block.l1, m1);
                         const Lanes* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
@@ -228,7 +223,7 @@ void PairETN::compute(const NeighList& list) {
 
             select_atom_cache(ii - ii_begin);
 
-            //------------ Compute forces from the input vector's derivatives ------------
+            // Forces from the derivatives of the input vector
             for (int jj = 0; jj < valid_count; jj++) {
                 const int j = cached_j[jj];
                 const double* r = valid_dr[jj].data();
@@ -271,7 +266,6 @@ void PairETN::compute(const NeighList& list) {
                 forces[j * 3 + 1] -= temp_force[1];
                 forces[j * 3 + 2] -= temp_force[2];
 
-                // Accumulate virial stress as PairMTP does
                 virial[0] -= r[0] * temp_force[0];    //xx
                 virial[1] -= r[1] * temp_force[1];    //yy
                 virial[2] -= r[2] * temp_force[2];    //zz
@@ -347,10 +341,7 @@ void PairETN::set_core_coeffs(int i, bool imaginary, const double* c) {
     std::copy(c, c + block.size(), block.begin());
 }
 
-/* ----------------------------------------------------------------------
-   ETN file parsing. Includes allocation. Excludes the radial basis
-   hyperparameters, which the radial basis constructor reads.
-------------------------------------------------------------------------- */
+// Parses the values that remain in ss.
 template <class T>
 static std::vector<T> parse_values(std::istringstream ss) {
     std::vector<T> values;
@@ -359,10 +350,11 @@ static std::vector<T> parse_values(std::istringstream ss) {
     return values;
 }
 
+// Parses an ETN file and allocates the coefficients.
 void PairETN::read_file(std::istream& is) {
     TextFileReader tfr(is);
 
-    // An untrained potential may omit the species count, which training then sets
+    // An untrained potential may omit the species count; training then sets it
     read_header(tfr, "ETN", "1.0.0");
 
     read_radial_basis(tfr);
@@ -386,7 +378,7 @@ void PairETN::read_file(std::istream& is) {
 
     prepare_cores();
 
-    // An untrained potential may omit every coefficient, and takes reset_coeffs' values
+    // An untrained potential may omit the coefficients, and then takes the values of reset_coeffs
     if (!tfr.next_line() || tfr.keyword() != "radial_coeffs") {
         trained = false;
         reset_coeffs();
@@ -395,7 +387,7 @@ void PairETN::read_file(std::istream& is) {
     if (species_count == 0)
         throw std::runtime_error("PairETN: a trained ETN file must give its species count");
 
-    // One line of values per block, each of the length the shape gives it
+    // One line of values per block, of the length that the shape gives
     auto read_block = [&](std::vector<double>& block, const std::string& what) {
         tfr.advance();
         const std::vector<double> values = parse_values<double>(std::istringstream(tfr.line()));
@@ -428,10 +420,7 @@ void PairETN::read_file(std::istream& is) {
     prepare_radial_mixing();
 }
 
-/* ----------------------------------------------------------------------
-   Layouts of the input, the bonds and the cores, and the coefficient
-   blocks and working buffers they size.
-------------------------------------------------------------------------- */
+// Lays out the input, the bonds and the cores, and sizes the coefficient blocks and the work buffers.
 void PairETN::prepare_cores() {
     const int l_count = (int) species_ranks.size();
     if (l_count == 0 || (int) radial_func_counts.size() != l_count || (int) radial_ranks.size() != l_count)
@@ -481,8 +470,7 @@ void PairETN::prepare_cores() {
         for (int c = 1; c < core_count - 1; c++)
             cores_im[c] = prepare_core(c, true);
 
-    // With more than 3 cores, bond b has an imaginary part for 2 <= b <= d-2 and core c for
-    // 1 <= c <= d-2; they combine as mlip-4's ComposeETTProgram combines them.
+    // With more than 3 cores, bond b has an imaginary part for 2 <= b <= d-2, and core c for 1 <= c <= d-2.
     auto bond_has_im = [&](int b) { return has_imaginary_cores() && b >= 2 && b <= core_count - 2; };
     auto core_has_im = [&](int c) { return has_imaginary_cores() && c >= 1 && c <= core_count - 2; };
     core_terms.assign(core_count, {});
@@ -523,7 +511,7 @@ void PairETN::prepare_cores() {
     atom_core_product_ders.resize(block_products_size);
 }
 
-// The first column of each coefficient block in get_coeffs' order, for the current shape and species count.
+// Sets the first column of each coefficient block in the get_coeffs order, for the current shape and species count.
 void PairETN::prepare_columns() {
     const int l_count = (int) species_ranks.size();
     const int core_count = get_core_count();
@@ -540,8 +528,8 @@ void PairETN::prepare_columns() {
     species_columns = column;
 }
 
-// The coefficients of core i ordered l3, n3, l2, n2, l1, n1 with n1 fastest, over the
-// (l1, l2, l3) that pass the triangle rule with an even sum (real part) or an odd one.
+// Lays out the real or imaginary part of core i, its coefficients ordered l3, n3, l2, n2, l1, n1 with n1 fastest.
+// Its blocks are the (l1, l2, l3) that pass the triangle rule, with an even sum for the real part and an odd sum for the imaginary part.
 Core PairETN::prepare_core(int i, bool imaginary) {
     const std::vector<int>& left = bond_shapes[i].ranks;
     const std::vector<int>& middle = input_shape.ranks;
@@ -586,7 +574,7 @@ Core PairETN::prepare_core(int i, bool imaginary) {
     return core;
 }
 
-// S_l[s_i, s_j](n', n) = sum_k A_l[s_i, s_j, k] B_l[k, n', n], as mlip-4 contracts the species first.
+// Computes S_l[s_i, s_j](n', n) = sum_k A_l[s_i, s_j, k] B_l[k, n', n] for each species pair.
 void PairETN::prepare_radial_mixing() {
     const int l_count = (int) species_ranks.size();
     radial_mixing.resize(l_count);

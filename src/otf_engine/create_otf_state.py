@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Utility to create or update otf_state.json from Slurm output files.
+"""Create or update otf_state.json from Slurm output files.
 
-Greps for "Selected/Selecting structure with gamma = " lines and reconstructs
-the gamma_max0_history in the OTF state file.
+The script reads the "Selected/Selecting structure with gamma = " lines and
+rebuilds gamma_max0_history in the OTF state file.
 """
 
 import argparse
@@ -15,9 +15,9 @@ import numpy
 
 OTF_STATE_FILE = "otf_state.json"
 
-# Matches both:
-#   "Selected structure with gamma =  1.2345"  (print with comma, two spaces)
-#   "Selecting structure with gamma = 1.2345"  (f-string, one space)
+# Matches both forms:
+#   "Selected structure with gamma =  1.2345"  (two spaces)
+#   "Selecting structure with gamma = 1.2345"  (one space)
 GAMMA_LINE_RE = re.compile(r"[Ss]elect(?:ed|ing) structure with gamma =\s+([\d.eE+\-]+)")
 
 
@@ -67,7 +67,7 @@ def main():
                         help="Multiplication factor (default: 1.2)")
     args = parser.parse_args()
 
-    # Default to slurm-*.out sorted numerically by the job number
+    # Default to the slurm-*.out files, sorted by job number
     if not args.slurm_outputs:
         import glob
         _slurm_re = re.compile(r"slurm-(\d+)\.out$")
@@ -80,7 +80,6 @@ def main():
         else:
             print("No slurm-*.out files found in current directory.", file=sys.stderr)
 
-    # Load or initialise state
     if args.update and os.path.isfile(args.output):
         with open(args.output) as f:
             state = json.load(f)
@@ -92,7 +91,6 @@ def main():
             print(f"State file {args.output} not found — starting fresh.")
         state = {}
 
-    # Collect gamma observations from all files in order
     all_gammas = []
     for path in args.slurm_outputs:
         if not os.path.isfile(path):

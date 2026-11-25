@@ -23,12 +23,12 @@ class LineSearch {
     // Returns false when the function increases along the ray.
     bool iterate(double curr_f, double curr_g);
 
-    std::string message;    // why the last search failed, for the fit's log
+    std::string message;
 
   private:
     double curr_x;
     double left_x, left_f, left_g;       // left bound of the minimum
-    double right_x, right_f, right_g;    // right bound; it can expand while right_g < 0
+    double right_x, right_f, right_g;    // right bound, which expands while right_g < 0
     double prev_x, prev_f, prev_g;
 };
 
@@ -41,20 +41,20 @@ class BFGS {
     void set_x(const double* x, int n);
     // Sets the inverse Hessian to the identity.
     void reset_hessian();
-    // Sets the inverse Hessian to h, size * size values for the current x.
+    // Sets the inverse Hessian to h [size * size].
     void set_inverse_hessian(const double* h);
     const std::vector<double>& inverse_hessian() const { return inv_hess; }
 
     double x(int i) const { return x_[i]; }
     const std::vector<double>& x() const { return x_; }
     bool in_linesearch() const { return in_linesearch_; }
-    // The step length of the last accepted step along its direction.
+    // Returns the length of the last accepted step along its direction.
     double alpha() const { return alpha_; }
 
     // Returns false when the loss increases along the direction.
     bool iterate(double f, const std::vector<double>& g);
     void reduce_step(double ratio = 0.25);
-    // Why iterate last returned false.
+    // Returns the reason the last iterate() returned false.
     const std::string& message() const { return linesearch.message; }
 
   private:

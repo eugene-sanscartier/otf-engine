@@ -1,7 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Line reader for MTP potential files.
-   Stands in for LAMMPS TextFileReader + ValueTokenizer, which the reference
-   uses to parse the same format.
+   Line reader for the MTP and ETN potential files.
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -14,29 +12,28 @@ class TextFileReader {
   public:
     explicit TextFileReader(std::istream& is) : is_(is) {}
 
-    // Advance to the next content line: blank lines and lines beginning with
-    // '#' are skipped, and the separators "={}," plus any extra are replaced
-    // by spaces. Returns false at end of file.
+    // Advances to the next line that is neither blank nor a '#' comment, and replaces the separators "={}," and
+    // extra_separators by spaces. Returns false at end of file.
     bool next_line(const std::string& extra_separators = "");
 
     // First token of the current line.
     const std::string& keyword() const { return keyword_; }
 
-    // The whole current line, with separators already replaced by spaces.
+    // The current line, with separators replaced by spaces.
     const std::string& line() const { return line_; }
 
-    // Tokens of the current line following the keyword.
+    // Returns a stream of the tokens after the keyword.
     std::istringstream rest() const;
 
-    // Advance one line and throw unless its keyword matches.
+    // Advances one line and throws unless its keyword is keyword.
     void expect(const std::string& keyword);
 
-    // Advance one line, check its keyword, and return the value after it.
+    // Advances one line, checks its keyword, and returns the value after it.
     int next_int(const std::string& keyword);
     double next_double(const std::string& keyword);
     std::string next_string(const std::string& keyword);
 
-    // Advance one line and throw at end of file, without checking the keyword.
+    // Advances one line and throws at end of file.
     void advance();
 
   private:

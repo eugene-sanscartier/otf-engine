@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Comm's collectives over a group of threads and over MPI.
+   The collectives of ThreadComm and MPIComm.
 ------------------------------------------------------------------------- */
 
 #include "comm.h"
@@ -27,7 +27,7 @@ void ThreadGroup::abort() {
     cv.notify_all();
 }
 
-// Combines every rank's published buffer into out, in rank order.
+// Reduces the buffers in slots into out, in rank order.
 template <class T>
 static void reduce_slots(const std::vector<const void*>& slots, T* out, int count, ReduceOp op) {
     for (int i = 0; i < count; i++) {
@@ -42,7 +42,7 @@ static void reduce_slots(const std::vector<const void*>& slots, T* out, int coun
     }
 }
 
-// Combines in of every rank of group into out on every rank; out may be another rank's in until all have read them.
+// Reduces in over the ranks of group into out on every rank. out may be the in of another rank.
 template <class T>
 static void allreduce_slots(ThreadGroup& group, int me, const T* in, T* out, int count, ReduceOp op) {
     group.slots[me] = in;

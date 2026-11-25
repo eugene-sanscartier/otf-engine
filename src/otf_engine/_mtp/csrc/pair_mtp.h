@@ -14,22 +14,21 @@
 #include <string>
 #include <vector>
 
-// The members PairMTP shares with PairETN are Pair's.
+// Pair holds the members PairMTP shares with PairETN.
 class PairMTP : public Pair {
   public:
     // Reads an MTP potential file (version 1.1.0).
     explicit PairMTP(const std::string& filename);
-    // The untrained MTP of these basis functions (see MTP_Basis) on a radial basis, as an untrained
-    // file gives it; species_count 0 leaves the count to training.
+    // Builds the untrained MTP of these basis functions (see MTP_Basis) on a radial basis, with the defaults of an untrained file.
+    // species_count 0 leaves the count to training.
     PairMTP(const std::vector<std::vector<int>>& basis_functions, int species_count, const std::string& radial_basis_type, double min_dist, double max_dist, int radial_basis_size);
 
-    // Energy, per-atom energies, forces and virial of the central atoms in list,
-    // left in the members below.
+    // Computes the energy, per-atom energies, forces and virial of the central atoms in list into members.
     void compute(const NeighList& list) override;
 
     // Length of the coefficient vector [radial | species | linear].
     int coeff_count() const override { return radial_coeff_count + species_count + alpha_scalar_count; }
-    // The coefficients as one vector c = [c_radial | c_species | beta_linear].
+    // Copies the coefficients into one vector c = [c_radial | c_species | beta_linear].
     void get_coeffs(double* c) const override;
     void set_coeffs(const double* c) override;
 
@@ -51,8 +50,8 @@ class PairMTP : public Pair {
 
     void set_linear_coeffs(const double* c) { std::copy(c, c + alpha_scalar_count, linear_coeffs.begin()); }
     void set_radial_basis_coeffs(const double* c) { std::copy(c, c + radial_coeff_count, radial_basis_coeffs.begin()); }
-    // Sizes the coefficients for n species, keeping each kept pair's radial coefficients and each kept species'
-    // site energy; the new entries are zero. Set them afterwards.
+    // Sizes the coefficients for n species. The remaining species keep their radial coefficients and site energies.
+    // The new entries are zero, and the caller sets them.
     void set_species_count(int n);
 
   protected:
@@ -62,14 +61,14 @@ class PairMTP : public Pair {
     void prepare_basis();
     void prepare_angular();
 
-    void reset_coeffs();    // mlip-3's MLMTPR::Load defaults, an untrained potential's coefficients.
+    void reset_coeffs();    // Sets the coefficients of an untrained potential to their defaults.
 
     // Radial basis
-    int radial_func_count = 0;           // Number of radial bases (mu_max)
-    int radial_coeff_count = 0;          // Number of total radial coeffs
-    int radial_coeff_count_per_pair = 0; // Number of coeffs for species pair
+    int radial_func_count = 0;           // number of radial functions (mu_max)
+    int radial_coeff_count = 0;
+    int radial_coeff_count_per_pair = 0;
 
-    std::vector<double> radial_basis_coeffs; // radial basis coeffs (c)
+    std::vector<double> radial_basis_coeffs;
     std::vector<double> linear_coeffs;       // moment tensor basis coeffs (xi)
 
     int alpha_moment_count = 0;
@@ -91,15 +90,15 @@ class PairMTP : public Pair {
     std::vector<int> angular_axis;           // [angular_count] axis of that power
     std::vector<double> angular_vals;        // [angular_count] monomials of the unit displacement
     std::vector<double> angular_ders;        // [angular_count] their adjoints
-    std::vector<double> basic_ders_by_mu;    // [alpha_index_basic_count] energy ders wrt basic moments, grouped
+    std::vector<double> basic_ders_by_mu;    // [alpha_index_basic_count] energy derivatives with respect to the basic moments, in basic_by_mu order
 
-    // Graph traversal, forwards and backwards pass, for compute's chunk of central atoms, a value per atom
-    std::vector<Lanes> moment_tensor_vals;          // the moments
-    std::vector<Lanes> nbh_energy_ders_wrt_moments; // same, for ders
+    // Forward and backward pass over the moment graph for the chunk of compute, one value per atom
+    std::vector<Lanes> moment_tensor_vals;
+    std::vector<Lanes> nbh_energy_ders_wrt_moments; // energy derivatives with respect to the moments
 
     // The same for the kernels that take one atom at a time
     std::vector<double> atom_moment_vals;              // [alpha_moment_count]
     std::vector<double> atom_energy_ders_wrt_moments;  // [alpha_moment_count]
 
-    // neighbor_cache holds per neighbor 1/dist, the radial vals and the radial ders: cache_stride is 1 + 2 * radial_func_count
+    // neighbor_cache holds 1/dist, the radial function values and their derivatives per neighbor, with cache_stride 1 + 2 * radial_func_count
 };

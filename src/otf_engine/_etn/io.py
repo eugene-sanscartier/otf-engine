@@ -1,4 +1,4 @@
-"""ETN file input/output helpers."""
+"""Writer of ETN potential files."""
 
 from __future__ import annotations
 
@@ -8,11 +8,10 @@ from .._core.io import format_floats, format_ints, write_header, write_radial_ba
 
 
 def write_etn(potential, path):
-    """Write an ETN potential to an .etn file.
+    """Write an ETN potential to an .etn file in the layout that PairETN::read_file reads.
 
-    The file structure is the one PairETN::read_file() expects. An untrained
-    potential is written without its coefficients, as write_mtp writes one, and
-    without its species count if it has none.
+    The file of an untrained potential omits the coefficients. The file omits the
+    species count when the potential has none.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -21,7 +20,6 @@ def write_etn(potential, path):
     core_count = potential.get_core_count()
 
     with path.open("w", encoding="utf-8") as stream:
-        # an untrained potential may have no species count until training
         write_header(stream, potential, "ETN", "1.0.0", with_species_count=potential.get_species_count() > 0)
         write_radial_basis(stream, potential)
         stream.write("species_ranks = {" + format_ints(potential.get_species_ranks()) + "}\n")

@@ -1,5 +1,5 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Standalone MTP radial basis — no LAMMPS dependency.
+   The MTP radial basis.
    Ported from lammps-mtp/src/ML-MTP/mtp_radial_basis.h
    Original author: Richard Meng, Queen's University at Kingston, 22.11.24
 ------------------------------------------------------------------------- */
@@ -10,12 +10,12 @@
 
 class RadialMTPBasis {
   public:
-    // size functions on [min_cutoff, max_cutoff].
+    // Sets up a basis of size functions on [min_cutoff, max_cutoff].
     RadialMTPBasis(double min_cutoff, double max_cutoff, int size);
     virtual ~RadialMTPBasis() = default;
 
     virtual void calc_radial_basis_ders(double dist) = 0;
-    // The values and derivatives at count distances into rows_vals and rows_ders, each function's in a row of count.
+    // Computes the values and derivatives at count distances into rows_vals and rows_ders, a row of count per function.
     virtual void calc_radial_basis_rows(int count, const double* dist);
     // Copies distance k of the rows into radial_basis_vals and radial_basis_ders.
     void select_row(int k) {
@@ -25,21 +25,22 @@ class RadialMTPBasis {
         }
     }
 
-    int size = 0;          // The size of the radial basis functions
-    double min_cutoff = 0; // Minimum radius value
-    double max_cutoff = 0; // Cutoff radius
-    double scaling = 1.0;  // All radial functions are multiplied by scaling
+    int size = 0;          // number of radial functions
+    double min_cutoff = 0;
+    double max_cutoff = 0;
+    double scaling = 1.0;  // factor on every radial function
 
-    // Values and derivatives for radial basis functions
+    // [size] values and derivatives at the last distance of calc_radial_basis_ders
     std::vector<double> radial_basis_vals;
     std::vector<double> radial_basis_ders;
 
-    // The last calc_radial_basis_rows: its count of distances, and the values and derivatives [size * row_count]
+    // from the last calc_radial_basis_rows: its count of distances, and the values and derivatives [size * row_count]
     int row_count = 0;
     std::vector<double> rows_vals, rows_ders;
 };
 
-// phi_0 = (r - r_cut)^2, phi_1 = ksi (r - r_cut)^2, Chebyshev recursion above.
+// phi_0 = (r - r_cut)^2, phi_1 = ksi (r - r_cut)^2, then phi_i = 2 ksi phi_{i-1} - phi_{i-2}, all times scaling.
+// ksi = (2 r - (min_cutoff + max_cutoff)) / (max_cutoff - min_cutoff).
 class RBChebyshev : public RadialMTPBasis {
   public:
     RBChebyshev(double min_cutoff, double max_cutoff, int size) : RadialMTPBasis(min_cutoff, max_cutoff, size) {}

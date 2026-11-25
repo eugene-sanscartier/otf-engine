@@ -27,22 +27,22 @@ void bind_maxvol(py::module_& m) {
                  self.add(pot, nb.view(), structure);
              },
              py::arg("potential"), py::arg("neighbors"), py::arg("structure") = -1,
-             "Append the equations of one structure, as the potential's current coefficients give them, numbered structure (by default the next).")
+             "Append the equations of one structure at the current coefficients of potential.\n\nArgs:\n    structure: the number of the structure, by default one more than the highest so far.")
         .def("subset",
              [](const Equations& self, BoolArray keep) {
                  if (keep.size() != self.size())
                      throw std::runtime_error("Equations.subset: keep must have one entry per equation");
                  return self.subset(keep.data());
              },
-             py::arg("keep"), "The equations whose keep entry is true, under the same structure numbering.")
+             py::arg("keep"), "Return the equations whose keep entry is true, with the same structure numbers.")
         .def("__len__", &Equations::size)
         .def_readonly("structure_count", &Equations::structure_count)
         .def_property_readonly("structure_indices", [](const Equations& self) { return IntArray({self.size()}, self.structure_indices.data()); },
-                               "Which added structure each equation belongs to.")
+                               "The structure number of each equation.")
         .def_property_readonly("equation_indices", [](const Equations& self) { return IntArray({self.size()}, self.equation_indices.data()); },
                                "The index of each equation within its structure.");
 
-    py::class_<MaxVol>(m, "MaxVol", "A MaxVol active set: A, invA = A^-T, and the structure and equation each active row came from.")
+    py::class_<MaxVol>(m, "MaxVol", "A MaxVol active set: A, invA = A^-T, and the pool, structure and equation of each active row.")
         .def(py::init<int, double, double, std::optional<double>>(), py::arg("n"), py::arg("init_scale") = 1e-6, py::arg("threshold") = 1.001, py::arg("threshold_swap") = py::none())
         .def(py::init([](DoubleArray A, DoubleArray invA, double threshold, std::optional<double> threshold_swap) {
                  if (A.ndim() != 2 || A.shape(0) != A.shape(1) || invA.ndim() != 2 || invA.shape(0) != A.shape(0) || invA.shape(1) != A.shape(0))
@@ -61,7 +61,7 @@ void bind_maxvol(py::module_& m) {
                  }
                  return grades;
              },
-             py::arg("equations"), "The extrapolation grade of each equation, max_i |v . invA[i]|.")
+             py::arg("equations"), "Return the extrapolation grade max_i |v . invA[i]| of each equation v.")
         .def("maximize_volume",
              [](MaxVol& self, Equations& pool, int pool_id, py::object comm, int max_swaps) {
                  check_width(self, pool);
@@ -70,11 +70,13 @@ void bind_maxvol(py::module_& m) {
                  self.maximize_volume(pool, pool_id, process[0], max_swaps);
              },
              py::arg("equations"), py::arg("pool_id") = -1, py::arg("comm") = py::none(), py::arg("max_swaps") = 99999, R"doc(
-Swap equations of the pool into the active set, the highest-grading first, until none grades above threshold.
+Swap equations of the pool into the active set, highest grade first, until none grades above threshold.
 
-comm : an mpi4py communicator to search over its ranks. Every rank passes the same active set and
-       its own share of the pool, numbered by structure across the whole pool, and ends with the
-       same A, invA and provenance.
+Args:
+    pool_id: the pool recorded for each equation that enters the active set.
+    comm: an mpi4py communicator to search over. Each rank passes the same active set and its own
+        share of the pool, with structures numbered across the whole pool. Every rank ends with
+        the same A, invA and provenance.
 )doc")
         .def("restore_active",
              [](MaxVol& self, IntArray structure_indices, IntArray eqn_indices, int pool_id) {
@@ -84,7 +86,7 @@ comm : an mpi4py communicator to search over its ranks. Every rank passes the sa
              },
              py::arg("structure_indices"), py::arg("eqn_indices"), py::arg("pool_id"), "Restore the provenance of each active row from saved indices.")
         .def_readwrite("threshold", &MaxVol::threshold)
-        .def_readwrite("threshold_swap", &MaxVol::threshold_swap, "Once a search has swapped, it goes on while a grade exceeds this; None, threshold.")
+        .def_readwrite("threshold_swap", &MaxVol::threshold_swap, "After the first swap, a search goes on while a grade exceeds threshold_swap, or threshold if None.")
         .def_property_readonly("A", [](const MaxVol& self) { return DoubleArray({self.n, self.n}, self.A.data()); })
         .def_property_readonly("invA", [](const MaxVol& self) { return DoubleArray({self.n, self.n}, self.invA.data()); })
         .def_property_readonly("active_pool_ids", [](const MaxVol& self) { return IntArray({self.n}, self.active_pool_ids.data()); })

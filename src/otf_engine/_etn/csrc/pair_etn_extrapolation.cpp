@@ -1,10 +1,10 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   An ETN that grades extrapolation in compute. It takes its atoms in
-   chunks as PairETN::compute does: the forward pass, then the backwards
-   pass, which gives the forces and each atom's site-energy gradient over
-   the cores' coefficients, then per atom the other columns of that
-   gradient as ETN::eval_grad gives them. The grade is that gradient
-   against the inverse active set, as MaxVol::grade takes it.
+   An ETN potential that grades extrapolation in compute. compute takes
+   the central atoms in chunks. Per chunk, it runs the forward pass, then
+   the backwards pass, which gives the forces and the core columns of the
+   site-energy gradient of each atom. Per atom, it then adds the radial,
+   species-pair and species columns of that gradient. grade_rows grades
+   the gradient against the inverse active set.
 ------------------------------------------------------------------------- */
 
 #include "pair_etn_extrapolation.h"
@@ -46,11 +46,9 @@ void PairETNExtrapolation::compute(const NeighList& list) {
     if (neighbor_radial_vals.size() < (size_t) chunk_size * atom_cache_size * radial_basis_size) neighbor_radial_vals.resize((size_t) chunk_size * atom_cache_size * radial_basis_size);
     core_coeff_ders.resize(n_coeffs);
 
-    // Loop over all provided neighbourhoods, a chunk of them at a time
     for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
         const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
-        // Clear the input and bond vectors, their derivatives and the cores' columns
         std::fill(input_vals.begin(), input_vals.end(), Lanes());
         std::fill(bond_vals.begin(), bond_vals.end(), Lanes());
         std::fill(input_energy_ders.begin(), input_energy_ders.end(), Lanes());
@@ -72,7 +70,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
             calc_neighbor_rows(jnum, dr);
             double* atom_radial_vals = neighbor_radial_vals.data() + (size_t) (ii - ii_begin) * atom_cache_size * radial_basis_size;
 
-            // ------------ The neighbors within the cutoff: harmonics, radial basis and the input vector ------------
+            // Neighbors within the cutoff: harmonics, radial basis and input vector
             for (int jj = 0; jj < jnum; jj++) {
                 const int j = nbrs[jj];
                 const int jtype = list.types[j];
@@ -124,7 +122,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
             cached_counts[ii - ii_begin] = valid_count;
         }
 
-        // ------------ Tensor Train, Forwards ------------
+        // Tensor train, forwards
         for (int c = 0; c < core_count; c++) {
             const CovariantShape& left = bond_shapes[c];
             const CovariantShape& right = bond_shapes[c + 1];
@@ -171,7 +169,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
             energy += nbh_energy;
         }
 
-        // =========== Begin Backpropagation, with the cores' columns ===========
+        // Backpropagation, with the core columns
         bond_energy_ders[bond_offsets[core_count]] = 1.0;
         for (int c = core_count - 1; c >= 0; c--) {
             const CovariantShape& left = bond_shapes[c];
@@ -189,7 +187,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                     const int m1_count = 2 * block.l1 + 1;
                     const Lanes* block_products = core_products.data() + t.products_offset + block.products_offset;
 
-                    // The input's derivatives, and the products' summed per m1
+                    // Derivatives of the input, and derivatives of the products summed per m1
                     std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, Lanes());
                     for (int e = block.w_begin; e < block.w_end; e++) {
                         const WignerEntry& w = wigner[e];
@@ -206,7 +204,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                         }
                     }
 
-                    // The left bond's and the core's derivatives, once per m1
+                    // Derivatives of the left bond and of the core, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                         const int iu = left.index(block.l1, m1);
                         const Lanes* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
@@ -235,7 +233,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
 
             select_atom_cache(a);
 
-            // ---- The cores' coefficients, then the species', into the configuration's candidate vector or the atom's row of the chunk's ----
+            // Core columns, then the species column, into the candidate vector of the configuration or the row of the atom
             double* row = energy_ders_wrt_coeffs.data() + (configuration_mode ? 0 : (size_t) a * n_coeffs);
             if (configuration_mode)
                 for (int k = 0; k < n_coeffs; k++) row[k] += core_coeff_ders[k][a];
@@ -255,7 +253,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                 const double* basis_vals = atom_radial_vals + (size_t) jj * radial_basis_size;
                 const int pair = itype * species_count + list.types[j];
 
-                // ---- Radial and species-pair coefficients ----
+                // Radial and species-pair coefficients
                 for (int l = 0; l < l_count; l++) {
                     const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
                     const int shift = l == 0 ? 1 : 0;
@@ -264,7 +262,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                     double* pair_ders = row + species_pair_columns[l] + pair * rank_s;
                     double* radial_ders = row + radial_columns[l];
                     for (int n = 0; n < rank_r; n++) {
-                        // dE_i/db_n, the derivative of the channel's value
+                        // dE_i/db_n, the derivative with respect to the value of the channel
                         double value_der = 0;
                         for (int m = -l; m <= l; m++)
                             value_der += ylm[l * l + l + m] * input_energy_ders[input_shape.index(l, m) + shift + n][a];
@@ -280,7 +278,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                     }
                 }
 
-                //------------ Forces from the input vector's derivatives ------------
+                // Forces from the derivatives of the input vector
                 double angular[3] = {0, 0, 0};
                 double radial_force = 0;
                 for (int l = 0; l < l_count; l++) {
@@ -313,7 +311,6 @@ void PairETNExtrapolation::compute(const NeighList& list) {
                 forces[j * 3 + 1] -= temp_force[1];
                 forces[j * 3 + 2] -= temp_force[2];
 
-                // Accumulate virial stress as PairMTP does
                 virial[0] -= r[0] * temp_force[0];    //xx
                 virial[1] -= r[1] * temp_force[1];    //yy
                 virial[2] -= r[2] * temp_force[2];    //zz
@@ -323,7 +320,6 @@ void PairETNExtrapolation::compute(const NeighList& list) {
             }
         }
 
-        // The chunk's neighborhood grades, at once
         if (!configuration_mode) {
             const int count = ii_end - ii_begin;
             chunk_grades.resize(count);
@@ -335,7 +331,7 @@ void PairETNExtrapolation::compute(const NeighList& list) {
         }
     }
 
-    // The configuration grade, normalized by the atom count
+    // Configuration grade, divided by n_atoms^(weight_scaling / 2)
     if (configuration_mode) {
         grade_rows(inverse_active_set.data(), n_coeffs, energy_ders_wrt_coeffs.data(), 1, &max_grade, grade_block);
         max_grade = list.n_atoms > 0 ? max_grade / std::pow((double) list.n_atoms, 0.5 * weight_scaling) : 0.0;

@@ -1,21 +1,22 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Shared pieces of the pybind11 layer.
+   The pieces the pybind11 bindings share.
 
-   One binding unit per source pair, bound in the same order. In the
+   Each source pair has one binding unit, bound in this order. The
    _core_ext module:
      core_bindings.cpp                    <- neigh_list.h, pair.{h,cpp}, error_table.h
      maxvol_bindings.cpp                  <- maxvol.{h,cpp}
-   in the _mtp_ext module under ../../_mtp/csrc/:
+   The _mtp_ext module, under ../../_mtp/csrc/:
      pair_mtp_bindings.cpp                <- pair_mtp.{h,cpp}
      pair_mtp_extrapolation_bindings.cpp  <- pair_mtp_extrapolation.{h,cpp}
      mtp_bindings.cpp                     <- mtp.{h,cpp}
-     mtp_fit_bindings.cpp             <- mtp_fit.{h,cpp}
-   and in the _etn_ext module under ../../_etn/csrc/:
+     mtp_fit_bindings.cpp                 <- mtp_fit.{h,cpp}
+   The _etn_ext module, under ../../_etn/csrc/:
      etn_harmonics_bindings.cpp           <- etn_harmonics.{h,cpp}
      pair_etn_bindings.cpp                <- pair_etn.{h,cpp}
      etn_bindings.cpp                     <- etn.{h,cpp}
-     etn_fit_bindings.cpp             <- etn_fit.{h,cpp}
-   and the test-only _mtp_testing (mtp_testing_bindings.cpp) and _etn_testing (etn_testing_bindings.cpp).
+     etn_fit_bindings.cpp                 <- etn_fit.{h,cpp}
+   The test-only modules: _mtp_testing (mtp_testing_bindings.cpp) and
+   _etn_testing (etn_testing_bindings.cpp).
 ------------------------------------------------------------------------- */
 
 #pragma once
@@ -81,14 +82,14 @@ class PyNeighbors {
     NeighList list_;
 };
 
-// A copy of values as a numpy array of the given shape, by default flat.
+// Copies values into a numpy array of the given shape, flat by default.
 template <class T>
 py::array_t<T> to_array(const std::vector<T>& values, std::vector<py::ssize_t> shape = {}) {
     if (shape.empty()) shape = {(py::ssize_t) values.size()};
     return py::array_t<T>(shape, values.data());
 }
 
-// Raises unless arr holds length values; what, the setter's name, prefixes the error.
+// Raises unless arr holds length values. what, the name of the setter, prefixes the error.
 inline void check_length(const DoubleArray& arr, py::ssize_t length, const char* what) {
     if (arr.size() != length)
         throw std::runtime_error(std::string(what) + ": expected length " + std::to_string(length));
@@ -100,7 +101,7 @@ inline DoubleArray zeros(std::vector<py::ssize_t> shape) {
     return a;
 }
 
-// Runs self.compute on nb with the GIL released, and copies out the results it leaves in the potential:
+// Runs self.compute on nb with the GIL released and returns its results as a dict:
 // "energy", "forces" (n_atoms, 3), "virial" (6) and "eatom" (n_atoms).
 inline py::dict compute_results(Pair& self, const PyNeighbors& nb) {
     {
@@ -116,13 +117,13 @@ inline py::dict compute_results(Pair& self, const PyNeighbors& nb) {
     return result;
 }
 
-// Logs message as a warning through the otf_engine logger, as the Python modules log; the caller holds the GIL.
+// Logs message as a warning to the otf_engine._core logger. The caller holds the GIL.
 inline void log_warning(const std::string& message) {
     py::module_::import("logging").attr("getLogger")("otf_engine._core").attr("warning")(message);
 }
 
-// The stream a fit's log option names: stdout (or empty), none, or a file, opened into file. A file that cannot
-// be opened is a warning, and gives no log.
+// Returns the stream that target names: std::cout for stdout or empty, null for none, else the file opened into file.
+// Logs a warning and returns null when the file cannot be opened.
 inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     if (target == "stdout" || target.empty()) return &std::cout;
     if (target == "none") return nullptr;
@@ -132,7 +133,7 @@ inline std::ostream* open_log(const std::string& target, std::ofstream& file) {
     return nullptr;
 }
 
-// structures, an iterable of FitStructure, split round-robin into rank_count shares, as mlp's MPI_LoadCfgs deals a file.
+// Splits structures, an iterable of FitStructure, round-robin into rank_count shares.
 inline std::vector<std::vector<FitStructure>> split_structures(py::iterable structures, int rank_count) {
     std::vector<std::vector<FitStructure>> shares(rank_count);
     int k = 0;
@@ -141,8 +142,8 @@ inline std::vector<std::vector<FitStructure>> split_structures(py::iterable stru
     return shares;
 }
 
-// The ranks this process runs: `ranks` threads of a group of their own, or, given an mpi4py communicator comm, its
-// rank of comm. name (fit_mtp, maximize_volume, ...) prefixes the errors.
+// The ranks this process runs: `ranks` threads of a new ThreadGroup, or its rank of the mpi4py communicator comm.
+// name (fit_mtp, maximize_volume, ...) prefixes the errors.
 class ProcessRanks {
   public:
     ProcessRanks(const char* name, int ranks, py::object comm) {
@@ -162,9 +163,9 @@ class ProcessRanks {
     int count() const { return (int) comms.size(); }
     Comm& operator[](int r) { return *comms[r]; }
 
-    // Runs fn(comm, r) on each rank r of this process with the GIL released, each on a thread of its own and rank 0
-    // on the calling thread, and raises the exception of the lowest rank that raised. A runtime_error is one a
-    // fit raises on every rank together; any other exception stops the other ranks with Comm::abort.
+    // Runs fn(comm, r) on each rank r of this process with the GIL released, rank 0 on the calling thread and the
+    // others on threads of their own. Rethrows the exception of the lowest rank that threw.
+    // A runtime_error comes from every rank together. Any other exception stops the other ranks with Comm::abort.
     void run(const std::function<void(Comm&, int)>& fn) {
         std::vector<std::exception_ptr> raised(count());
         auto run_rank = [&](int r) {
@@ -198,8 +199,7 @@ class ProcessRanks {
     std::vector<std::unique_ptr<Comm>> comms;
 };
 
-// Raises unless every atom of nb has one of the potential's species, which the
-// kernels index their coefficients with.
+// Raises unless the species of every atom of nb lies in [0, species_count) of the potential.
 inline void check_species(const Pair& self, const PyNeighbors& nb) {
     const NeighList& list = nb.view();
     for (int i = 0; i < list.n_atoms; i++)
@@ -207,8 +207,8 @@ inline void check_species(const Pair& self, const PyNeighbors& nb) {
             throw std::runtime_error("NeighList: atom " + std::to_string(i) + " has species " + std::to_string(list.types[i]) + ", outside the potential's " + std::to_string(self.get_species_count()) + " species");
 }
 
-// Binds fn, which takes a NeighList, checking the species first.
-// `extra` carries the py::arg entries for any trailing parameters.
+// Binds fn as the method name of cls, which checks the species of the NeighList before it calls fn.
+// extra: the py::arg entries of the parameters after the NeighList.
 template <class Cls, class Self, class Ret, class... Args, class... Extra>
 void def_neighbors(Cls& cls, const char* name, Ret (*fn)(Self&, const PyNeighbors&, Args...), const char* doc, Extra... extra) {
     cls.def(
@@ -220,9 +220,10 @@ void def_neighbors(Cls& cls, const char* name, Ret (*fn)(Self&, const PyNeighbor
         py::arg("neighbors"), extra..., doc);
 }
 
-// d(E_i, F, virial)/dc of the structure nb, as eval(site_energy_grad, force_grad, virial_grad) fills them for
-// a potential of width coefficients, the force and virial arrays null unless asked for: site_energy_grad (inum, width)
-// alone, or with forces the tuple (site_energy_grad, force_grad (n_atoms, 3, width), virial_grad (6, width)|None).
+// Returns d(E_i, F, virial)/dc of nb for width coefficients, which eval(site_energy_grad, force_grad, virial_grad)
+// fills. eval gets a null force_grad unless forces, and a null virial_grad unless virial.
+// Returns site_energy_grad (inum, width), or with forces the tuple (site_energy_grad, force_grad (n_atoms, 3, width),
+// virial_grad (6, width) or None).
 inline py::object grad_arrays(const PyNeighbors& nb, int width, bool forces, bool virial, const std::function<void(double*, double*, double*)>& eval) {
     if (virial && !forces)
         throw std::runtime_error("eval_grad: the virial gradient comes with the force gradient");
@@ -241,15 +242,16 @@ inline py::object grad_arrays(const PyNeighbors& nb, int width, bool forces, boo
     return py::make_tuple(eg, fg, virial ? py::object(vg) : py::none());
 }
 
-// Pointers into a fit's options, by the names they take as numbers or flags.
+// Pointers to the number and flag fields of the options of a fit, by option name.
 struct OptionFields {
     std::map<std::string, double*> doubles;
     std::map<std::string, int*> ints;
     std::map<std::string, bool*> bools;
 };
 
-// A fit's options from strings, as name (fit_mtp, fit_etn) takes them: log, the log target, into log;
-// species, the species' names, comma-separated; the weights; balance_species; varpro_fraction; no_mindist_update; and the fields add_option_fields(o, fields) adds.
+// Parses the options of a fit from strings. name (fit_mtp, fit_etn) prefixes the errors.
+// Keys: log (the log target, written into log), species (comma-separated names), the weights, balance_species,
+// varpro_fraction, no_mindist_update, and the fields that add_option_fields(o, fields) adds.
 template <class Options>
 Options parse_options(const char* name, const std::map<std::string, std::string>& options, std::string& log) {
     Options o;
@@ -280,10 +282,11 @@ Options parse_options(const char* name, const std::map<std::string, std::string>
     return o;
 }
 
-// Trains the potential in filename with FitT over the ranks of this process, and returns it. Under MPI every
-// process calls it with its share of the structures; on threads they are dealt over the ranks. Rank 0 writes the
-// log to log_target, trains the potential it returns and hands it to checkpoint, whose first failure is a warning
-// and ends checkpointing, and passes its fit to finished once it has run. name (fit_mtp, fit_etn) prefixes the errors.
+// Trains the potential in filename with FitT over the ranks of this process and returns it.
+// Under MPI, each process passes its share of the structures. On threads, the function deals them over the ranks.
+// Rank 0 writes the log to log_target and trains the returned potential. It passes that potential to checkpoint,
+// and its fit to finished after the run. The first failure of checkpoint logs a warning and ends checkpointing.
+// name (fit_mtp, fit_etn) prefixes the errors.
 template <class FitT>
 py::object train_potential(const char* name, const std::string& filename, py::iterable structures, const typename FitT::Options& options, const std::string& log_target, int ranks, py::object comm, py::object checkpoint, const std::function<void(const FitT&)>& finished = nullptr) {
     using Potential = typename FitT::Potential;

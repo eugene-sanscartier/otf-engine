@@ -33,7 +33,6 @@ bool WolfeLineSearch::iterate(double curr_f, double curr_g) {
         left_f = prev_f = curr_f;
         left_g = prev_g = curr_g;
         curr_x = right_x;
-        // mlip-4 throws here; a failed search ends as the others below do, so that no rank raises alone
         if (curr_g > 0) {
             message = format_text("f'(0) = %.2e > 0", curr_g);
             return false;
@@ -114,7 +113,6 @@ bool WolfeLineSearch::iterate(double curr_f, double curr_g) {
         return true;
     }
 
-    // Secant step on the derivative
     double new_x = curr_x - curr_g * (curr_x - prev_x) / (curr_g - prev_g);
     prev_x = curr_x; prev_f = curr_f; prev_g = curr_g;
     curr_x = new_x;
@@ -165,7 +163,6 @@ bool WolfeBFGS::iterate(double f, const std::vector<double>& g) {
 
     bool loss_decrease;    // false when the loss increases, which ends BFGS
     if (iters_no_improve < max_iters_no_improve && (f > f_start + wolfe_c1 * linesearch.x() * p_dot_g_start || std::fabs(p_dot_g) > wolfe_c2 * std::fabs(p_dot_g_start))) {
-        // Within the line search, until the Wolfe conditions hold or it stalls
         if (f < 2 * f_start) iters_no_improve++;
         in_linesearch_ = true;
 

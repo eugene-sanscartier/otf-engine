@@ -1,7 +1,7 @@
 /* -*- c++ -*- ----------------------------------------------------------
-   Input and bond vectors of an ETN, and derivatives of its site energies,
-   and of a loss built on its energy, forces and virial, with respect to
-   its coefficients.
+   An ETN potential with its input and bond vectors, and the gradients
+   with respect to its coefficients of its site energies and of a loss
+   on its energy, forces and virial.
 ------------------------------------------------------------------------- */
 
 #include "etn.h"
@@ -11,9 +11,6 @@
 #include <limits>
 #include <stdexcept>
 
-/* ----------------------------------------------------------------------
-   Input and bond vectors per central atom
-------------------------------------------------------------------------- */
 void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_out) {
     const int l_count = (int) species_ranks.size();
     const int core_count = get_core_count();
@@ -34,7 +31,7 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
         int valid_count = 0;
         calc_neighbor_rows(jnum, dr);
 
-        // ------------ Calculate the Input Vector ------------
+        // Input vector
         for (int jj = 0; jj < jnum; jj++) {
             const int j = nbrs[jj];
             const int jtype = list.types[j];
@@ -61,7 +58,7 @@ void ETN::eval_bonds(const NeighList& list, double* inputs_out, double* bonds_ou
             }
         }
 
-        // ------------ Tensor Train, Forwards ------------
+        // Tensor train, forwards
         for (int c = 0; c < core_count; c++) {
             const CovariantShape& left = bond_shapes[c];
             const CovariantShape& right = bond_shapes[c + 1];
@@ -120,18 +117,18 @@ void ETN::grow_neighbor_rows(int jnum) {
 }
 
 /* ----------------------------------------------------------------------
-   The site-energy gradient takes the cores' columns from the backwards
-   pass through the tensor train, and the radial and species-pair columns
-   from dE_i/dv: each neighbor's channel b_n = sum_n' basis_n' S(n', n),
+   The backwards pass through the tensor train gives the core columns of
+   the site-energy gradient. dE_i/dv gives the radial and species-pair
+   columns: the channel of a neighbor is b_n = sum_n' basis_n' S(n', n),
    with S_l = A_l B_l for its species pair.
 
-   Without the nonlinear columns, a last-core column's site energy is
-   bilinear in the last bond and the input vector, and its force gradient
-   is PairETN::compute's force pass on its derivative w.r.t. the input
-   vector. One backwards pass carries every column's seed, a value per
-   seed, as compute's carries a chunk's atoms, and the passes of A atoms
-   run together, the atom's lane innermost. The last core has no
-   imaginary part.
+   Without the nonlinear columns, the site energy of a last-core column is
+   bilinear in the last bond and the input vector. Its force gradient is
+   the force pass of PairETN::compute applied to its derivative with
+   respect to the input vector. One backwards pass carries the seeds of
+   all columns, one value per seed. The passes of A atoms run together,
+   with the lane of the atom innermost. The last core has no imaginary
+   part.
 ------------------------------------------------------------------------- */
 template <int A>
 void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool nonlinear) {
@@ -150,19 +147,20 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
     std::fill(site_e_grad, site_e_grad + (size_t) list.inum * width, 0.0);
     if (force_grad) std::fill(force_grad, force_grad + (size_t) list.n_atoms * 3 * width, 0.0);
     if (virial_grad) std::fill(virial_grad, virial_grad + 6 * width, 0.0);
-    // The last core's columns, numbered by block, n3, n1 then n2, and the backwards passes that carry them, numbered by
-    // block, n1 then pass, so that a channel (l1, n1) of the last bond seeds contiguous passes. A column has a pass of its
-    // own, unless its block has fewer unit seeds, one per m1, than columns per n1: then it combines its n1's unit passes.
-    // The last core has one term, real on the real last bond, since the last bond has no imaginary part.
+    // The columns of the last core are numbered by block, n3, n1, then n2. The backwards passes that carry them are
+    // numbered by block, n1, then pass, and a channel (l1, n1) of the last bond seeds contiguous passes.
+    // A column has a pass of its own, unless its block has fewer unit seeds (one per m1) than columns per n1.
+    // A column of such a unit block combines the unit passes of its n1.
+    // The last core has one real term, and the last bond has no imaginary part.
     struct LastBlock {
         int first_column, first_pass, first_unit_coef;
         bool unit;
     };
     std::vector<LastBlock> last_blocks;
-    std::vector<int> column_coeffs;                  // each column's coefficient within the core
-    std::vector<int> column_pass;                    // each column's pass, or -1 when it combines unit passes
-    std::vector<std::pair<int, int>> entry_passes;   // [first, end) of the passes each entry of the last bond seeds, from its offset
-    std::vector<double> unit_coefs;                  // per column of a unit block and m1, its seed on that m1's unit pass
+    std::vector<int> column_coeffs;                  // coefficient of each column within the core
+    std::vector<int> column_pass;                    // pass of each column, or -1 for a column of a unit block
+    std::vector<std::pair<int, int>> entry_passes;   // [first, end) of the passes that an entry of the last bond seeds, by its offset in the bond
+    std::vector<double> unit_coefs;                  // seed of each column of a unit block on the unit pass of each m1
     int pass_count = 0;
     if (!nonlinear) {
         const CovariantShape& left = bond_shapes[last];
@@ -200,7 +198,6 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
 
     int nbr_offset = 0;
 
-    // A atoms per chunk: the linear path runs their backwards passes on a lane per atom
     grow_chunk_cache(list);
     if (!nonlinear) {
         lane_input_vals.resize((size_t) input_shape.size * A);
@@ -241,7 +238,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
             atom_input_vals[0] = 1.0;
             atom_bond_vals[bond_offsets[0]] = 1.0;
 
-            // ------------ The neighbors within the cutoff: harmonics, radial basis and the input vector ------------
+            // Neighbors within the cutoff: harmonics, radial basis and input vector
             for (int jj = 0; jj < jnum; jj++) {
                 const int j = nbrs[jj];
                 const int jtype = list.types[j];
@@ -262,7 +259,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                 double* ylm = neighbor_harmonics.data() + (size_t) valid_count * harmonic_count;
                 std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
 
-                // The force pass's values, laid out as PairETN::compute caches them
+                // Values for the force pass, in the neighbor_cache layout
                 double* cache = neighbor_cache + (size_t) valid_count * cache_stride;
                 double* ylm_grads = cache + 1 + harmonic_count;
                 double* mixed = ylm_grads + 3 * harmonic_count;
@@ -293,7 +290,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                 valid_count++;
             }
 
-            // ------------ Tensor Train, Forwards ------------
+            // Tensor train, forwards
             for (int c = 0; c < core_count; c++) {
                 const CovariantShape& left = bond_shapes[c];
                 const CovariantShape& right = bond_shapes[c + 1];
@@ -343,7 +340,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                 for (int v = 0; v < input_shape.size; v++) lane_input_vals[(size_t) v * A + a] = atom_input_vals[v];
                 for (size_t q = 0; q < atom_core_products.size(); q++) lane_core_products[q * A + a] = atom_core_products[q];
 
-                // =========== The last core's columns: their site energies, their derivatives w.r.t. the input, and the passes' seeds ===========
+                // Last-core columns: their site energies, their derivatives with respect to the input, and the seeds of the passes
                 double* core_ders = row + core_columns[last];
                 for (size_t b = 0; b < cores[last].blocks.size(); b++) {
                     const CoreBlock& block = cores[last].blocks[b];
@@ -380,7 +377,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                 continue;
             }
 
-            // =========== Begin Backpropagation, with the cores' columns ===========
+            // Backpropagation, with the core columns
             for (int c = core_count - 1; c >= 0; c--) {
                 const CovariantShape& left = bond_shapes[c];
                 const CovariantShape& right = bond_shapes[c + 1];
@@ -397,7 +394,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                         const int m1_count = 2 * block.l1 + 1;
                         const double* block_products = atom_core_products.data() + t.products_offset + block.products_offset;
 
-                        // The input's derivatives, and the products' summed per m1
+                        // Derivatives of the input, and derivatives of the products summed per m1
                         std::fill(atom_core_product_ders.begin(), atom_core_product_ders.begin() + m1_count * m1_stride, 0.0);
                         for (int e = block.w_begin; e < block.w_end; e++) {
                             const WignerEntry& w = wigner[e];
@@ -415,7 +412,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                             }
                         }
 
-                        // The left bond's and the core's derivatives, once per m1
+                        // Derivatives of the left bond and of the core, once per m1
                         for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                             const int iu = left.index(block.l1, m1);
                             const double* product_ders = atom_core_product_ders.data() + (m1 + block.l1) * m1_stride;
@@ -436,10 +433,9 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                 }
             }
 
-            // ---- Species coefficients ----
             row[species_columns + itype] = 1.0;
 
-            // ---- Radial and species-pair coefficients ----
+            // Radial and species-pair coefficients
             for (int jj = 0; jj < valid_count; jj++) {
                 const int pair = itype * species_count + list.types[cached_j[jj]];
                 const double* ylm = neighbor_harmonics.data() + (size_t) jj * harmonic_count;
@@ -452,7 +448,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                     double* pair_ders = row + species_pair_columns[l] + pair * rank_s;
                     double* radial_ders = row + radial_columns[l];
                     for (int n = 0; n < rank_r; n++) {
-                        // dE_i/db_n, the derivative of the channel's value
+                        // dE_i/db_n, the derivative with respect to the value of the channel
                         double value_der = 0;
                         for (int m = -l; m <= l; m++)
                             value_der += ylm[l * l + l + m] * atom_input_energy_ders[input_shape.index(l, m) + shift + n];
@@ -475,8 +471,8 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
             const CovariantShape& last_bond = bond_shapes[last];
             const CovariantShape& energy_bond = bond_shapes[core_count];
 
-            // =========== Backpropagation of every pass through the other cores ===========
-            // An entry of the last bond carries only the passes it seeds; the other bonds carry them all
+            // Backpropagation of the passes through the other cores.
+            // An entry of the last bond carries only the passes it seeds; the other bonds carry all passes.
             for (int c = last - 1; c >= 0; c--) {
                 const CovariantShape& left = bond_shapes[c];
                 const CovariantShape& right = bond_shapes[c + 1];
@@ -495,7 +491,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                         const int m1_count = 2 * block.l1 + 1;
                         const double* block_products = lane_core_products.data() + (size_t) (t.products_offset + block.products_offset) * A;
 
-                        // The input's derivatives, and the products' summed per m1, which carry the passes of channel (l3, n3)
+                        // Derivatives of the input, and derivatives of the products summed per m1, which carry the passes of channel (l3, n3)
                         for (int n3 = 0; n3 < n3_count; n3++) {
                             const auto [p_begin, p_end] = passes_of(out + right.index(block.l3, -block.l3) + n3);
                             for (int m1 = 0; m1 < m1_count; m1++)
@@ -529,12 +525,12 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                             }
                         }
 
-                        // The left bond's derivatives, once per m1
+                        // Derivatives of the left bond, once per m1
                         for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                             const int iu = in + left.index(block.l1, m1);
                             const double* product_ders = product_pass_ders.data() + (size_t) (m1 + block.l1) * m1_stride * pass_count * A;
                             for (int n3 = 0; n3 < n3_count; n3++) {
-                                // the passes of channel (l3, n3), which every m3 of it carries
+                                // Passes of channel (l3, n3), the same for every m3
                                 const auto [p_begin, p_end] = passes_of(out + right.index(block.l3, -block.l3) + n3);
                                 for (int n2 = 0; n2 < n2_count; n2++) {
                                     const double* d = product_ders + (size_t) (n3 * n2_count + n2) * pass_count * A;
@@ -557,7 +553,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                 select_atom_cache(a);
                 for (size_t q = 0; q < input_column_ders.size(); q++) input_column_ders[q] = lane_column_ders[q * A + a];
 
-                // ---- Each column's derivative w.r.t. the input: its own pass, or its seeds on its n1's unit passes ----
+                // Derivative of each column with respect to the input, from its own pass or from its seeds on the unit passes of its n1
                 for (size_t b = 0; b < cores[last].blocks.size(); b++) {
                     const CoreBlock& block = cores[last].blocks[b];
                     const LastBlock& lb = last_blocks[b];
@@ -577,7 +573,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                             }
                 }
 
-                //------------ Each column's forces and virial from its input vector's derivatives ------------
+                // Forces and virial of each column, from its derivatives with respect to the input vector
                 if (forces)
                     for (int jj = 0; jj < valid_count; jj++) {
                         const int j = cached_j[jj];
@@ -589,7 +585,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                         const double* mixed = ylm_grads + 3 * harmonic_count;
                         const double* mixed_ders = mixed + mixed_size;
 
-                        // per column, the angular part (3) and the radial part of dE_k/dr_ij
+                        // Angular part (3) and radial part of dE_k/dr_ij per column
                         std::fill(column_pair_ders.begin(), column_pair_ders.end(), 0.0);
                         double* angular = column_pair_ders.data();
                         double* radial_force = angular + 3 * column_count;
@@ -614,7 +610,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
                             }
                         }
 
-                        // dE_k / dr_ij, with r_ij = r_j - r_i, into the columns' forces and virial as PairETN::compute tallies them
+                        // dE_k / dr_ij, with r_ij = r_j - r_i, tallied into the forces and virial of the columns
                         for (int a = 0; a < 3; a++)
                             for (int k = 0; k < column_count; k++) angular[a * column_count + k] = inv_dist * (angular[a * column_count + k] + radial_force[k] * r[a]);
                         const double* temp_force[3] = {angular, angular + column_count, angular + 2 * column_count};
@@ -642,7 +638,7 @@ void ETN::eval_grad_lanes(const NeighList& list, double* site_e_grad, double* fo
     }
 }
 
-// The linear columns of a structure of jacobian_chunk atoms or more in chunks of that many, the rest one atom at a time.
+// Runs the linear path in chunks of jacobian_chunk atoms when the structure has that many, else one atom at a time.
 void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_grad, double* virial_grad, bool nonlinear) {
     if (!nonlinear && list.inum >= jacobian_chunk)
         eval_grad_lanes<jacobian_chunk>(list, site_e_grad, force_grad, virial_grad, nonlinear);
@@ -651,16 +647,17 @@ void ETN::eval_grad(const NeighList& list, double* site_e_grad, double* force_gr
 }
 
 /* ----------------------------------------------------------------------
-   Per site, the loss is a E_i + sum_j w_j . dE_i/dr_ij with a = dL/dE and
-   w_j = dL/dF_i - dL/dF_j - S r_ij, where S[b][a] = dL/dvirial_ab, since
-   virial_ab sums -r_a f_b over the pairs. The forward pass carries each
-   entry of the input and bond vectors' derivative along w (its tangent)
-   beside its value. Backward, the tangents' adjoints are the energy
-   derivatives input_energy_ders and bond_energy_ders, and the values'
-   adjoints pick up the tangents through the cores. A harmonic's tangent is
-   grad Y . w / |r|, the distance's w . r / |r|. The central atoms go in
-   chunks, as in PairETN::compute, and a core coefficient's gradient sums
-   over the chunk's atoms.
+   The loss of site i is a E_i + sum_j w_j . dE_i/dr_ij, with a = dL/dE,
+   w_j = dL/dF_i - dL/dF_j - S r_ij and S[b][a] = dL/dvirial_ab, where
+   virial_ab sums -r_a f_b over the pairs. The forward pass carries the
+   tangent of each entry of the input and bond vectors, its derivative
+   along w, beside its value. In the backwards pass, the adjoints of the
+   tangents are the energy derivatives input_energy_ders and
+   bond_energy_ders, and the adjoints of the values pick up the tangents
+   through the cores. The tangent of a harmonic is grad Y . w / |r|, and
+   the tangent of the distance is w . r / |r|. The central atoms go in
+   chunks, and the gradient of a core coefficient sums over the atoms of
+   the chunk.
 ------------------------------------------------------------------------- */
 void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const double* dloss_dforces, const double* dloss_dvirial, double* loss_grad) {
     const int l_count = (int) species_ranks.size();
@@ -668,7 +665,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
     const int harmonic_count = l_count * l_count;
     const double a = dloss_denergy;
 
-    // dL/dvirial as a matrix over the components PairETN::compute tallies
+    // dL/dvirial as the matrix S[b][a] = dL/dvirial_ab
     double S[3][3] = {};
     if (dloss_dvirial) {
         S[0][0] = dloss_dvirial[0];
@@ -693,17 +690,15 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
 
     int nbr_offset = 0;
 
-    // Loop over all provided neighbourhoods, a chunk of them at a time
     for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
         const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
-        // Clear the input and bond vectors, their tangents, derivatives and adjoints
         for (std::vector<Lanes>* lanes : {&input_vals, &input_tangents, &bond_vals, &bond_tangents, &input_energy_ders, &input_adjoints, &bond_energy_ders, &bond_adjoints})
             std::fill(lanes->begin(), lanes->end(), Lanes());
         input_vals[0] = 1.0;
         bond_vals[bond_offsets[0]] = 1.0;
 
-        // ------------ The neighbors within the cutoff: the input vector, its tangent and the radial basis ------------
+        // Neighbors within the cutoff: input vector, its tangent and radial basis
         for (int ii = ii_begin; ii < ii_end; ii++) {
             int valid_count = 0;
             const int i = list.ilist[ii];
@@ -739,7 +734,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                 double* ylm = neighbor_harmonics.data() + row * harmonic_count;
                 std::copy(harmonics.vals.begin(), harmonics.vals.end(), ylm);
 
-                // The loss weight of this displacement, and the tangents of the harmonics and of the distance along it
+                // Loss weight w of this displacement, and the tangents of the harmonics and of the distance along w
                 double w[3] = {0.0, 0.0, 0.0};
                 if (dloss_dforces)
                     for (int d = 0; d < 3; d++) w[d] = dloss_dforces[i * 3 + d] - dloss_dforces[j * 3 + d];
@@ -775,7 +770,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             cached_counts[ii - ii_begin] = valid_count;
         }
 
-        // ------------ Tensor Train, Forwards: values and tangents ------------
+        // Tensor train, forwards: values and tangents
         for (int c = 0; c < core_count; c++) {
             const CovariantShape& left = bond_shapes[c];
             const CovariantShape& right = bond_shapes[c + 1];
@@ -827,7 +822,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             }
         }
 
-        // =========== Backpropagation of values and tangents, seeded on the chunk's atoms only ===========
+        // Backpropagation of values and tangents, seeded on the atoms of the chunk
         for (int ii = ii_begin; ii < ii_end; ii++) {
             bond_energy_ders[bond_offsets[core_count]][ii - ii_begin] = 1.0;
             bond_adjoints[bond_offsets[core_count]][ii - ii_begin] = a;
@@ -847,7 +842,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                     const Lanes* block_products = core_products.data() + t.products_offset + block.products_offset;
                     const Lanes* block_product_tangents = core_product_tangents.data() + t.products_offset + block.products_offset;
 
-                    // The input's derivatives and adjoints, and the products' summed per m1
+                    // Derivatives and adjoints of the input, and those of the products summed per m1
                     std::fill(core_product_ders.begin(), core_product_ders.begin() + m1_count * m1_stride, Lanes());
                     std::fill(core_product_adjoints.begin(), core_product_adjoints.begin() + m1_count * m1_stride, Lanes());
                     for (int e = block.w_begin; e < block.w_end; e++) {
@@ -872,7 +867,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                         }
                     }
 
-                    // The left bond's derivatives and adjoints, and the core's gradient summed over the chunk's atoms, once per m1
+                    // Derivatives and adjoints of the left bond, and the core gradient summed over the atoms of the chunk, once per m1
                     for (int m1 = -block.l1; m1 <= block.l1; m1++) {
                         const int iu = in + left.index(block.l1, m1);
                         const Lanes* product_ders = core_product_ders.data() + (m1 + block.l1) * m1_stride;
@@ -902,10 +897,9 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
             select_atom_cache(ii - ii_begin);
             const size_t first_row = (size_t) (ii - ii_begin) * atom_cache_size;
 
-            // ---- Species coefficients ----
             loss_grad[species_columns + itype] += a;
 
-            // ---- The radial mixing of each species pair ----
+            // Radial mixing of each species pair
             for (int jj = 0; jj < valid_count; jj++) {
                 const size_t row = first_row + jj;
                 const int pair = itype * species_count + list.types[cached_j[jj]];
@@ -919,7 +913,6 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
                     const int shift = l == 0 ? 1 : 0;
                     double* mixing_grad = radial_mixing_grad[l].data() + (size_t) pair * n_rad * rank_r;
                     for (int n = 0; n < rank_r; n++) {
-                        // adjoints of the channel's value and derivative
                         double value_adjoint = 0.0, der_adjoint = 0.0;
                         for (int m = -l; m <= l; m++) {
                             const int index = l * l + l + m;
@@ -935,7 +928,7 @@ void ETN::eval_loss_grad(const NeighList& list, double dloss_denergy, const doub
         }
     }
 
-    // ---- Radial and species-pair coefficients, from S_l = A_l B_l ----
+    // Radial and species-pair coefficients, from S_l = A_l B_l
     for (int l = 0; l < l_count; l++) {
         const int rank_s = species_ranks[l], n_rad = radial_func_counts[l], rank_r = radial_ranks[l];
         const double* radial = radial_basis_coeffs[l].data();

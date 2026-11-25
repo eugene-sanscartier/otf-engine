@@ -1,7 +1,6 @@
-"""Read and write the #MVS_v1.1 active-set section of .almtp/.mtp and .etn files.
+"""Read and write the #MVS_v1.1 active-set section of .almtp, .mtp and .etn files.
 
-The section is written by mlip-3's cfg_selection.cpp (Save/Load) and
-maxvol.cpp (WriteData/ReadData).  Format (mixed text + binary):
+The section mixes text and binary:
 
     #MVS_v1.1\\n
     energy_weight <float64>\\n
@@ -9,13 +8,13 @@ maxvol.cpp (WriteData/ReadData).  Format (mixed text + binary):
     stress_weight <float64>\\n
     site_en_weight <float64>\\n
     weight_scaling <int>\\n
-    #                       <- text '#', immediately followed by binary (no \\n)
+    #                       <- text '#', followed by the binary block with no \\n
     <n*n float64 LE>        <- A matrix, row-major
-    <n*n float64 LE>        <- invA matrix, row-major (column-ordered in mlip)
+    <n*n float64 LE>        <- invA matrix, row-major
     \\n#\\n                   <- end delimiter
 
-n = CoeffCount() (radial + linear + species coefficients), or an ETN's coefficient count.
-The section does not store n; the reader takes it from the caller, or else from the potential in the same file.
+n is the coefficient count of the potential: radial, linear and species coefficients for an MTP.
+The section does not store n. The reader takes n from the caller, or else from the potential in the same file.
 """
 
 from __future__ import annotations
@@ -32,8 +31,14 @@ _END_MARKER = b"\n#\n"
 
 
 def _read_section(path: str, coeff_count: int | None) -> tuple[bytes, dict, ndarray, ndarray, int]:
-    """The bytes of the file *path*, and the weights, A, invA and the end of the binary block of its #MVS_v1.1 section, whose
-    matrices are *coeff_count* square, by default the coefficient count of the potential in *path*."""
+    """Read the #MVS_v1.1 section of *path*.
+
+    Args:
+        coeff_count: Size of the square matrices, the coefficient count of the potential in *path* by default.
+
+    Returns:
+        The bytes of the file, the weights, A, invA and the end of the binary block.
+    """
     with open(path, "rb") as f:
         data = f.read()
 
@@ -70,25 +75,31 @@ def _read_section(path: str, coeff_count: int | None) -> tuple[bytes, dict, ndar
 
 
 def read_mvs_header(path: str, coeff_count: int | None = None) -> tuple[dict, MaxVol]:
-    """The selection weights and the active set stored in *path*, without the stored structures or the rows' provenance.
+    """Return the selection weights and the active set stored in *path*.
 
-    coeff_count : the coefficient count of the potential in *path*, which spares reading it
+    The active set holds neither the stored structures nor the provenance of its rows.
+
+    Args:
+        coeff_count: Coefficient count of the potential in *path*. Without it, the function reads the potential.
     """
     _, weights, A, invA, _ = _read_section(path, coeff_count)
     return weights, MaxVol(A, invA)
 
 
 def read_mvs_state(path: str, pool_id: int = 0, coeff_count: int | None = None) -> tuple[dict, MaxVol, list]:
-    """The selection weights, the active set and the stored structures of *path*.
+    """Return the selection weights, the active set and the stored structures of *path*.
 
-    An active row linked to a stored structure gets *pool_id* as its pool and the structure's index in the returned list.
-    coeff_count : the coefficient count of the potential in *path*, which spares reading it
+    An active row linked to a stored structure gets *pool_id* as its pool and the
+    index of the structure in the returned list.
+
+    Args:
+        coeff_count: Coefficient count of the potential in *path*. Without it, the function reads the potential.
     """
     from .io_cfg import read_cfg
 
     data, weights, A, invA, end_pos = _read_section(path, coeff_count)
 
-    # The link table, a structure index and an equation index per row of A, then the stored structures
+    # Link table: a structure index and an equation index per row of A, then the stored structures
     n = A.shape[0]
     pos = end_pos + len(_END_MARKER)
     active_structure_indices = numpy.full(n, -1, dtype=intp)
@@ -115,11 +126,17 @@ def read_mvs_state(path: str, pool_id: int = 0, coeff_count: int | None = None) 
 
 
 def write_mvs_state(path: str, weights: dict, active_set: MaxVol, structures: list, pool_id: int) -> list:
-    """Write *weights* and *active_set* as the #MVS_v1.1 section of *path*, with the structures of *structures*
-    that the rows of pool *pool_id* come from. Returns those structures."""
+    """Write *weights* and *active_set* as the #MVS_v1.1 section of *path*.
+
+    The section stores the structures of *structures* that the rows of pool *pool_id* come from.
+
+    Returns:
+        The stored structures.
+    """
     from .io_cfg import write_cfg
 
-    # The structures rows of pool_id come from, each with the indices of its rows' equations, and each row's index among them
+    # Collect the structures that rows of pool_id come from, with the equation indices of their rows.
+    # structure_indices gives the index of the structure of each row among them, or -1.
     rows = [(int(p), int(s), int(e)) for p, s, e in zip(active_set.active_pool_ids, active_set.active_structure_indices, active_set.active_eqn_indices, strict=True)]
     labels = sorted({s for p, s, _ in rows if p == pool_id and 0 <= s < len(structures)})
     stored = []

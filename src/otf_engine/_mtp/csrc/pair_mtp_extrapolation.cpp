@@ -21,10 +21,10 @@ void PairMTPExtrapolation::set_active_set(const double* invA, bool configuration
 }
 
 /* ----------------------------------------------------------------------
-   Straightforward MTP implementation based on MLIP3, a chunk of atoms at
-   a time as PairMTP::compute takes them; each atom's site-energy gradient
-   is filled after the chunk's backwards pass
-   ---------------------------------------------------------------------- */
+   Computes the results of PairMTP::compute and the extrapolation grades, a
+   chunk of atoms at a time. The site-energy gradient of each atom is filled
+   after the backward pass of the chunk.
+------------------------------------------------------------------------- */
 void PairMTPExtrapolation::compute(const NeighList& list) {
     if (!has_active_set())
         throw std::runtime_error("PairMTPExtrapolation: no active set — call set_active_set() first");
@@ -38,11 +38,10 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
     forces.assign((size_t) list.n_atoms * 3, 0.0);
     virial.fill(0.0);
 
-    // Resize the nbh extrapolation grades if needed.
     if (!configuration_mode)
         nbh_extrapolation_grades.assign(list.n_atoms, 0.0);
 
-    // If are in configuration, we need to reset the working array once per compute call / config
+    // Configuration mode: zero the candidate vector, which sums over all atoms
     if (configuration_mode)
         std::fill(energy_ders_wrt_coeffs.begin(), energy_ders_wrt_coeffs.end(), 0.0);
 
@@ -52,11 +51,9 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
         radial_basis_cache_size = chunk_size * atom_cache_size;
     }
 
-    // Loop over all provided neighbourhoods, a chunk of them at a time
     for (int ii_begin = 0; ii_begin < list.inum; ii_begin += chunk_size) {
         const int ii_end = std::min(ii_begin + chunk_size, list.inum);
 
-        // Reset the working arrays
         std::fill(moment_tensor_vals.begin(), moment_tensor_vals.end(), Lanes());
         std::fill(nbh_energy_ders_wrt_moments.begin(), nbh_energy_ders_wrt_moments.end(), Lanes());
 
@@ -72,7 +69,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             select_atom_cache(ii - ii_begin);
             double* atom_radial_basis = radial_basis_cache.data() + (size_t) (ii - ii_begin) * atom_cache_size * radial_basis_size;
 
-            // ------------ Calculate Basic Moments ------------
+            // Basic moments
             for (int jj = 0; jj < jnum; jj++) {
                 const int j = nbrs[jj];
                 const int jtype = list.types[j];
@@ -95,11 +92,11 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                 const double* basis_ders = radial_basis->radial_basis_ders.data();
                 std::copy(basis_vals, basis_vals + radial_basis_size, atom_radial_basis + (size_t) valid_count * radial_basis_size);
 
-                // Evaluate each shared angular monomial once.
+                // Angular monomials of the unit displacement
                 for (int k = 1; k < angular_count; k++)
                     angular_vals[k] = angular_vals[angular_parent[k]] * u[angular_axis[k]];
 
-                // Compute the radial basis values and derivatives
+                // Radial function values and derivatives
                 const int pair_offset = itype * species_count + jtype;
                 for (int mu = 0; mu < radial_func_count; mu++) {
                     double val = 0;
@@ -113,7 +110,6 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                     vals[mu] = val;
                     ders[mu] = der;
 
-                    // Accumulate into the basic moment elements
                     for (int t = mu_offsets[mu]; t < mu_offsets[mu + 1]; t++) {
                         const int k = basic_by_mu[t];
                         moment_tensor_vals[k][ii - ii_begin] += val * angular_vals[angular_by_mu[t]];
@@ -124,17 +120,17 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             cached_counts[ii - ii_begin] = valid_count;
         }
 
-        // ------------ Construct Composite Moment Values  ------------
+        // Composite moments
         for (int k = 0; k < alpha_index_times_count; k++) {
             const int* term = alpha_index_times[k].data();
             moment_tensor_vals[term[3]] +=
                 term[2] * moment_tensor_vals[term[0]] * moment_tensor_vals[term[1]];
         }
 
-        // ------------ Compute Basis Set From Alpha Map ------------
+        // Site energies from the basis values
         Lanes nbh_energy;
         for (int ii = ii_begin; ii < ii_end; ii++)
-            nbh_energy[ii - ii_begin] = species_coeffs[list.types[list.ilist[ii]]];    // Essentially the reference point energy per species
+            nbh_energy[ii - ii_begin] = species_coeffs[list.types[list.ilist[ii]]];
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy += linear_coeffs[k] * moment_tensor_vals[alpha_moment_mapping[k]];
 
@@ -143,12 +139,12 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             energy += nbh_energy[ii - ii_begin];
         }
 
-        // =========== Begin Backpropagation ===========
-        //------------ NBH energy derivative is the corresponding linear combination------------
+        // Backpropagation
+        // The derivative of the site energy with respect to a basis value is its linear coefficient
         for (int k = 0; k < alpha_scalar_count; k++)
             nbh_energy_ders_wrt_moments[alpha_moment_mapping[k]] = linear_coeffs[k];
 
-        //------------ Propagate chain rule through the composite moment elements times to the basics ------------
+        // Chain rule through the composite moments down to the basic moments
         for (int k = alpha_index_times_count - 1; k >= 0; k--) {
             const int* term = alpha_index_times[k].data();
             const int a0 = term[0];
@@ -168,12 +164,12 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
 
             select_atom_cache(ii - ii_begin);
 
-            // The configuration's candidate vector, or the atom's row of the chunk's
+            // Candidate vector of the configuration, or row of the atom in the chunk block
             double* atom_ders = energy_ders_wrt_coeffs.data() + (configuration_mode ? 0 : (size_t) (ii - ii_begin) * coeff_count());
             if (!configuration_mode)
                 std::fill(atom_ders, atom_ders + coeff_count(), 0.0);
 
-            // The site energy's derivatives w.r.t. the linear and species coefficients
+            // Derivatives of the site energy with respect to the linear and species coefficients
             const int linear_basis_offset = radial_coeff_count + species_count;
             for (int k = 0; k < alpha_scalar_count; k++)
                 atom_ders[linear_basis_offset + k] += moment_tensor_vals[alpha_moment_mapping[k]][ii - ii_begin];
@@ -182,7 +178,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             for (int t = 0; t < alpha_index_basic_count; t++)
                 basic_ders_by_mu[t] = nbh_energy_ders_wrt_moments[basic_by_mu[t]][ii - ii_begin];
 
-            //------------ Compute forces from basic moment derivatives ------------
+            // Forces from the derivatives with respect to the basic moments
             for (int jj = 0; jj < valid_count; jj++) {
                 const int j = cached_j[jj];
                 const auto& r = valid_dr[jj];
@@ -217,7 +213,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                         coeff_ders[ri] += radial_sum * basis_vals[ri];
                 }
 
-                // Reverse the shared angular products
+                // Backpropagate through the tree of angular monomials
                 for (int k = angular_count - 1; k > 0; k--) {
                     const int parent = angular_parent[k];
                     const int axis = angular_axis[k];
@@ -237,7 +233,7 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
                 forces[j * 3 + 1] -= temp_force[1];
                 forces[j * 3 + 2] -= temp_force[2];
 
-                // Accumulate virial stress as the reference's ev_tally_xyz, whose del is -r
+                // Virial terms -r_a f_b of the pair
                 virial[0] -= r[0] * temp_force[0];    //xx
                 virial[1] -= r[1] * temp_force[1];    //yy
                 virial[2] -= r[2] * temp_force[2];    //zz
@@ -247,7 +243,6 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
             }
         }
 
-        // The chunk's neighbourhood grades, at once
         if (!configuration_mode) {
             const int count = ii_end - ii_begin;
             chunk_grades.resize(count);
@@ -263,14 +258,14 @@ void PairMTPExtrapolation::compute(const NeighList& list) {
 }
 
 /* ----------------------------------------------------------------------
-   Configuration grade, normalized by the atom count
+   Computes the configuration grade, normalized by the atom count
 ------------------------------------------------------------------------- */
 void PairMTPExtrapolation::compile_grades(int natoms) {
-    if (configuration_mode) {    // Configuration mode
+    if (configuration_mode) {
         grade_rows(inverse_active_set.data(), coeff_count(), energy_ders_wrt_coeffs.data(), 1, &max_grade, grade_block);
 
         if (natoms > 0)
-            max_grade /= std::pow((double) natoms, 0.5 * weight_scaling);    // Normalize
+            max_grade /= std::pow((double) natoms, 0.5 * weight_scaling);
         else
             max_grade = 0.0;
     }

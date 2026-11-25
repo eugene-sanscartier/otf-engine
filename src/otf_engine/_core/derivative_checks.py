@@ -1,10 +1,9 @@
-"""Finite-difference checks of a potential's analytical derivatives.
+"""Check the analytical derivatives of a potential against central differences.
 
-Every check returns the largest relative discrepancy between an analytical
-derivative and its central-difference estimate. Values around 1e-6 are what
-a correct implementation gives at the default step; anything above ``tol``
-indicates a real disagreement. check_forces, check_virial and check_invariance
-take any Pair; the checks on the coefficient blocks take an MTP.
+Each check returns the largest relative difference between an analytical
+derivative and its central-difference estimate. A correct implementation gives
+about 1e-6 at the default step. check_forces, check_virial and check_invariance
+take any Pair, and the checks on coefficient blocks take an MTP.
 """
 
 import numpy
@@ -25,10 +24,10 @@ def _rel_error(analytic_values, numeric_values):
 
 
 def check_forces(potential, atoms, step=1e-5, n_atoms=4):
-    """Compare forces against -dE/dx by central differences.
+    """Compare the forces with -dE/dx by central differences.
 
-    Only the first *n_atoms* atoms are displaced, since each one costs six
-    energy evaluations.
+    Args:
+        n_atoms: Number of atoms to displace, from the first. Each atom costs six energy evaluations.
     """
     cutoff = potential.get_max_cutoff()
     analytic_forces = numpy.asarray(potential.compute(neighbors(atoms, cutoff))["forces"], dtype=float64)
@@ -50,10 +49,11 @@ def check_forces(potential, atoms, step=1e-5, n_atoms=4):
 
 
 def check_virial(potential, atoms, step=1e-6):
-    """Compare the virial against -dE/d(strain) by central differences.
+    """Compare the virial with -dE/d(strain) by central differences.
 
-    The virial's xy is sum_i x_i F_iy, the derivative of -E with respect to the
-    strain that moves y by x; the off-diagonal pairs agree for an invariant potential.
+    The xy component of the virial is sum_i x_i F_iy, the derivative of -E with
+    respect to the strain that moves y by x. The off-diagonal pairs agree for an
+    invariant potential.
     """
     cutoff = potential.get_max_cutoff()
     analytic_virial = numpy.asarray(potential.compute(neighbors(atoms, cutoff))["virial"], dtype=float64)
@@ -75,7 +75,7 @@ def check_virial(potential, atoms, step=1e-6):
 
 
 def check_invariance(potential, atoms, seed=0):
-    """Largest relative change of the energy and the rotated-back forces under a random rotation and its reflection."""
+    """Return the largest relative change of the energy and the rotated-back forces under a random rotation and its reflection."""
     cutoff = potential.get_max_cutoff()
     reference = potential.compute(neighbors(atoms, cutoff))
     energy, forces = float(reference["energy"]), numpy.asarray(reference["forces"], dtype=float64)
@@ -93,7 +93,7 @@ def check_invariance(potential, atoms, seed=0):
 
 
 def _coeff_block(potential, block):
-    """The block's coefficients, their setter, and the block's first column in c = [c_radial | c_species | beta_linear]."""
+    """Return the coefficients of *block*, their setter, and the first column of the block in c = [c_radial | c_species | beta_linear]."""
     if block == "radial":
         return numpy.asarray(potential.get_radial_basis_coeffs(), dtype=float64).ravel(), potential.set_radial_basis_coeffs, 0
     if block == "species":
@@ -104,7 +104,7 @@ def _coeff_block(potential, block):
 
 
 def _central_difference(f, coeffs, setter, k, step):
-    """(f(c + step e_k) - f(c - step e_k)) / (2 step), moving coefficient k of a block through its setter and restoring it."""
+    """Return (f(c + step e_k) - f(c - step e_k)) / (2 step), moving coefficient k through *setter* and restoring it."""
     original = coeffs[k]
     coeffs[k] = original + step
     setter(coeffs)
@@ -120,10 +120,10 @@ def _central_difference(f, coeffs, setter, k, step):
 
 
 def check_coeff_grad(potential, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
-    """Compare a site-energy gradient block against central differences.
+    """Compare a block of the site-energy gradient with central differences.
 
-    *n_coeffs* coefficients are sampled at random from the block; each costs
-    two full evaluations.
+    Args:
+        n_coeffs: Number of coefficients of the block to draw at random. Each costs two full evaluations.
     """
     cutoff = potential.get_max_cutoff()
     nl = neighbors(atoms, cutoff)
@@ -141,7 +141,7 @@ def check_coeff_grad(potential, atoms, block="radial", step=1e-6, n_coeffs=8, se
 
 
 def check_force_coeff_grad(potential, atoms, block="radial", step=1e-6, n_coeffs=4, seed=0):
-    """Compare a force gradient block against central differences in coefficients."""
+    """Compare a block of the force gradient with central differences in the coefficients."""
     cutoff = potential.get_max_cutoff()
     nl = neighbors(atoms, cutoff)
 
@@ -160,10 +160,10 @@ def check_force_coeff_grad(potential, atoms, block="radial", step=1e-6, n_coeffs
 
 
 def check_loss_grad(potential, atoms, block="radial", step=1e-6, n_coeffs=8, seed=0):
-    """Compare eval_loss_grad against central differences of a loss linear in E, F and virial.
+    """Compare eval_loss_grad with central differences of a loss linear in E, F and virial.
 
-    The loss weights are random and fixed, so its derivative in the
-    coefficients is the one eval_loss_grad takes them for.
+    The loss has random fixed weights, which eval_loss_grad takes as the
+    derivatives of the loss in E, F and virial.
     """
     cutoff = potential.get_max_cutoff()
     nl = neighbors(atoms, cutoff)
@@ -187,9 +187,10 @@ def check_loss_grad(potential, atoms, block="radial", step=1e-6, n_coeffs=8, see
 
 
 def check_gradients(potential, atoms, tol=1e-4):
-    """Run every check and return {name: relative error}.
+    """Run the force and coefficient-gradient checks and return {name: relative error}.
 
-    Raises AssertionError if any exceeds *tol*.
+    Raises:
+        AssertionError: A check exceeds *tol*.
     """
     results = {
         "forces": check_forces(potential, atoms),

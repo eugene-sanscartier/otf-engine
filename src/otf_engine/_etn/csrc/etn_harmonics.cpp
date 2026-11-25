@@ -187,7 +187,7 @@ double wigner_3j(int l1, int l2, int l3, int m1, int m2, int m3) {
     return (double) value;
 }
 
-// Entry (m, mp) of mlip-4's U_m_mp, which carries complex harmonic mp to real harmonic m.
+// Entry (m, mp) of the matrix U that carries complex harmonic mp to real harmonic m.
 static std::complex<double> to_real(int m, int mp) {
     const double half = std::sqrt(0.5);
     if (m < 0) {
@@ -223,7 +223,7 @@ double real_wigner_3j(int l1, int m1, int l2, int m2, int l3, int m3) {
     return ((l1 + l2 + l3) % 2 == 0) ? sum.real() : sum.imag();
 }
 
-// Symbols below 1e-15 are cancellations to rounding: up to l = 10 they stay under 1e-19, the others above 4e-4.
+// Keeps the symbols above 1e-15 in magnitude; the others are zeros up to rounding.
 std::vector<WignerEntry> real_wigner_entries(int l1, int l2, int l3) {
     std::vector<WignerEntry> entries;
     for (int m3 = -l3; m3 <= l3; m3++)
